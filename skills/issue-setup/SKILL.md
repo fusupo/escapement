@@ -1,0 +1,378 @@
+---
+name: issue-setup
+description: Setup development environment from GitHub issue
+tools:
+  - github:*
+  - bash:git *
+  - filesystem:read_text_file
+  - filesystem:write_file
+  - filesystem:directory_tree
+---
+
+# Issue Setup Skill
+
+## Purpose
+Transform a GitHub issue into a fully-prepared development environment with:
+- Complete issue context and acceptance criteria
+- Structured implementation plan (scratchpad)
+- Feature branch ready for work
+- Situational codebase awareness
+
+## Context Prerequisites
+
+Before beginning, load critical project context:
+
+### Project Structure
+Read the project's CLAUDE.md to understand:
+- Module architecture
+- Development philosophy
+- Current sprint priorities
+- Branch naming conventions
+
+### Codebase Orientation
+Get a high-level view of the repository structure to identify affected areas.
+
+## Workflow Execution
+
+### Phase 1: Fetch GitHub Issue
+
+**Input:** Issue reference in format `owner/repo#number` or just `#number` (uses current repo)
+
+**Examples:**
+- `owner/repository#42`
+- `#42` (assumes current repository)
+
+**Steps:**
+1. **Determine repository context:**
+   - If format is `owner/repo#number`, use that
+   - If format is `#number`, detect current repo from git remote
+   - Validate repository exists and is accessible
+
+2. **Retrieve complete issue details** using GitHub tools:
+   - Title, body (description), labels
+   - State (open/closed), assignees
+   - Milestone, project associations
+   - All comments (especially implementation details)
+   - Linked issues (mentions, closes, related)
+
+3. **Generate branch name:**
+   - Format: `{issue-number}-{slugified-title}`
+   - Example: `42-implement-fact-batching`
+   - Sanitize title: lowercase, spaces→hyphens, remove special chars
+
+4. **Build issue context map:**
+   - Is this part of a milestone/project?
+   - Are there dependent issues (blocks/blocked-by)?
+   - What's the priority based on labels?
+   - Are there linked PRs already?
+
+### Phase 2: Analyze & Plan
+
+**Goal:** Understand the issue deeply before writing any code.
+
+**Analysis Steps:**
+
+1. **Requirements Review:**
+   - Parse issue body for requirements/acceptance criteria
+   - Check for task lists (- [ ] items) in issue body
+   - Identify ambiguities or missing information
+   - Note any conflicting requirements in comments
+
+2. **Codebase Investigation:**
+   - Search for relevant existing code (use GitHub code search)
+   - Identify affected modules/components
+   - Check for similar implementations
+   - Review recent related changes (git log, linked PRs)
+   - Look at files mentioned in issue body/comments
+
+3. **Technical Breakdown:**
+   - Break work into atomic, committable tasks
+   - Identify integration points
+   - Flag potential challenges
+   - Estimate complexity/scope
+
+4. **Dependency Check:**
+   - Does this require other issues first? (check "depends on" mentions)
+   - Will this block other work? (check "blocks" mentions)
+   - Are there API contract implications?
+   - Check milestone dependencies
+
+### Phase 3: Create Scratchpad
+
+**Generate:** `SCRATCHPAD_{issue_number}.md`
+
+**Template Structure:**
+
+```markdown
+# {Issue Title} - #{issue_number}
+
+## Issue Details
+- **Repository:** {owner/repo}
+- **GitHub URL:** {issue_url}
+- **State:** {open/closed}
+- **Labels:** {labels}
+- **Milestone:** {milestone if exists}
+- **Assignees:** {assignees}
+- **Related Issues:** {linked issues if any}
+  - Depends on: #{issue_numbers}
+  - Blocks: #{issue_numbers}
+  - Related: #{issue_numbers}
+
+## Description
+{full issue body from GitHub}
+
+## Acceptance Criteria
+{extract task list from issue body, or create from description}
+- [ ] {criterion 1}
+- [ ] {criterion 2}
+- [ ] {criterion 3}
+
+## Branch Strategy
+- **Base branch:** main (or develop-ts/develop if exists)
+- **Feature branch:** {issue_number}-{slugified-title}
+- **Current branch:** {git branch --show-current}
+
+## Implementation Checklist
+
+### Setup
+- [ ] Fetch latest from base branch
+- [ ] Create and checkout feature branch
+
+### Implementation Tasks
+{Break down into atomic commits - each should be independently reviewable}
+
+- [ ] {First atomic task with clear scope}
+  - Files affected: {list}
+  - Why: {brief rationale}
+  
+- [ ] {Second atomic task}
+  - Files affected: {list}
+  - Why: {brief rationale}
+
+{Continue with granular breakdown...}
+
+### Quality Checks
+- [ ] Run linter/type checker
+- [ ] Execute relevant tests
+- [ ] Self-review for code quality
+- [ ] Verify acceptance criteria met
+
+### Documentation
+- [ ] Update relevant README/docs
+- [ ] Add inline comments for complex logic
+- [ ] Update CHANGELOG if applicable
+
+### Finalization
+- [ ] Review all commits for clarity
+- [ ] Ensure commit messages follow convention
+- [ ] Squash/reorder commits if needed
+- [ ] Final self-review before PR
+
+## Technical Notes
+
+### Architecture Considerations
+{Any architectural decisions to consider}
+{Module boundaries to respect}
+{Integration points to handle}
+
+### Implementation Approach
+{High-level strategy for solving the problem}
+{Why this approach vs alternatives}
+
+### Potential Challenges
+{Known complexity areas}
+{Technical debt to navigate}
+{Performance considerations}
+
+## Questions/Blockers
+
+### Clarifications Needed
+{List any unclear requirements}
+{Ambiguities in issue description}
+
+### Blocked By
+{List any dependencies not yet complete - reference issue numbers}
+
+### Assumptions Made
+{Document assumptions if requirements unclear}
+
+## Work Log
+
+{This section fills in during execution via /start-work}
+{Each work session adds dated entries}
+
+---
+**Generated:** {timestamp}
+**By:** Issue Setup Skill
+**Source:** {github_issue_url}
+```
+
+**Scratchpad Quality Guidelines:**
+
+- **Atomic tasks:** Each checklist item should be one commit
+- **Clear scope:** Reader should understand what each task does
+- **Testable:** Acceptance criteria should be verifiable
+- **Realistic:** Don't over-engineer or under-scope
+- **Contextual:** Reference project-specific conventions
+
+### Phase 4: Prepare Workspace
+
+**Branch Creation:**
+
+1. **Detect base branch:**
+   ```bash
+   # Check what branches exist
+   git fetch origin
+   
+   # Prefer in this order:
+   # 1. develop-ts (if exists)
+   # 2. develop (if exists)
+   # 3. main (default)
+   git branch -r | grep -E 'origin/(develop-ts|develop|main)'
+   ```
+
+2. **Create feature branch:**
+   ```bash
+   # Generate branch name from issue
+   # Format: {issue_number}-{slugified-title}
+   # Example: 42-implement-fact-batching
+   
+   git branch {issue-number}-{slugified-title} origin/{base-branch}
+   # Don't checkout yet - let operator decide when to switch
+   ```
+
+3. **Confirm creation:**
+   ```bash
+   git branch --list {branch-name}
+   ```
+
+**Final Output:**
+
+Display concise summary:
+```
+✓ Issue #{issue_number} analyzed and prepared
+
+📋 SCRATCHPAD_{issue_number}.md created with:
+   - {X} implementation tasks
+   - {Y} quality checks
+   - {Z} clarifications needed (if any)
+
+🌿 Branch '{issue-number}-{slugified-title}' created from {base-branch}
+
+🔗 GitHub Issue: {issue_url}
+
+🚀 Ready to begin work:
+   git checkout {branch-name}
+   # Then start implementation
+
+⚠️  Clarifications needed (if any) - review Questions/Blockers section
+```
+
+## Project-Specific Adaptations
+
+### For UI/Frontend Projects:
+
+**Component Context:**
+- Which components affected?
+- State management implications?
+- API contract dependencies?
+
+### For API/Backend Projects:
+
+**Contract Context:**
+- API endpoints added/modified?
+- Breaking changes?
+- Database migrations needed?
+
+## Error Handling
+
+### Issue Not Found
+If GitHub issue doesn't exist:
+- Verify issue number and repository
+- Check if issue is in different repo
+- Offer to search issues by title/keyword
+- Confirm you have access to private repos (if applicable)
+
+### Insufficient Information
+If issue lacks description or clear scope:
+- Note this prominently in Questions/Blockers
+- Suggest adding task list to issue before starting work
+- Don't guess - make assumptions explicit
+- Consider commenting on issue to request clarification
+
+### Branch Already Exists
+If feature branch already exists:
+- Check if work in progress (git log)
+- Offer to resume vs. create new branch
+- Warn about potential conflicts
+- Suggest reviewing existing commits
+
+### Repository Access Issues
+If can't access repository:
+- Verify GitHub authentication (gh auth status)
+- Check repository exists (might be private)
+- Confirm repository name spelling
+- Ensure gh CLI is installed and configured
+
+## Integration with Other Skills
+
+**Flows to:**
+- `/start-work {issue_number}` - Begin execution from scratchpad
+- `/commit` - Make atomic commits as checklist progresses
+
+**Receives context from:**
+- Project CLAUDE.md - Architecture and conventions
+- `/prime-session` - Current development priorities
+
+## Best Practices
+
+### ✅ DO:
+- Read acceptance criteria carefully
+- Break work into truly atomic commits
+- Flag ambiguities early
+- Research codebase before planning
+- Make scratchpad detailed but scannable
+- Document assumptions explicitly
+
+### ❌ DON'T:
+- Start coding before scratchpad approved
+- Guess at unclear requirements
+- Create tasks too large to review
+- Skip codebase investigation
+- Over-engineer the plan
+- Hide complexity in vague task descriptions
+
+## Operator Interaction Points
+
+**Before Scratchpad Creation:**
+If issue is complex or ambiguous, ask:
+- "This issue affects multiple modules. Should we break it into sub-issues?"
+- "Acceptance criteria unclear on X. Should we clarify before planning?"
+
+**After Scratchpad Created:**
+Present for review:
+- "I've created SCRATCHPAD_42.md. Please review the implementation plan."
+- "I flagged 2 questions in the Blockers section - need clarification?"
+
+**Before Branch Creation:**
+Confirm readiness:
+- "Base branch develop-ts is 5 commits behind origin. Pull first?"
+- "Ready to create feature branch?"
+
+## Success Criteria
+
+A successful issue setup produces:
+
+✓ **Complete context:** All issue details captured
+✓ **Clear plan:** Implementation steps are atomic and logical
+✓ **Identified risks:** Challenges flagged upfront
+✓ **Ready workspace:** Branch created, scratchpad prepared
+✓ **Operator confidence:** Developer knows exactly what to build
+
+The scratchpad should be so clear that another developer could pick it up and execute it.
+
+---
+
+**Version:** 1.0.0
+**Last Updated:** 2025-12-27
+**Maintained By:** Muleteer
