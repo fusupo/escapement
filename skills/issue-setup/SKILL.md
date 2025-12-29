@@ -159,15 +159,8 @@ Get a high-level view of the repository structure to identify affected areas.
 - [ ] Verify acceptance criteria met
 
 ### Documentation
-- [ ] Update relevant README/docs
-- [ ] Add inline comments for complex logic
-- [ ] Update CHANGELOG if applicable
-
-### Finalization
-- [ ] Review all commits for clarity
-- [ ] Ensure commit messages follow convention
-- [ ] Squash/reorder commits if needed
-- [ ] Final self-review before PR
+- [ ] Update relevant README/docs (if applicable)
+- [ ] Add inline comments for complex logic (if applicable)
 
 ## Technical Notes
 
