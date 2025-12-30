@@ -8,10 +8,22 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 echo "🔧 Installing Muleteer workflow..."
 
 # Create ~/.claude structure if it doesn't exist
-mkdir -p ~/.claude/{commands,agents,skills}
+mkdir -p ~/.claude/{agents,skills}
+
+# Clean up old command symlinks from previous Muleteer versions
+# (Commands have been converted to skills)
+if [ -d ~/.claude/commands ]; then
+    echo "🧹 Cleaning up old command symlinks..."
+    for old_cmd in ~/.claude/commands/{commit,open-pr,pr-review,start-work,archive-dev,prime-session}.md; do
+        if [ -L "$old_cmd" ]; then
+            rm "$old_cmd"
+            echo "  ✓ Removed old command: $(basename "$old_cmd")"
+        fi
+    done
+fi
 
 # Symlink skills
-echo "📚 Installing skills..."
+echo "🎯 Installing skills..."
 if [ -d "$SCRIPT_DIR/skills" ]; then
     for skill_dir in "$SCRIPT_DIR"/skills/*/; do
         skill_name=$(basename "$skill_dir")
@@ -24,23 +36,6 @@ if [ -d "$SCRIPT_DIR/skills" ]; then
 
         ln -s "$skill_dir" "$target"
         echo "  ✓ Linked skill: $skill_name"
-    done
-fi
-
-# Symlink commands
-echo "⚡ Installing commands..."
-if [ -d "$SCRIPT_DIR/commands" ]; then
-    for cmd in "$SCRIPT_DIR"/commands/*.md; do
-        if [ -f "$cmd" ]; then
-            cmd_name=$(basename "$cmd")
-            target=~/.claude/commands/"$cmd_name"
-
-            # Remove existing symlink if it exists
-            [ -L "$target" ] && rm "$target"
-
-            ln -sf "$cmd" "$target"
-            echo "  ✓ Linked command: $cmd_name"
-        fi
     done
 fi
 
@@ -84,13 +79,16 @@ fi
 echo ""
 echo "✅ Muleteer workflow installed successfully!"
 echo ""
-echo "📋 Available skills:"
+echo "🎯 Available skills:"
 [ -d "$SCRIPT_DIR/skills" ] && ls -1 "$SCRIPT_DIR"/skills/ | sed 's/^/   - /'
-echo ""
-echo "⚡ Available commands:"
-[ -d "$SCRIPT_DIR/commands" ] && ls -1 "$SCRIPT_DIR"/commands/*.md | xargs -n1 basename | sed 's/.md$//' | sed 's/^/   - \//'
 echo ""
 echo "🤖 Available agents:"
 [ -d "$SCRIPT_DIR/agents" ] && ls -1 "$SCRIPT_DIR"/agents/*.md 2>/dev/null | xargs -n1 basename | sed 's/.md$//' | sed 's/^/   - /' || echo "   (none yet - extensibility ready)"
+echo ""
+echo "💬 Skills are invoked via natural language:"
+echo "   - \"Setup issue #42\"        → issue-setup skill"
+echo "   - \"Commit these changes\"   → commit-changes skill"
+echo "   - \"Create a PR\"            → create-pr skill"
+echo "   - \"Start working on this\"  → work-session skill"
 echo ""
 echo "🚀 Start using: Open Claude Code in any project repo"

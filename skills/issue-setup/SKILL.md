@@ -7,6 +7,7 @@ tools:
   - filesystem:read_text_file
   - filesystem:write_file
   - filesystem:directory_tree
+  - AskUserQuestion
 ---
 
 # Issue Setup Skill
@@ -158,15 +159,8 @@ Get a high-level view of the repository structure to identify affected areas.
 - [ ] Verify acceptance criteria met
 
 ### Documentation
-- [ ] Update relevant README/docs
-- [ ] Add inline comments for complex logic
-- [ ] Update CHANGELOG if applicable
-
-### Finalization
-- [ ] Review all commits for clarity
-- [ ] Ensure commit messages follow convention
-- [ ] Squash/reorder commits if needed
-- [ ] Final self-review before PR
+- [ ] Update relevant README/docs (if applicable)
+- [ ] Add inline comments for complex logic (if applicable)
 
 ## Technical Notes
 
@@ -196,6 +190,10 @@ Get a high-level view of the repository structure to identify affected areas.
 ### Assumptions Made
 {Document assumptions if requirements unclear}
 
+### Decisions Made
+{Populated during Phase 3.5 Interactive Q&A}
+{Format: Q: question → A: decision (rationale)}
+
 ## Work Log
 
 {This section fills in during execution via /start-work}
@@ -214,6 +212,116 @@ Get a high-level view of the repository structure to identify affected areas.
 - **Testable:** Acceptance criteria should be verifiable
 - **Realistic:** Don't over-engineer or under-scope
 - **Contextual:** Reference project-specific conventions
+
+### Phase 3.5: Interactive Q&A (Resolve Clarifications)
+
+**Goal:** Resolve any questions or ambiguities before starting implementation.
+
+**Trigger:** If the scratchpad has items in the "Clarifications Needed" section.
+
+**Process:**
+
+1. **Check for Outstanding Questions:**
+   - Review the Questions/Blockers section of the scratchpad
+   - If "Clarifications Needed" is empty, skip to Phase 4
+   - If questions exist, proceed with interactive resolution
+
+2. **Present Questions via AskUserQuestion:**
+   For each clarification needed, use the `AskUserQuestion` tool to get user input:
+
+   ```
+   AskUserQuestion:
+     question: "{The specific clarification question}"
+     header: "Clarify"
+     options:
+       - label: "{Option A}"
+         description: "{What this choice means}"
+       - label: "{Option B}"
+         description: "{What this choice means}"
+       - label: "{Option C}" (if applicable)
+         description: "{What this choice means}"
+     multiSelect: false (or true if multiple answers valid)
+   ```
+
+   **Guidelines for presenting questions:**
+   - Frame questions clearly with context
+   - Provide 2-4 concrete options when possible
+   - Include descriptions explaining implications of each choice
+   - User can always select "Other" for custom input
+   - Group related questions if they have dependencies
+
+3. **Update Scratchpad with Decisions:**
+   After collecting all answers, update the scratchpad:
+
+   a) **Add "Decisions Made" section** (if not present) under Questions/Blockers:
+   ```markdown
+   ### Decisions Made
+   {Timestamp}
+
+   **Q: {Original question}**
+   **A:** {User's answer/decision}
+   **Rationale:** {Brief explanation of why, if provided}
+   ```
+
+   b) **Remove resolved items** from "Clarifications Needed"
+
+   c) **Update relevant sections** if decisions affect:
+      - Implementation tasks (add/remove/modify based on decisions)
+      - Technical approach
+      - Assumptions (convert to confirmed decisions)
+
+4. **Confirm Resolution:**
+   Display summary of decisions made:
+   ```
+   ✓ Resolved {N} clarifications:
+
+   1. {Question summary} → {Decision}
+   2. {Question summary} → {Decision}
+   ...
+
+   📋 SCRATCHPAD updated with decisions.
+   ```
+
+**Example Interaction:**
+
+```
+📋 SCRATCHPAD_42.md has 3 clarifications that need resolution before proceeding.
+
+[AskUserQuestion 1/3]
+Question: "Should we keep commands as aliases during the transition to skills?"
+Header: "Migration"
+Options:
+  - "Keep as thin wrappers" - Commands remain but delegate to skills
+  - "Remove immediately" - Clean break, skills only
+  - "Decide per-command" - Evaluate each command individually
+
+[User selects: "Keep as thin wrappers"]
+
+[AskUserQuestion 2/3]
+Question: "How should prime-session be handled?"
+Header: "Behavior"
+Options:
+  - "Convert to auto-invoke skill" - Activates when entering new repo
+  - "Keep as explicit command" - User must invoke manually
+  - "Remove entirely" - Claude reads CLAUDE.md automatically anyway
+
+[User selects: "Keep as explicit command"]
+
+...
+
+✓ Resolved 3 clarifications:
+
+1. Migration strategy → Keep commands as thin wrappers
+2. prime-session behavior → Keep as explicit command
+3. ...
+
+📋 SCRATCHPAD_42.md updated with decisions.
+Proceeding to branch creation...
+```
+
+**Skip Conditions:**
+- No items in "Clarifications Needed" → Skip directly to Phase 4
+- User explicitly requests to skip → Note unresolved questions, proceed with assumptions
 
 ### Phase 4: Prepare Workspace
 
@@ -255,7 +363,7 @@ Display concise summary:
 📋 SCRATCHPAD_{issue_number}.md created with:
    - {X} implementation tasks
    - {Y} quality checks
-   - {Z} clarifications needed (if any)
+   - {Z} decisions made (via Q&A)
 
 🌿 Branch '{issue-number}-{slugified-title}' created from {base-branch}
 
@@ -264,9 +372,11 @@ Display concise summary:
 🚀 Ready to begin work:
    git checkout {branch-name}
    # Then start implementation
-
-⚠️  Clarifications needed (if any) - review Questions/Blockers section
 ```
+
+**Note:** If clarifications were resolved in Phase 3.5, the scratchpad now contains
+confirmed decisions rather than open questions. All ambiguities should be resolved
+before reaching this point.
 
 ## Project-Specific Adaptations
 
