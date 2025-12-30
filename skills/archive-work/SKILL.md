@@ -36,12 +36,16 @@ This skill activates when the user says things like:
    - Look for `SCRATCHPAD_*.md` in project root
    - Identify issue numbers from filenames
 
-2. **Find Related Files:**
-   - Session logs (if any)
+2. **Find Session Logs:**
+   - Look for `SESSION_LOG_*.md` in project root
+   - These are created by the PreCompact hook before auto-compaction
+   - Associate with scratchpad (same issue context)
+
+3. **Find Other Related Files:**
    - Related temporary files
    - Claude Code conversation exports
 
-3. **Verify Completion:**
+4. **Verify Completion:**
    - Check if scratchpad tasks are all complete
    - Check if PR was created/merged
    - Warn if work appears incomplete
@@ -51,11 +55,14 @@ This skill activates when the user says things like:
 **Default Structure:**
 ```
 docs/dev/cc-archive/
-└── {issue-number}-{brief-description}/
+└── {YYYYMMDDHHMM}-{issue-number}-{brief-description}/
     ├── SCRATCHPAD_{issue_number}.md
     ├── session-log.md (if exists)
     └── README.md (summary)
 ```
+
+**Timestamp Prefix:** Archives use `YYYYMMDDHHMM` prefix for chronological ordering.
+This ensures archives sort by completion date, not ticket number.
 
 **Check Project Conventions:**
 - Read CLAUDE.md for custom archive location
@@ -64,12 +71,19 @@ docs/dev/cc-archive/
 
 ### Phase 3: Prepare Archive
 
-1. **Create Archive Directory:**
+1. **Generate Timestamp and Directory Name:**
    ```bash
-   mkdir -p docs/dev/cc-archive/{issue-number}-{description}
+   # Generate timestamp prefix
+   TIMESTAMP=$(date +%Y%m%d%H%M)
+   ARCHIVE_DIR="${TIMESTAMP}-{issue-number}-{description}"
    ```
 
-2. **Generate Archive Summary:**
+2. **Create Archive Directory:**
+   ```bash
+   mkdir -p docs/dev/cc-archive/${ARCHIVE_DIR}
+   ```
+
+3. **Generate Archive Summary:**
    Create `README.md` in archive folder:
    ```markdown
    # Issue #{issue_number} - {title}
@@ -91,10 +105,13 @@ docs/dev/cc-archive/
    {Any notable insights from Work Log}
    ```
 
-3. **Move Files:**
+4. **Move Files (using git mv for proper tracking):**
    ```bash
-   mv SCRATCHPAD_{issue_number}.md docs/dev/cc-archive/{dir}/
+   git mv SCRATCHPAD_{issue_number}.md docs/dev/cc-archive/${ARCHIVE_DIR}/
    ```
+
+   **Important:** Use `git mv` instead of `mv` to ensure both the addition to
+   archive AND the removal from project root are tracked in the same commit.
 
 ### Phase 4: Confirm with User
 
@@ -115,10 +132,22 @@ AskUserQuestion:
 
 ### Phase 5: Execute Archive
 
-1. **Move Files:**
-   - Move scratchpad to archive directory
-   - Move any related session logs
-   - Create summary README
+1. **Move Files (with git tracking):**
+   ```bash
+   # Use git mv to track both addition and removal in same commit
+   git mv SCRATCHPAD_{issue_number}.md docs/dev/cc-archive/${ARCHIVE_DIR}/
+
+   # Move session logs (created by PreCompact hook)
+   # These are untracked, so use mv then git add
+   for log in SESSION_LOG_*.md; do
+     if [ -f "$log" ]; then
+       mv "$log" docs/dev/cc-archive/${ARCHIVE_DIR}/
+     fi
+   done
+   git add docs/dev/cc-archive/${ARCHIVE_DIR}/SESSION_LOG_*.md 2>/dev/null || true
+   ```
+   - Create summary README in archive directory
+   - Stage the new README: `git add docs/dev/cc-archive/${ARCHIVE_DIR}/README.md`
 
 2. **Commit Archive:**
    If user opted to commit:
@@ -132,23 +161,34 @@ AskUserQuestion:
    # PR: #{pr_number}
    ```
 
+   **The commit will include:**
+   - Removal of SCRATCHPAD from project root (via git mv)
+   - Addition of SCRATCHPAD in archive directory
+   - Session logs (SESSION_LOG_*.md) if present
+   - New README.md summary
+
 ### Phase 6: Report Result
 
 ```
 ✓ Work archived successfully!
 
 📁 Archive location:
-   docs/dev/cc-archive/{issue-number}-{description}/
+   docs/dev/cc-archive/{YYYYMMDDHHMM}-{issue-number}-{description}/
 
 📄 Files archived:
    - SCRATCHPAD_{issue_number}.md
+   - SESSION_LOG_*.md (if any existed)
    - README.md (summary generated)
 
 🗑️ Cleaned up:
-   - Removed scratchpad from project root
+   - Removed scratchpad from project root (tracked via git mv)
+   - Removed session logs from project root
 
 {If committed}
 📝 Committed: {commit hash}
+   - Added: archive directory with scratchpad, session logs, README
+   - Removed: SCRATCHPAD_{issue_number}.md from project root
+   - Removed: SESSION_LOG_*.md from project root
 ```
 
 ## Archive Options
@@ -237,25 +277,37 @@ AskUserQuestion:
 docs/
 └── dev/
     └── cc-archive/
-        ├── 42-add-authentication/
+        ├── 202512281430-42-add-authentication/
         │   ├── SCRATCHPAD_42.md
         │   └── README.md
-        ├── 43-fix-login-bug/
+        ├── 202512281545-43-fix-login-bug/
         │   ├── SCRATCHPAD_43.md
+        │   ├── SESSION_LOG_1.md
         │   └── README.md
-        └── 44-refactor-api/
+        └── 202512290900-44-refactor-api/
             ├── SCRATCHPAD_44.md
-            ├── session-log.md
+            ├── SESSION_LOG_1.md
+            ├── SESSION_LOG_2.md
             └── README.md
 ```
 
 ### Archive Naming Convention
-`{issue-number}-{slugified-description}/`
+`{YYYYMMDDHHMM}-{issue-number}-{slugified-description}/`
+
+**Format breakdown:**
+- `YYYYMMDDHHMM` - Timestamp when archived (enables chronological sorting)
+- `{issue-number}` - GitHub issue number for reference
+- `{slugified-description}` - Brief description from issue title
 
 Examples:
-- `42-add-user-authentication/`
-- `123-fix-payment-bug/`
-- `7-initial-project-setup/`
+- `202512281430-42-add-user-authentication/`
+- `202512290915-123-fix-payment-bug/`
+- `202512271000-7-initial-project-setup/`
+
+**Why timestamp prefix?**
+- Archives sort chronologically regardless of ticket number order
+- Easy to scan for recent work
+- Preserves actual completion order
 
 ## Best Practices
 
@@ -265,6 +317,8 @@ Examples:
 - Preserve decision history
 - Use consistent archive location
 - Commit archives to repo
+- Use `git mv` to move scratchpads (tracks removal properly)
+- Use timestamp prefix for chronological ordering
 
 ### ❌ DON'T:
 - Archive incomplete work without noting it
@@ -272,10 +326,14 @@ Examples:
 - Mix archives from different projects
 - Skip the summary README
 - Leave scratchpads in project root long-term
+- Use plain `mv` for tracked files (leaves unstaged deletion)
 
 ---
 
-**Version:** 1.0.0
+**Version:** 1.2.0
 **Last Updated:** 2025-12-29
 **Maintained By:** Muleteer
-**Converted From:** commands/archive-dev.md
+**Changelog:**
+- v1.2.0: Added SESSION_LOG_*.md detection and archiving (from PreCompact hook)
+- v1.1.0: Added timestamp prefix for chronological sorting; use git mv for proper tracking
+- v1.0.0: Initial conversion from commands/archive-dev.md
