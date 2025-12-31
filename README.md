@@ -35,6 +35,35 @@ git pull
 ./install.sh
 ```
 
+## Uninstalling
+
+To cleanly remove Muleteer from your system:
+
+```bash
+# Preview what would be removed (recommended first step)
+~/.muleteer/uninstall.sh --dry-run
+
+# Uninstall with confirmation prompt
+~/.muleteer/uninstall.sh
+
+# Uninstall without confirmation
+~/.muleteer/uninstall.sh --force
+
+# Uninstall and clean up empty directories
+~/.muleteer/uninstall.sh --force --cleanup
+```
+
+This removes:
+- Muleteer skill symlinks from `~/.claude/skills/`
+- Muleteer agent symlinks from `~/.claude/agents/`
+- Muleteer context section from `~/.claude/CLAUDE.md`
+- PreCompact hook from `~/.claude/settings.json`
+
+**Note:** The `~/.muleteer` directory itself is not removed. To completely remove Muleteer:
+```bash
+rm -rf ~/.muleteer
+```
+
 ## Usage
 
 ### Skills
@@ -96,6 +125,7 @@ Specialized subagents for delegation (extensibility ready):
 │   ├── WORKFLOW.md            # Workflow explanation
 │   └── CUSTOMIZATION.md       # How to customize
 ├── install.sh                 # Installation script
+├── uninstall.sh               # Uninstallation script
 ├── workflow.png               # Workflow diagram
 └── README.md                  # This file
 ```
