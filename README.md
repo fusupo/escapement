@@ -1,14 +1,14 @@
 # Muleteer
 
-**Generic Claude Code workflow system.** You're the mule, I'm driving you.
+**Claude Code plugin for structured development workflows.** You're the mule, I'm driving you.
 
 ## What This Is
 
-Muleteer provides reusable workflow modules for Claude Code to streamline your development process across any project:
+Muleteer is a Claude Code plugin that provides reusable workflow modules to streamline your development process:
 
-- **Skills**: Automated workflow modules (like `issue-setup`)
-- **Commands**: Quick workflow helpers for common tasks
-- **Agents**: Specialized AI assistants (future extensibility)
+- **Skills**: Automated workflow modules (issue setup, commits, PRs, etc.)
+- **Hooks**: Session archiving on compaction
+- **Agents**: Specialized AI assistants (extensibility ready)
 - **Multi-Project Support**: Works across all your repos simultaneously
 
 ## Workflow Diagram
@@ -17,84 +17,61 @@ Muleteer provides reusable workflow modules for Claude Code to streamline your d
 
 ## Installation
 
-```bash
-# Clone to your home directory
-git clone <your-repo-url> ~/.muleteer
+### From Source (Development)
 
-# Run install script
-~/.muleteer/install.sh
+```bash
+# Clone the repository
+git clone https://github.com/fusupo/muleteer.git
+
+# Run Claude Code with the plugin
+claude --plugin-dir /path/to/muleteer
 ```
 
-This symlinks the workflow into your `~/.claude/` directory, making it available in all projects.
-
-## Updating
+### From Marketplace (Coming Soon)
 
 ```bash
-cd ~/.muleteer
-git pull
-./install.sh
-```
-
-## Uninstalling
-
-To cleanly remove Muleteer from your system:
-
-```bash
-# Preview what would be removed (recommended first step)
-~/.muleteer/uninstall.sh --dry-run
-
-# Uninstall with confirmation prompt
-~/.muleteer/uninstall.sh
-
-# Uninstall without confirmation
-~/.muleteer/uninstall.sh --force
-
-# Uninstall and clean up empty directories
-~/.muleteer/uninstall.sh --force --cleanup
-```
-
-This removes:
-- Muleteer skill symlinks from `~/.claude/skills/`
-- Muleteer agent symlinks from `~/.claude/agents/`
-- Muleteer context section from `~/.claude/CLAUDE.md`
-- PreCompact hook from `~/.claude/settings.json`
-
-**Note:** The `~/.muleteer` directory itself is not removed. To completely remove Muleteer:
-```bash
-rm -rf ~/.muleteer
+# Once published to a marketplace
+/plugin install muleteer
 ```
 
 ## Usage
 
 ### Skills
 
-Skills are invoked automatically by Claude Code when relevant, or you can reference them explicitly:
+Skills are invoked automatically by Claude Code when relevant, or you can reference them explicitly with the `/muleteer:` prefix:
 
-**Example: Issue Setup Skill**
+**Natural Language Invocation:**
 ```bash
-# In any repo with Claude Code:
+# Claude uses the skill automatically based on context
 "Setup GitHub issue #42"
-# Claude will use the issue-setup skill automatically
+"Commit these changes"
+"Create a PR for this branch"
 ```
 
-The skill handles:
-- Fetching complete GitHub issue details
-- Analyzing requirements and codebase
-- Creating structured scratchpad with implementation plan
-- Preparing feature branch
-
-### Commands
-
-Commands are slash-commands available in Claude Code:
-
+**Explicit Invocation:**
 ```bash
-/prime-session    # Orient to current project
-/commit           # Create conventional commits with emojis
-/pr-review        # Structured PR review
-/start-work       # Begin work from scratchpad
-/open-pr          # Create pull request
-/archive-dev      # Archive completed work
+/muleteer:issue-setup
+/muleteer:commit-changes
+/muleteer:create-pr
 ```
+
+### Available Skills
+
+| Skill | Triggers | Purpose |
+|-------|----------|---------|
+| `issue-setup` | "setup issue #X", "start issue #X" | Fetch issue, create scratchpad, prepare branch |
+| `commit-changes` | "commit", "commit these changes" | Smart commits with conventional format |
+| `create-pr` | "create a PR", "open pull request" | Context-aware PR creation |
+| `review-pr` | "review PR #X", "check this PR" | Roadmap-aware code review |
+| `work-session` | "start working", "continue work" | Execute tasks from scratchpad |
+| `archive-work` | "archive this work", "clean up" | Move completed scratchpads to archive |
+| `prime-session` | "orient me", "what is this project" | Read project docs for context |
+
+### Hooks
+
+Muleteer includes a **PreCompact hook** that archives your session transcript before Claude Code's automatic compaction. This preserves your work history in `SESSION_LOG_{N}.md` files.
+
+**Requirements:** `jq` must be installed for the hook to function.
 
 ### Agents
 
@@ -108,26 +85,26 @@ Specialized subagents for delegation (extensibility ready):
 ## Structure
 
 ```
-.muleteer/
+muleteer/
+├── .claude-plugin/
+│   └── plugin.json           # Plugin manifest
 ├── skills/
-│   └── issue-setup/           # GitHub issue → scratchpad workflow
-│       └── SKILL.md
-├── commands/                  # Quick workflow helpers
-│   ├── prime-session.md       # Session orientation
-│   ├── commit.md              # Conventional commits
-│   ├── pr-review.md           # PR review workflow
-│   ├── start-work.md          # Begin work from scratchpad
-│   ├── open-pr.md             # Create pull request
-│   └── archive-dev.md         # Archive work
-├── agents/                    # Future: Specialized subagents
-├── templates/                 # Project customization templates
-├── docs/                      # Extended documentation
-│   ├── WORKFLOW.md            # Workflow explanation
-│   └── CUSTOMIZATION.md       # How to customize
-├── install.sh                 # Installation script
-├── uninstall.sh               # Uninstallation script
-├── workflow.png               # Workflow diagram
-└── README.md                  # This file
+│   ├── issue-setup/          # GitHub issue -> scratchpad workflow
+│   ├── commit-changes/       # Conventional commits
+│   ├── create-pr/            # Pull request creation
+│   ├── review-pr/            # PR review
+│   ├── work-session/         # Execute from scratchpad
+│   ├── archive-work/         # Archive completed work
+│   └── prime-session/        # Project orientation
+├── hooks/
+│   ├── hooks.json            # Hook configuration
+│   └── archive-session-log.sh # Session archiving script
+├── agents/                   # Future: Specialized subagents
+├── docs/                     # Extended documentation
+│   ├── WORKFLOW.md           # Workflow explanation
+│   └── CUSTOMIZATION.md      # How to customize
+├── workflow.png              # Workflow diagram
+└── README.md                 # This file
 ```
 
 ## Philosophy
@@ -139,24 +116,24 @@ Specialized subagents for delegation (extensibility ready):
 3. **Project awareness** - Adapts to each project's conventions
 4. **Multi-project friendly** - Works across all your repos
 
-## Customization
+## Per-Project Customization
 
-Muleteer is designed to work across multiple projects. Each project customizes its workflow via its own `CLAUDE.md` file:
+Muleteer works across multiple projects. Each project customizes its workflow via its own `CLAUDE.md` file:
 
 ```markdown
 # In your-project/CLAUDE.md
 
 ## Project Modules
 
-- **api** 🌐: REST API endpoints
-- **frontend** 🎨: React UI components
-- **database** 🗄️: Database layer
+- **api**: REST API endpoints
+- **frontend**: React UI components
+- **database**: Database layer
 
 ## Commit Message Format
 
 {module emoji}{change type emoji} {type}({scope}): {description}
 
-Example: 🌐✨ feat(api): Add user authentication endpoint
+Example: feat(api): Add user authentication endpoint
 ```
 
 See `docs/CUSTOMIZATION.md` for detailed examples and patterns.
@@ -170,9 +147,11 @@ See `docs/CUSTOMIZATION.md` for detailed examples and patterns.
    ```markdown
    ---
    name: your-skill-name
-   description: What this skill does
+   description: What this skill does. Invoke when user says "trigger phrase".
    tools:
-     - github:*
+     - mcp__github__*
+     - Read
+     - Write
    ---
 
    # Your Skill
@@ -180,14 +159,7 @@ See `docs/CUSTOMIZATION.md` for detailed examples and patterns.
    ## Purpose
    ...
    ```
-3. Test locally: `./install.sh`
-4. Commit and push
-
-### Adding a New Command
-
-1. Create `commands/your-command.md`
-2. Use `$ARGUMENTS` for parameters
-3. Test locally: `./install.sh`
+3. Test: `claude --plugin-dir /path/to/muleteer`
 4. Commit and push
 
 ### Adding a New Agent
@@ -195,17 +167,20 @@ See `docs/CUSTOMIZATION.md` for detailed examples and patterns.
 1. Create `agents/your-agent.md`
 2. Define specialized expertise
 3. List required tools in frontmatter
-4. Test locally: `./install.sh`
+4. Test: `claude --plugin-dir /path/to/muleteer`
 5. Commit and push
+
+### Adding Hooks
+
+Edit `hooks/hooks.json` following the [Claude Code hooks documentation](https://code.claude.com/docs/en/hooks).
 
 ## Multi-Project Support
 
-Muleteer is installed **once** globally but works across **all your projects**:
+Muleteer is installed **once** as a plugin but works across **all your projects**:
 
 ```bash
-# One-time install
-~/.muleteer/         # Generic workflow base
-~/.claude/           # Symlinks to muleteer
+# Load plugin
+claude --plugin-dir /path/to/muleteer
 
 # Per-project customization
 ~/projects/project-a/CLAUDE.md    # Project A's conventions
@@ -213,35 +188,44 @@ Muleteer is installed **once** globally but works across **all your projects**:
 ~/projects/relica/CLAUDE.md       # Relica's conventions
 ```
 
-Commands automatically detect the current project and read its `CLAUDE.md` for project-specific settings.
+Skills automatically detect the current project and read its `CLAUDE.md` for project-specific settings.
 
 ## Troubleshooting
 
+### Plugin not loading
+
+```bash
+# Verify plugin structure
+ls -la /path/to/muleteer/.claude-plugin/
+
+# Should show:
+# plugin.json
+
+# Check manifest is valid JSON
+cat /path/to/muleteer/.claude-plugin/plugin.json | jq .
+```
+
 ### Skills not appearing
-```bash
-# Re-run install
-~/.muleteer/install.sh
 
-# Check symlinks
-ls -la ~/.claude/skills/
+```bash
+# Verify skills exist
+ls -la /path/to/muleteer/skills/
+
+# Restart Claude Code with plugin
+claude --plugin-dir /path/to/muleteer
 ```
 
-### Commands not working
+### Hooks not working
+
 ```bash
-# Check for conflicts
-ls -la ~/.claude/commands/
+# Ensure jq is installed
+which jq
 
-# Re-install
-~/.muleteer/install.sh
-```
+# Check hooks.json is valid
+cat /path/to/muleteer/hooks/hooks.json | jq .
 
-### Update not taking effect
-```bash
-cd ~/.muleteer
-git pull
-./install.sh
-
-# Restart Claude Code
+# Verify hook script is executable
+ls -la /path/to/muleteer/hooks/archive-session-log.sh
 ```
 
 ## Contributing
@@ -250,23 +234,28 @@ Contributions welcome! To contribute:
 
 1. Fork or clone this repo
 2. Create feature branch
-3. Add/modify skills, commands, or agents
-4. Test with `./install.sh`
+3. Add/modify skills, hooks, or agents
+4. Test with `claude --plugin-dir ./muleteer`
 5. Submit PR with description of changes
 
 ## License
 
-[Your License Here]
+MIT
 
 ## Maintainer
 
-Marc
+fusupo
 
 ## Version
 
-**Current:** 1.0.0 (Initial release - migrated from .claude-crg)
+**Current:** 2.0.0 (Plugin architecture)
 
 **Changelog:**
+- 2.0.0 (2025-12-31): Converted to Claude Code plugin architecture
+  - Replaced symlink installation with plugin manifest
+  - Moved hooks to `hooks/hooks.json` with `${CLAUDE_PLUGIN_ROOT}`
+  - Removed install.sh and uninstall.sh
+  - Updated skill tool specifications
 - 1.0.0 (2025-12-27): Initial Muleteer release
   - Generic workflow system
   - Multi-project support

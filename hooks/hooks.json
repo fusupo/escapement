@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.muleteer/scripts/archive-session-log.sh",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/archive-session-log.sh",
             "timeout": 60
           }
         ]
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.muleteer/scripts/archive-session-log.sh",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/archive-session-log.sh",
             "timeout": 60
           }
         ]

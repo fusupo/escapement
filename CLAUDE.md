@@ -4,50 +4,52 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Muleteer is a generic Claude Code workflow system designed to work across multiple projects simultaneously. It provides:
-- **Skills**: Automated workflow modules invoked via natural language
+Muleteer is a Claude Code plugin that provides reusable workflow modules for structured development. It works across multiple projects simultaneously and provides:
+- **Skills**: Automated workflow modules invoked via natural language or `/muleteer:skill-name`
+- **Hooks**: Session archiving on compaction
 - **Agents**: Specialized AI assistants (extensibility ready)
-- **Multi-Project Support**: Global installation with per-project customization
+- **Multi-Project Support**: One plugin installation, per-project customization
 
 ## Architecture
 
-Muleteer uses a two-tier architecture:
-
-1. **Global Layer** (~/.muleteer/): The generic workflow base installed once
-2. **Per-Project Layer** (each repo's CLAUDE.md): Project-specific conventions
+Muleteer is a Claude Code plugin with the following structure:
 
 ### Directory Structure
 
 ```
-.muleteer/
+muleteer/
+├── .claude-plugin/
+│   └── plugin.json      # Plugin manifest (name, version, author)
 ├── skills/              # Automated workflow modules
-│   ├── issue-setup/     # GitHub issue → scratchpad → branch
+│   ├── issue-setup/     # GitHub issue -> scratchpad -> branch
 │   ├── commit-changes/  # Smart git commits with conventions
 │   ├── create-pr/       # Context-aware pull request creation
 │   ├── review-pr/       # Roadmap-aware PR review
 │   ├── work-session/    # Execute work from scratchpad
 │   ├── archive-work/    # Archive completed scratchpads
-│   └── prime-session/   # Project orientation (auto-invoke)
+│   └── prime-session/   # Project orientation
+├── hooks/
+│   ├── hooks.json       # Hook configuration
+│   └── archive-session-log.sh  # PreCompact hook script
 ├── agents/              # Future: specialized subagents
-├── templates/           # Project customization templates
 ├── docs/                # Extended documentation
 │   ├── WORKFLOW.md      # Workflow explanation
 │   └── CUSTOMIZATION.md # Customization guide
-└── install.sh           # Installation script
+└── README.md            # User-facing documentation
 ```
 
 ### How It Works
 
-1. **Installation**: `install.sh` symlinks skills/agents to `~/.claude/`
-2. **Global Context**: CLAUDE-MULETEER.md gets appended to `~/.claude/CLAUDE.md`
-3. **Project-Specific**: Each project repo has its own CLAUDE.md with custom modules/conventions
-4. **Invocation**: Skills activate via natural language or explicit Skill tool
+1. **Plugin Loading**: `claude --plugin-dir /path/to/muleteer` or marketplace install
+2. **Skill Invocation**: Natural language or `/muleteer:skill-name`
+3. **Hooks**: Automatically registered from `hooks/hooks.json`
+4. **Per-Project**: Each project repo has its own CLAUDE.md with custom modules/conventions
 
 ## Key Components
 
 ### Skills
 
-**Skills are invoked automatically** based on natural language context or explicitly via the Skill tool. Defined by frontmatter in `skills/{name}/SKILL.md`.
+**Skills are invoked automatically** based on natural language context or explicitly via `/muleteer:skill-name`. Defined by frontmatter in `skills/{name}/SKILL.md`.
 
 | Skill | Trigger Examples | Purpose |
 |-------|-----------------|---------|
@@ -57,7 +59,15 @@ Muleteer uses a two-tier architecture:
 | `review-pr` | "Review PR #123" | Roadmap-aware code review |
 | `work-session` | "Start working on issue #42" | Execute tasks from scratchpad with TodoWrite |
 | `archive-work` | "Archive this work" | Move completed scratchpads to archive |
-| `prime-session` | Auto or "Orient me" | Read project docs for context |
+| `prime-session` | "Orient me", "What is this project" | Read project docs for context |
+
+### Hooks
+
+**PreCompact hook** archives session transcripts before auto-compaction:
+- Configured in `hooks/hooks.json`
+- Uses `${CLAUDE_PLUGIN_ROOT}` for portable paths
+- Creates `SESSION_LOG_{N}.md` files in project root
+- Requires `jq` to be installed
 
 ### Agents
 
@@ -67,50 +77,34 @@ Currently empty but ready for extension.
 
 ## Development Commands
 
-### Installation and Updates
+### Testing Plugin
 
 ```bash
-# Install Muleteer globally
-~/.muleteer/install.sh
+# Run Claude Code with the plugin
+claude --plugin-dir /path/to/muleteer
 
-# Update after making changes
-cd ~/.muleteer
-git pull
-./install.sh
-```
-
-### Testing Changes
-
-After modifying skills/agents:
-
-```bash
-# Re-run install to update symlinks
-./install.sh
-
-# Verify symlinks
-ls -la ~/.claude/skills/
-ls -la ~/.claude/agents/
-
-# Restart Claude Code to pick up changes
+# Verify plugin loads
+/help  # Should show muleteer skills
 ```
 
 ### Creating New Skills
 
 1. Create `skills/your-skill-name/SKILL.md`
 2. Add frontmatter with name, description, tools
-3. Document natural language triggers
-4. Run `./install.sh`
-5. Test with natural language invocation
+3. Document natural language triggers in description
+4. Test with `claude --plugin-dir .`
+5. Commit and push
 
 **Skill Frontmatter Format:**
 ```yaml
 ---
 name: skill-name
-description: What this skill does and trigger patterns
+description: What this skill does. Invoke when user says "trigger phrase".
 tools:
-  - ToolName
-  - Bash:pattern *
   - mcp__github__*
+  - Read
+  - Write
+  - Bash:git *
 ---
 ```
 
@@ -119,13 +113,17 @@ tools:
 1. Create `agents/your-agent.md`
 2. Define specialized expertise
 3. List required tools in frontmatter
-4. Run `./install.sh`
+4. Test with `claude --plugin-dir .`
+
+### Modifying Hooks
+
+Edit `hooks/hooks.json` following Claude Code hooks documentation. Use `${CLAUDE_PLUGIN_ROOT}` for paths to ensure portability.
 
 ## File Patterns and Conventions
 
 ### Scratchpad Files
 
-- **Location**: Project root (not in .muleteer repo)
+- **Location**: Project root (created in user's project, not in muleteer)
 - **Format**: `SCRATCHPAD_{issue_number}.md`
 - **Created by**: `issue-setup` skill
 - **Purpose**: Implementation plan and progress tracking
@@ -149,13 +147,13 @@ Default format (customizable per project):
 {optional body explaining what and why}
 ```
 
-Change type emojis are defined in CLAUDE-MULETEER.md. Module emojis are defined per-project in each repo's CLAUDE.md.
+Module emojis are defined per-project in each repo's CLAUDE.md.
 
 ## Important Behavior Notes
 
 ### Multi-Project Awareness
 
-Muleteer is installed **once globally** but works across **all projects**:
+Muleteer is loaded **once as a plugin** but works across **all projects**:
 - Skills detect current git repo context
 - Read project's CLAUDE.md for conventions
 - Apply project-specific module emojis and standards
@@ -164,14 +162,12 @@ Muleteer is installed **once globally** but works across **all projects**:
 ### Skill Invocation
 
 Skills can be invoked two ways:
-1. **Natural Language**: "Commit these changes" → `commit-changes` skill
-2. **Explicit**: Via Skill tool with skill name
-
-The `prime-session` skill auto-invokes when Claude detects a new/unfamiliar repository.
+1. **Natural Language**: "Commit these changes" -> `commit-changes` skill
+2. **Explicit**: `/muleteer:commit-changes`
 
 ### Workflow Philosophy
 
-1. **Structured approach**: Issue → Scratchpad → Implementation → PR
+1. **Structured approach**: Issue -> Scratchpad -> Implementation -> PR
 2. **Incremental progress**: Atomic commits, reviewable changes
 3. **Project awareness**: Adapts to each project's conventions
 4. **Quality focus**: Functional correctness over premature optimization
@@ -179,71 +175,67 @@ The `prime-session` skill auto-invokes when Claude detects a new/unfamiliar repo
 ### Never Do
 
 - Don't mix unrelated changes in single commit
-- Don't modify project-specific files (each repo's CLAUDE.md) from .muleteer repo
+- Don't modify project-specific files (each repo's CLAUDE.md) from muleteer repo
 - Don't push directly to main (always PR)
 - Don't skip commit message descriptions
 - Don't leave debugging code or console.logs
 
 ## Project Modules
 
-Since Muleteer is a workflow system (not a traditional codebase), modules are organizational:
+Since Muleteer is a plugin (not a traditional codebase), modules are organizational:
 
-- **workflow** 🔄: Core workflow definition and documentation
+- **plugin** 🔌: Plugin manifest and configuration
 - **skills** 🎯: Automated workflow skills
-- **templates** 📋: Customization templates
+- **hooks** 🪝: Event hooks and scripts
 - **docs** 📚: Extended documentation
-- **install** 🔧: Installation and setup
 
 ## Current Development Focus
 
-**Phase**: v2.0.0 (Skill-based architecture)
+**Phase**: v2.0.0 (Plugin architecture)
 
 **Completed**:
-- Rearchitected commands as skills
-- Natural language invocation
-- TodoWrite integration
-- Interactive Q&A in issue-setup
+- Converted to Claude Code plugin architecture
+- Moved hooks to `hooks/hooks.json` with `${CLAUDE_PLUGIN_ROOT}`
+- Updated skill tool specifications
+- Removed install.sh/uninstall.sh
 
 **Priorities**:
-1. Testing and validation across projects
-2. Documentation updates
+1. Testing plugin across projects
+2. Marketplace distribution
 3. Claude Code affordances integration
-4. Multi-project compatibility
 
 **Future Extensibility**:
 - Custom agents for specialized tasks
 - Project templates for common stacks
-- Workflow hooks and context archiving
+- Additional hooks for workflow automation
 
 ## Testing Standards
 
-Testing happens through actual usage across projects:
-- Test changes by re-running `install.sh`
-- Verify skills work via natural language
-- Ensure backward compatibility with existing project CLAUDE.md files
-- Validate symlinks are created correctly
+Testing happens through actual usage:
+- Test changes with `claude --plugin-dir .`
+- Verify skills work via natural language and explicit invocation
+- Ensure hooks trigger correctly
+- Validate plugin loads without errors
 
 ## Contributing Guidelines
 
 When modifying Muleteer:
 
-1. **Test thoroughly**: Use `install.sh` and test in multiple projects
+1. **Test thoroughly**: Use `claude --plugin-dir .` and test in multiple projects
 2. **Preserve compatibility**: Don't break existing project CLAUDE.md files
-3. **Document changes**: Update relevant docs/ files
+3. **Document changes**: Update README.md and relevant docs
 4. **Follow patterns**: Use established skill structure
 5. **Keep it generic**: This is a multi-project system, avoid project-specific assumptions
 
 ## Critical Implementation Details
 
-### Installation Script Behavior
+### Plugin Manifest
 
-`install.sh` performs:
-- Creates `~/.claude/{agents,skills}` directories
-- Symlinks all skills/agents to `~/.claude/`
-- Cleans up old command symlinks (from previous versions)
-- Appends CLAUDE-MULETEER.md to `~/.claude/CLAUDE.md` (once)
-- Removes existing symlinks before creating new ones
-- Idempotent: Safe to run multiple times
+`.claude-plugin/plugin.json` defines:
+- `name`: Plugin identifier and namespace prefix
+- `version`: Semantic versioning
+- `description`: Plugin purpose
+- `author`: Attribution
 
 ### Skill Frontmatter Format
 
@@ -251,19 +243,40 @@ Required fields:
 ```yaml
 ---
 name: skill-name
-description: What this skill does and natural language triggers
+description: What this skill does. Invoke when user says "trigger phrase".
 tools:
-  - ToolName
-  - Bash:pattern *
+  - mcp__github__*
+  - Read
+  - Write
+  - Bash:git *
 ---
 ```
 
 The `description` field should include natural language trigger patterns so Claude knows when to invoke the skill.
 
+### Hook Configuration
+
+`hooks/hooks.json` uses `${CLAUDE_PLUGIN_ROOT}` for portable paths:
+```json
+{
+  "hooks": {
+    "PreCompact": [
+      {
+        "matcher": "auto",
+        "hooks": [{
+          "type": "command",
+          "command": "${CLAUDE_PLUGIN_ROOT}/hooks/archive-session-log.sh"
+        }]
+      }
+    ]
+  }
+}
+```
+
 ## Key File References
 
 - `README.md`: User-facing overview and installation
-- `CLAUDE-MULETEER.md`: Global context appended to `~/.claude/CLAUDE.md`
+- `.claude-plugin/plugin.json`: Plugin manifest
+- `hooks/hooks.json`: Hook configuration
 - `docs/WORKFLOW.md`: Detailed workflow explanation
 - `docs/CUSTOMIZATION.md`: Guide for per-project customization
-- `templates/CLAUDE-MULETEER.template.md`: Template for project CLAUDE.md files

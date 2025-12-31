@@ -1,0 +1,17 @@
+# Claude Code local settings
+.claude/
+
+# Session-specific files (created in projects, not the plugin)
+SCRATCHPAD_*.md
+SESSION_LOG_*.md
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+.idea/
+.vscode/

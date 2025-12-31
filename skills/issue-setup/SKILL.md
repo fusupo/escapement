@@ -1,12 +1,13 @@
 ---
 name: issue-setup
-description: Setup development environment from GitHub issue
+description: Setup development environment from GitHub issue. Invoke when user says "setup issue #X", "start issue #X", "prepare issue #X", or provides a GitHub issue URL.
 tools:
-  - github:*
-  - bash:git *
-  - filesystem:read_text_file
-  - filesystem:write_file
-  - filesystem:directory_tree
+  - mcp__github__*
+  - mcp__linear__*
+  - Bash:git *
+  - Read
+  - Write
+  - Glob
   - AskUserQuestion
 ---
 

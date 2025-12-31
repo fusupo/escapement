@@ -1,0 +1,10 @@
+{
+  "name": "muleteer",
+  "description": "AI-code workflow system with issue tracking, smart commits, and PR creation",
+  "version": "2.0.0",
+  "author": {
+    "name": "fusupo"
+  },
+  "repository": "https://github.com/fusupo/muleteer",
+  "license": "MIT"
+}
