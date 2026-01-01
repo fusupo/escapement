@@ -1,6 +1,6 @@
 # Muleteer
 
-**Claude Code plugin for structured development workflows.** You're the mule, I'm driving you.
+**Claude Code plugin for structured development workflows.** The donkey does the work, you do the driving.
 
 ## What This Is
 
