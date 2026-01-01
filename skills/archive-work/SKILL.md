@@ -30,14 +30,16 @@ This skill activates when the user says things like:
 
 ## Workflow Execution
 
-### Phase 1: Detect Artifacts
+### Phase 1: Detect Artifacts (Parallel)
+
+**Execute these searches in parallel** for faster detection:
 
 1. **Find Scratchpads:**
-   - Look for `SCRATCHPAD_*.md` in project root
+   - `Glob: SCRATCHPAD_*.md` in project root
    - Identify issue numbers from filenames
 
 2. **Find Session Logs:**
-   - Look for `SESSION_LOG_*.md` in project root
+   - `Glob: SESSION_LOG_*.md` in project root
    - These are created by the PreCompact hook before auto-compaction
    - Associate with scratchpad (same issue context)
 
@@ -45,10 +47,14 @@ This skill activates when the user says things like:
    - Related temporary files
    - Claude Code conversation exports
 
-4. **Verify Completion:**
-   - Check if scratchpad tasks are all complete
-   - Check if PR was created/merged
-   - Warn if work appears incomplete
+4. **Check Git Status:**
+   - Current branch for context
+   - Recent commits for PR detection
+
+**After parallel detection, verify completion:**
+- Check if scratchpad tasks are all complete
+- Check if PR was created/merged
+- Warn if work appears incomplete
 
 ### Phase 2: Determine Archive Location
 
@@ -330,10 +336,11 @@ Examples:
 
 ---
 
-**Version:** 1.2.0
-**Last Updated:** 2025-12-29
+**Version:** 1.3.0
+**Last Updated:** 2025-12-31
 **Maintained By:** Muleteer
 **Changelog:**
+- v1.3.0: Added parallel execution for artifact detection
 - v1.2.0: Added SESSION_LOG_*.md detection and archiving (from PreCompact hook)
 - v1.1.0: Added timestamp prefix for chronological sorting; use git mv for proper tracking
 - v1.0.0: Initial conversion from commands/archive-dev.md
