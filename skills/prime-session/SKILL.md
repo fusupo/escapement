@@ -6,7 +6,6 @@ tools:
   - Glob
   - Bash:git *
   - Bash:ls *
-  - AskUserQuestion
 ---
 
 # Prime Session Skill
@@ -147,21 +146,6 @@ Display a concise summary (don't take any action):
 
 ## Orientation Depth
 
-After completing quick orientation, offer deeper exploration:
-
-```
-AskUserQuestion:
-  question: "Quick orientation complete. Would you like more detail?"
-  header: "Depth"
-  options:
-    - label: "This is enough"
-      description: "Continue with current context"
-    - label: "Deep dive"
-      description: "Read all architecture docs, scan structure, review git history"
-    - label: "Specific area"
-      description: "Focus on a particular module or component"
-```
-
 ### Quick Orientation (Default)
 - Read CLAUDE.md and README.md
 - Extract key conventions
@@ -174,7 +158,6 @@ AskUserQuestion:
 - Understand current work in progress
 
 Trigger deep orientation with:
-- User selects "Deep dive" in AskUserQuestion
 - "Give me a thorough orientation"
 - "Deep dive into this project"
 - "I want to understand everything"
@@ -291,9 +274,7 @@ To avoid re-reading on every interaction:
 
 ---
 
-**Version:** 1.1.0
-**Last Updated:** 2025-12-31
+**Version:** 1.0.0
+**Last Updated:** 2025-12-29
 **Maintained By:** Muleteer
-**Changelog:**
-- v1.1.0: Added AskUserQuestion for orientation depth selection
-- v1.0.0: Initial conversion from commands/prime-session.md
+**Converted From:** commands/prime-session.md

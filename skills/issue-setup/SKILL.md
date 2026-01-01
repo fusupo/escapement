@@ -8,10 +8,7 @@ tools:
   - Read
   - Write
   - Glob
-  - Grep
   - AskUserQuestion
-  - Task
-  - LSP
 ---
 
 # Issue Setup Skill
@@ -39,7 +36,7 @@ Get a high-level view of the repository structure to identify affected areas.
 
 ## Workflow Execution
 
-### Phase 1: Gather Context (Parallel)
+### Phase 1: Fetch GitHub Issue
 
 **Input:** Issue reference in format `owner/repo#number` or just `#number` (uses current repo)
 
@@ -47,22 +44,20 @@ Get a high-level view of the repository structure to identify affected areas.
 - `owner/repository#42`
 - `#42` (assumes current repository)
 
-**Execute these operations in parallel** for faster setup:
+**Steps:**
+1. **Determine repository context:**
+   - If format is `owner/repo#number`, use that
+   - If format is `#number`, detect current repo from git remote
+   - Validate repository exists and is accessible
 
-1. **Repository Context:**
-   - Determine owner/repo from input or git remote
-   - Read project's `CLAUDE.md` for conventions
-   - Check current git status and branch
+2. **Retrieve complete issue details** using GitHub tools:
+   - Title, body (description), labels
+   - State (open/closed), assignees
+   - Milestone, project associations
+   - All comments (especially implementation details)
+   - Linked issues (mentions, closes, related)
 
-2. **Issue Details:**
-   - Retrieve complete issue using GitHub tools:
-     - Title, body (description), labels
-     - State (open/closed), assignees
-     - Milestone, project associations
-     - All comments (especially implementation details)
-     - Linked issues (mentions, closes, related)
-
-3. **Generate branch name** (after issue fetched):
+3. **Generate branch name:**
    - Format: `{issue-number}-{slugified-title}`
    - Example: `42-implement-fact-batching`
    - Sanitize title: lowercase, spaces→hyphens, remove special chars
@@ -85,29 +80,12 @@ Get a high-level view of the repository structure to identify affected areas.
    - Identify ambiguities or missing information
    - Note any conflicting requirements in comments
 
-2. **Codebase Investigation (Delegate to Explore Agent):**
-
-   For thorough codebase analysis, use the **Task tool with subagent_type=Explore**:
-
-   ```
-   Task:
-     subagent_type: Explore
-     prompt: "Analyze the codebase to understand how to implement {issue summary}.
-              Find: affected modules, similar implementations, integration points,
-              and relevant patterns. Focus on: {specific areas from issue}"
-     description: "Explore codebase for issue #{number}"
-   ```
-
-   The Explore agent will:
-   - Search for relevant existing code patterns
+2. **Codebase Investigation:**
+   - Search for relevant existing code (use GitHub code search)
    - Identify affected modules/components
    - Check for similar implementations
-   - Find integration points and dependencies
-   - Use LSP for code navigation (goToDefinition, findReferences)
-
-   **When to delegate vs. do directly:**
-   - **Delegate:** Complex features, unfamiliar codebases, multi-module changes
-   - **Direct:** Simple bugs, single-file changes, well-understood areas
+   - Review recent related changes (git log, linked PRs)
+   - Look at files mentioned in issue body/comments
 
 3. **Technical Breakdown:**
    - Break work into atomic, committable tasks
@@ -504,27 +482,8 @@ A successful issue setup produces:
 
 The scratchpad should be so clear that another developer could pick it up and execute it.
 
-### Complex Implementation Detection
-
-If the issue analysis reveals a complex implementation, suggest entering plan mode:
-
-**Triggers for EnterPlanMode:**
-- Implementation affects more than 3-4 files
-- Multiple valid architectural approaches exist
-- Significant refactoring required
-- New patterns or abstractions needed
-- Breaking changes to existing APIs
-
-**Suggestion:**
-```
-This issue appears complex ({reason}). Would you like me to enter
-plan mode to design the implementation approach before we proceed?
-```
-
 ---
 
-**Version:** 1.1.0
-**Last Updated:** 2025-12-31
+**Version:** 1.0.0
+**Last Updated:** 2025-12-27
 **Maintained By:** Muleteer
-**Changelog:**
-- v1.1.0: Added Task delegation to Explore agent, parallel execution, LSP integration, EnterPlanMode triggers

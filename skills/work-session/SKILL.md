@@ -11,9 +11,6 @@ tools:
   - TodoWrite
   - AskUserQuestion
   - Skill
-  - Task
-  - LSP
-  - EnterPlanMode
 ---
 
 # Work Session Skill
@@ -112,40 +109,7 @@ For each unchecked item in the Implementation Checklist:
 
 #### 3.2 Implement Task
 
-**Before starting implementation, assess complexity:**
-
-**Complex Task Detection → EnterPlanMode:**
-If the task involves:
-- Changes to more than 3-4 files
-- Multiple valid implementation approaches
-- New patterns or architectural decisions
-- Significant refactoring
-
-Then suggest entering plan mode:
-```
-AskUserQuestion:
-  question: "This task appears complex ({reason}). Enter plan mode first?"
-  header: "Approach"
-  options:
-    - "Yes, plan first"
-      description: "Enter plan mode to design approach before implementing"
-    - "No, proceed directly"
-      description: "Start implementing without formal planning"
-```
-
-If user chooses to plan, use `EnterPlanMode` tool.
-
-**Delegate Complex Subtasks → Task Tool:**
-For complex analysis or exploration during implementation:
-```
-Task:
-  subagent_type: Explore
-  prompt: "Find all usages of {pattern} and how they integrate with {module}"
-  description: "Explore {area} for implementation"
-```
-
-**Execute the actual work:**
-- Use LSP for code navigation (goToDefinition, findReferences, documentSymbol)
+Execute the actual work:
 - Create/modify files as needed
 - Run relevant commands
 - Test changes locally
@@ -351,9 +315,7 @@ If Claude Code restarts mid-session:
 
 ---
 
-**Version:** 1.1.0
-**Last Updated:** 2025-12-31
+**Version:** 1.0.0
+**Last Updated:** 2025-12-29
 **Maintained By:** Muleteer
-**Changelog:**
-- v1.1.0: Added EnterPlanMode for complex tasks, Task delegation, LSP navigation
-- v1.0.0: Initial conversion from commands/start-work.md
+**Converted From:** commands/start-work.md
