@@ -8,7 +8,7 @@ Muleteer is a Claude Code plugin that provides reusable workflow modules to stre
 
 - **Skills**: Automated workflow modules (issue setup, commits, PRs, etc.)
 - **Hooks**: Session archiving on compaction
-- **Agents**: Specialized AI assistants (extensibility ready)
+- **Agents**: Specialized AI assistants (scratchpad-planner for codebase analysis)
 - **Multi-Project Support**: Works across all your repos simultaneously
 
 ## Workflow Overview
@@ -86,12 +86,28 @@ Muleteer includes a **PreCompact hook** that archives your session transcript be
 
 ### Agents
 
-Specialized subagents for delegation (extensibility ready):
+Specialized subagents for delegation and deep analysis:
 
-```bash
-# Future: Custom agents for your workflow
-"Use the code-reviewer agent to analyze this module"
-```
+#### scratchpad-planner
+
+**Automatically invoked** during `issue-setup` (Phase 2) for codebase analysis and implementation planning.
+
+**Capabilities:**
+- Reads project's CLAUDE.md for conventions and structure
+- Analyzes codebase using Grep, LSP, and code search patterns
+- Identifies affected modules and integration points
+- Finds similar implementations to learn from
+- Generates atomic task breakdowns following project conventions
+- Asks clarifying questions for ambiguous requirements
+- Supports resumable analysis for complex codebases
+
+**Benefits:**
+- **Specialized expertise**: Replaces generic exploration with focused planning methodology
+- **Project awareness**: Adapts to each project's conventions and architecture
+- **Resumability**: Can be resumed across sessions for iterative refinement
+- **Context preservation**: Maintains full analysis context, reducing repetition
+
+The scratchpad-planner agent transforms GitHub issues into concrete, well-structured implementation plans with atomic, reviewable tasks.
 
 ## Structure
 
@@ -110,7 +126,8 @@ muleteer/
 ├── hooks/
 │   ├── hooks.json            # Hook configuration
 │   └── archive-session-log.sh # Session archiving script
-├── agents/                   # Future: Specialized subagents
+├── agents/                   # Specialized subagents
+│   └── scratchpad-planner.md # Codebase analysis for issue-setup
 ├── docs/                     # Extended documentation
 │   ├── WORKFLOW.md           # Workflow explanation
 │   └── CUSTOMIZATION.md      # How to customize

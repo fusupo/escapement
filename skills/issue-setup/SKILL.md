@@ -113,29 +113,37 @@ Get a high-level view of the repository structure to identify affected areas.
    - Identify ambiguities or missing information
    - Note any conflicting requirements in comments
 
-2. **Codebase Investigation (Delegate to Explore Agent):**
+2. **Codebase Investigation (Delegate to Scratchpad-Planner Agent):**
 
-   For thorough codebase analysis, use the **Task tool with subagent_type=Explore**:
+   For thorough codebase analysis, use the **scratchpad-planner agent**:
 
    ```
-   Task:
-     subagent_type: Explore
-     prompt: "Analyze the codebase to understand how to implement {issue summary}.
-              Find: affected modules, similar implementations, integration points,
-              and relevant patterns. Focus on: {specific areas from issue}"
-     description: "Explore codebase for issue #{number}"
+   Skill: scratchpad-planner
+   args: "issue #{number}: {issue title}
+
+          Summary: {brief issue summary}
+
+          Key requirements:
+          {extract key requirements from issue body}
+
+          Affected areas (if known):
+          {mention specific modules/components if issue indicates}
+
+          Repository: {owner/repo}
+          Project context: See CLAUDE.md for module structure and conventions"
    ```
 
-   The Explore agent will:
-   - Search for relevant existing code patterns
-   - Identify affected modules/components
-   - Check for similar implementations
-   - Find integration points and dependencies
-   - Use LSP for code navigation (goToDefinition, findReferences)
+   The scratchpad-planner agent will:
+   - Read project's CLAUDE.md for conventions and structure
+   - Search for relevant existing code patterns using Grep and LSP
+   - Identify affected modules/components and integration points
+   - Find similar implementations to learn from
+   - Generate atomic task breakdown following project conventions
+   - Ask clarifying questions for ambiguous requirements
+   - Support resumable analysis for complex codebases
 
-   **When to delegate vs. do directly:**
-   - **Delegate:** Complex features, unfamiliar codebases, multi-module changes
-   - **Direct:** Simple bugs, single-file changes, well-understood areas
+   The agent replaces generic exploration with specialized planning expertise,
+   providing more structured analysis and implementation approach generation.
 
 3. **Technical Breakdown:**
    - Break work into atomic, committable tasks
