@@ -10,7 +10,7 @@
   "plugins": [
     {
       "name": "muleteer",
-      "source": ".",
+      "source": "./",
       "description": "AI-code workflow system with issue tracking, smart commits, and PR creation",
       "version": "2.0.0",
       "author": {
