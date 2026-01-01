@@ -7,6 +7,7 @@ tools:
   - Read
   - Task
   - Grep
+  - AskUserQuestion
 ---
 
 # Review PR Skill
@@ -175,9 +176,28 @@ Execute each perspective while **avoiding suggestions already planned**:
 - Aligned with sprint goals: {yes/no}
 ```
 
-### Phase 6: Submit Review (if requested)
+### Phase 6: Confirm and Submit Review
 
-If user wants to submit the review:
+After generating the review, confirm with the user before submitting:
+
+```
+AskUserQuestion:
+  question: "Submit this review to GitHub?"
+  header: "Review"
+  options:
+    - label: "Submit as APPROVE"
+      description: "Approve the PR with this review"
+    - label: "Submit as REQUEST_CHANGES"
+      description: "Request changes before approval"
+    - label: "Submit as COMMENT"
+      description: "Add review as comment without approval decision"
+    - label: "Edit review first"
+      description: "I want to modify the review before submitting"
+    - label: "Don't submit"
+      description: "Keep review local, don't post to GitHub"
+```
+
+If user chooses to submit:
 
 ```
 mcp__github__create_and_submit_pull_request_review(
@@ -243,7 +263,9 @@ mcp__github__create_and_submit_pull_request_review(
 
 ---
 
-**Version:** 1.0.0
-**Last Updated:** 2025-12-29
+**Version:** 1.1.0
+**Last Updated:** 2025-12-31
 **Maintained By:** Muleteer
-**Converted From:** commands/pr-review.md
+**Changelog:**
+- v1.1.0: Added AskUserQuestion for review submission confirmation
+- v1.0.0: Initial conversion from commands/pr-review.md
