@@ -4,8 +4,9 @@
 
 ## What This Is
 
-Muleteer is a Claude Code plugin that provides reusable workflow modules to streamline your development process:
+Muleteer is an opinionated workflow and Claude Code plugin that provides reusable modules to streamline your development process:
 
+- **meta-workflow:** A prescribed sequential process supported by the plugin modules
 - **Skills**: Automated workflow modules (issue setup, commits, PRs, etc.)
 - **Hooks**: Session archiving on compaction
 - **Agents**: Specialized AI assistants (scratchpad-planner for codebase analysis)
@@ -20,7 +21,6 @@ Muleteer guides you from idea to merged code through a structured workflow:
 3. **Review** (`create-pr` + `review-pr`) - Create pull request → Review changes → Merge
 4. **Archive** (`archive-work`) - Clean up scratchpad → Preserve session history
 
-**Diagram:**
 ![High-level workflow diagram](./workflow_high_level.png)
 
 Each phase is handled by specialized skills that activate via natural language or explicit commands.
@@ -78,9 +78,7 @@ A feature branch is created once the plan is acceptable.
 
 Operator involvement is primarily directional: clarifying intent and approving scope.
 
-**Diagram:**
 ![Initialize phase subdiagram](./workflow_initialize.png)
-
 
 ---
 
@@ -93,7 +91,6 @@ This loop continues until the scratchpad is complete.
 
 The operator may intervene to adjust task order, clarify intent, or pause execution, but most actions are automated.
 
-**Diagram:**
 ![Execute phase subdiagram](./workflow_do_work.png)
 
 ---
@@ -109,7 +106,6 @@ This cycle repeats until the changes are accepted and merged.
 
 Operator involvement is typically focused on decision-making and judgment rather than mechanics.
 
-**Diagram:**
 ![Review phase subdiagram](./workflow_review.png)
 
 ---
@@ -123,7 +119,6 @@ This preserves planning, execution, and review context as durable artifacts.
 
 The session is then considered complete.
 
-**Diagram:**
 ![Archive phase subdiagram](./workflow_archive.png)
 
 ---
@@ -134,7 +129,6 @@ This diagram shows all phases together, with swimlanes for each skill and the op
 
 It illustrates where decisions occur, which actions are automated, and how control moves between skills over the life of a session.
 
-**Diagram:**
 ![Full swimlaned workflow diagram](./workflow.png)
 
 ---
