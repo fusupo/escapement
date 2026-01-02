@@ -20,11 +20,10 @@ Muleteer guides you from idea to merged code through a structured workflow:
 3. **Review** (`create-pr` + `review-pr`) - Create pull request → Review changes → Merge
 4. **Archive** (`archive-work`) - Clean up scratchpad → Preserve session history
 
+**Diagram:**
+![High-level workflow diagram](./workflow_high_level.png)
+
 Each phase is handled by specialized skills that activate via natural language or explicit commands.
-
-## Workflow Diagram
-
-![Muleteer Workflow](/workflow.png "Development workflow from idea to merge")
 
 ## Installation
 
@@ -46,8 +45,101 @@ claude --plugin-dir /path/to/muleteer
 ```
 
 ## Usage
+Got it. No meta, no “purpose,” no sales language. Just **what happens**, stated plainly, with light operator involvement where it matters.
 
-### Skills
+Below is a **replacement body** for those sections, keeping the same structure but changing the voice and content to what you’re asking for.
+
+---
+
+### High-Level Workflow
+
+Work proceeds through four phases:
+
+* **Initialize**: establish scope and plan
+* **Execute**: implement planned work in small steps
+* **Review**: validate and merge changes
+* **Archive**: preserve artifacts and session history
+
+The phases are sequential but not strictly linear; refinement can push work backward before execution begins.
+
+---
+
+### Initialize (`prime-session`, `issue-setup`)
+
+The session begins either from an idea or an existing GitHub issue.
+
+If needed, project context is loaded by reading `CLAUDE.md` and related documentation.
+An issue is created or fetched, then analyzed to produce a scratchpad plan.
+
+If the issue is too large, it is decomposed into sub-issues.
+If assumptions are invalid, the issue may be reworked before proceeding.
+
+A feature branch is created once the plan is acceptable.
+
+Operator involvement is primarily directional: clarifying intent and approving scope.
+
+**Diagram:**
+![Initialize phase subdiagram](./workflow_initialize.png)
+
+
+---
+
+### Execute (`work-session`, `commit-changes`)
+
+Work is driven by the scratchpad.
+
+Tasks are selected one at a time, implemented, and committed as atomic changes following project conventions.
+This loop continues until the scratchpad is complete.
+
+The operator may intervene to adjust task order, clarify intent, or pause execution, but most actions are automated.
+
+**Diagram:**
+![Execute phase subdiagram](./workflow_do_work.png)
+
+---
+
+### Review (`create-pr`, `review-pr`)
+
+A pull request is created with full context from the scratchpad and commit history.
+
+The PR is reviewed.
+If changes are requested, work resumes and new commits are added before re-review.
+
+This cycle repeats until the changes are accepted and merged.
+
+Operator involvement is typically focused on decision-making and judgment rather than mechanics.
+
+**Diagram:**
+![Review phase subdiagram](./workflow_review.png)
+
+---
+
+### Archive (`archive-work`, hooks)
+
+After merge, the scratchpad is archived.
+
+Before Claude Code compacts the session, the transcript is saved via the PreCompact hook.
+This preserves planning, execution, and review context as durable artifacts.
+
+The session is then considered complete.
+
+**Diagram:**
+![Archive phase subdiagram](./workflow_archive.png)
+
+---
+
+### Full Workflow Map
+
+This diagram shows all phases together, with swimlanes for each skill and the operator.
+
+It illustrates where decisions occur, which actions are automated, and how control moves between skills over the life of a session.
+
+**Diagram:**
+![Full swimlaned workflow diagram](./workflow.png)
+
+---
+
+## Skills
 
 Skills are invoked automatically by Claude Code when relevant, or you can reference them explicitly with the `/muleteer:` prefix:
 
@@ -78,17 +170,17 @@ Skills are invoked automatically by Claude Code when relevant, or you can refere
 | `archive-work` | "archive this work", "clean up" | Move completed scratchpads to archive |
 | `prime-session` | "orient me", "what is this project" | Read project docs for context |
 
-### Hooks
+## Hooks
 
 Muleteer includes a **PreCompact hook** that archives your session transcript before Claude Code's automatic compaction. This preserves your work history in `SESSION_LOG_{N}.md` files.
 
 **Requirements:** `jq` must be installed for the hook to function.
 
-### Agents
+## Agents
 
 Specialized subagents for delegation and deep analysis:
 
-#### scratchpad-planner
+### scratchpad-planner
 
 **Automatically invoked** during `issue-setup` (Phase 2) for codebase analysis and implementation planning.
 
@@ -149,6 +241,7 @@ muleteer/
 Muleteer works across multiple projects. Each project customizes its workflow via its own `CLAUDE.md` file:
 
 ```markdown
+
 # In your-project/CLAUDE.md
 
 ## Project Modules
@@ -162,6 +255,7 @@ Muleteer works across multiple projects. Each project customizes its workflow vi
 {module emoji}{change type emoji} {type}({scope}): {description}
 
 Example: feat(api): Add user authentication endpoint
+
 ```
 
 See `docs/CUSTOMIZATION.md` for detailed examples and patterns.
