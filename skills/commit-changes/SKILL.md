@@ -261,5 +261,5 @@ This skill would then use 🌐 for api changes, 🎨 for frontend changes, etc.
 
 **Version:** 1.0.0
 **Last Updated:** 2025-12-29
-**Maintained By:** Muleteer
+**Maintained By:** Escapement
 **Converted From:** commands/commit.md

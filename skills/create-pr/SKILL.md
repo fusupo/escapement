@@ -285,5 +285,5 @@ Based on context, automatically determine:
 
 **Version:** 1.0.0
 **Last Updated:** 2025-12-29
-**Maintained By:** Muleteer
+**Maintained By:** Escapement
 **Converted From:** commands/open-pr.md

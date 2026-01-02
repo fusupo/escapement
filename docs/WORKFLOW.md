@@ -1,10 +1,10 @@
-# Muleteer Workflow Guide
+# Escapement Workflow Guide
 
-This document explains how Muleteer's components work together to create a structured development workflow.
+This document explains how Escapement's components work together to create a structured development workflow.
 
 ## Overview
 
-Muleteer automates the common pattern of:
+Escapement automates the common pattern of:
 1. **Issue** → 2. **Plan** → 3. **Implement** → 4. **Review** → 5. **Merge**
 
 ## Workflow Stages
@@ -16,7 +16,7 @@ Muleteer automates the common pattern of:
 - Establish GitHub issue with clear problem statement
 - Define acceptance criteria
 
-**Muleteer support:**
+**Escapement support:**
 - Issues should be problem-focused, not solution-prescriptive
 - Clear acceptance criteria enable better automation
 
@@ -249,11 +249,11 @@ Avoids suggesting improvements already planned in backlog. Focuses on THIS piece
 
 ## Multi-Project Usage
 
-Muleteer works across all your projects simultaneously:
+Escapement works across all your projects simultaneously:
 
 ```bash
 # Global install (once)
-~/.muleteer/          # Generic workflow base
+~/.escapement/          # Generic workflow base
 ~/.claude/            # Symlinks to muleteer
 
 # Per-project customization
@@ -312,7 +312,7 @@ Muleteer works across all your projects simultaneously:
 
 ### "Skill not found"
 ```bash
-cd ~/.muleteer
+cd ~/.escapement
 ./install.sh
 ```
 
@@ -350,22 +350,22 @@ Create `CLAUDE.md` in your project:
 [Your standards]
 ```
 
-### Extending Muleteer
+### Extending Escapement
 
 Add custom commands:
-1. Create `~/.muleteer/commands/your-command.md`
-2. Run `~/.muleteer/install.sh`
+1. Create `~/.escapement/commands/your-command.md`
+2. Run `~/.escapement/install.sh`
 3. Use `/your-command` in any project
 
 Add custom skills:
-1. Create `~/.muleteer/skills/your-skill/SKILL.md`
+1. Create `~/.escapement/skills/your-skill/SKILL.md`
 2. Add frontmatter with tools needed
-3. Run `~/.muleteer/install.sh`
+3. Run `~/.escapement/install.sh`
 4. Invoke automatically or explicitly
 
 ## Summary
 
-Muleteer provides structure without rigidity:
+Escapement provides structure without rigidity:
 - **Automated:** Issue → Scratchpad → Branch → PR
 - **Contextual:** Reads each project's conventions
 - **Flexible:** Works across all your projects

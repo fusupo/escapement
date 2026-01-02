@@ -561,6 +561,6 @@ plan mode to design the implementation approach before we proceed?
 
 **Version:** 1.1.0
 **Last Updated:** 2025-12-31
-**Maintained By:** Muleteer
+**Maintained By:** Escapement
 **Changelog:**
 - v1.1.0: Added Task delegation to Explore agent, parallel execution, LSP integration, EnterPlanMode triggers

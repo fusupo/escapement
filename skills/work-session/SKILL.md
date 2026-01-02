@@ -391,7 +391,7 @@ If Claude Code restarts mid-session:
 
 **Version:** 1.1.0
 **Last Updated:** 2025-12-31
-**Maintained By:** Muleteer
+**Maintained By:** Escapement
 **Changelog:**
 - v1.1.0: Added EnterPlanMode for complex tasks, Task delegation, LSP navigation
 - v1.0.0: Initial conversion from commands/start-work.md

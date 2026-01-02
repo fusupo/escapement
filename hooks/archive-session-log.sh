@@ -150,7 +150,7 @@ TIMESTAMP=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
     echo ""
     echo "---"
     echo ""
-    echo "*Session log archived by Muleteer PreCompact hook*"
+    echo "*Session log archived by Escapement PreCompact hook*"
 
 } > "$OUTPUT_FILE"
 

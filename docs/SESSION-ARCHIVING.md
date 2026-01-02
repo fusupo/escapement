@@ -13,10 +13,10 @@ This hook-based system:
 
 ## Quick Setup
 
-### 1. Run the Muleteer installer
+### 1. Run the Escapement installer
 
 ```bash
-~/.muleteer/install.sh
+~/.escapement/install.sh
 ```
 
 This ensures the archive script is executable.
@@ -37,7 +37,7 @@ Add the following to your Claude Code settings file:
         "hooks": [
           {
             "type": "command",
-            "command": "~/.muleteer/scripts/archive-session-log.sh",
+            "command": "~/.escapement/scripts/archive-session-log.sh",
             "timeout": 60
           }
         ]
@@ -47,7 +47,7 @@ Add the following to your Claude Code settings file:
         "hooks": [
           {
             "type": "command",
-            "command": "~/.muleteer/scripts/archive-session-log.sh",
+            "command": "~/.escapement/scripts/archive-session-log.sh",
             "timeout": 60
           }
         ]
@@ -57,7 +57,7 @@ Add the following to your Claude Code settings file:
 }
 ```
 
-A template is available at: `~/.muleteer/templates/hooks-config.json`
+A template is available at: `~/.escapement/templates/hooks-config.json`
 
 ## How It Works
 
@@ -153,7 +153,7 @@ The `timeout` field (in seconds) controls how long to wait for the script to com
 
 1. **Check script is executable:**
    ```bash
-   ls -la ~/.muleteer/scripts/archive-session-log.sh
+   ls -la ~/.escapement/scripts/archive-session-log.sh
    ```
    Should show `-rwxr-xr-x` permissions.
 
@@ -176,7 +176,7 @@ Run the script manually to test:
 ```bash
 echo '{"transcript_path": "/path/to/test.jsonl", "session_id": "test", "trigger": "auto"}' | \
   CLAUDE_PROJECT_DIR=/path/to/project \
-  ~/.muleteer/scripts/archive-session-log.sh
+  ~/.escapement/scripts/archive-session-log.sh
 ```
 
 ### Large session logs

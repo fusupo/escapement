@@ -265,7 +265,7 @@ mcp__github__create_and_submit_pull_request_review(
 
 **Version:** 1.1.0
 **Last Updated:** 2025-12-31
-**Maintained By:** Muleteer
+**Maintained By:** Escapement
 **Changelog:**
 - v1.1.0: Added AskUserQuestion for review submission confirmation
 - v1.0.0: Initial conversion from commands/pr-review.md

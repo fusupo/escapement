@@ -1,22 +1,22 @@
 {
-  "name": "fusupo-muleteer",
+  "name": "fusupo-escapement",
   "owner": {
     "name": "fusupo"
   },
   "metadata": {
-    "description": "Muleteer - AI-code workflow system",
+    "description": "Escapement - AI-code workflow system",
     "version": "1.0.0"
   },
   "plugins": [
     {
-      "name": "muleteer",
+      "name": "escapement",
       "source": "./",
       "description": "AI-code workflow system with issue tracking, smart commits, and PR creation",
       "version": "2.0.0",
       "author": {
         "name": "fusupo"
       },
-      "repository": "https://github.com/fusupo/muleteer",
+      "repository": "https://github.com/fusupo/escapement",
       "license": "MIT",
       "keywords": ["workflow", "git", "issues", "commits", "pr"]
     }

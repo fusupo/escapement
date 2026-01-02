@@ -1,13 +1,13 @@
-# Customizing Muleteer for Your Project
+# Customizing Escapement for Your Project
 
-Muleteer is designed to work across multiple projects, with each project customizing the workflow via its own `CLAUDE.md` file.
+Escapement is designed to work across multiple projects, with each project customizing the workflow via its own `CLAUDE.md` file.
 
 ## Core Concept: Per-Project Configuration
 
 **Global layer** (installed once):
 ```
-~/.muleteer/          # Generic workflow base
-~/.claude/            # Symlinks to muleteer
+~/.escapement/        # Generic workflow base
+~/.claude/            # Symlinks to escapement
 ```
 
 **Per-project layer** (in each repo):
@@ -544,7 +544,7 @@ Then use "api" as scope in commits: `feat(api): ...`
 
 ## Summary
 
-Muleteer's per-project configuration:
+Escapement's per-project configuration:
 - **Keeps global workflow generic** - Works everywhere
 - **Customizes per project** - Each project has its own conventions
 - **Supports multiple projects** - No global config conflicts

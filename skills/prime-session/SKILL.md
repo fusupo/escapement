@@ -256,8 +256,8 @@ To avoid re-reading on every interaction:
 ## Example Output
 
 ```
-📍 Project: muleteer
-   Repository: fusupo/muleteer
+📍 Project: escapement
+   Repository: fusupo/escapement
    Branch: main
 
 📋 Overview:
@@ -293,7 +293,7 @@ To avoid re-reading on every interaction:
 
 **Version:** 1.1.0
 **Last Updated:** 2025-12-31
-**Maintained By:** Muleteer
+**Maintained By:** Escapement
 **Changelog:**
 - v1.1.0: Added AskUserQuestion for orientation depth selection
 - v1.0.0: Initial conversion from commands/prime-session.md

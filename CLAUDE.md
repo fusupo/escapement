@@ -4,20 +4,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Muleteer is a Claude Code plugin that provides reusable workflow modules for structured development. It works across multiple projects simultaneously and provides:
-- **Skills**: Automated workflow modules invoked via natural language or `/muleteer:skill-name`
+Escapement is a Claude Code plugin that provides reusable workflow modules for structured development. It works across multiple projects simultaneously and provides:
+- **Skills**: Automated workflow modules invoked via natural language or `/escapement:skill-name`
 - **Hooks**: Session archiving on compaction
 - **Agents**: Specialized AI assistants (extensibility ready)
 - **Multi-Project Support**: One plugin installation, per-project customization
 
 ## Architecture
 
-Muleteer is a Claude Code plugin with the following structure:
+Escapement is a Claude Code plugin with the following structure:
 
 ### Directory Structure
 
 ```
-muleteer/
+escapement/
 ├── .claude-plugin/
 │   └── plugin.json      # Plugin manifest (name, version, author)
 ├── skills/              # Automated workflow modules
@@ -40,8 +40,8 @@ muleteer/
 
 ### How It Works
 
-1. **Plugin Loading**: `claude --plugin-dir /path/to/muleteer` or marketplace install
-2. **Skill Invocation**: Natural language or `/muleteer:skill-name`
+1. **Plugin Loading**: `claude --plugin-dir /path/to/escapement` or marketplace install
+2. **Skill Invocation**: Natural language or `/escapement:skill-name`
 3. **Hooks**: Automatically registered from `hooks/hooks.json`
 4. **Per-Project**: Each project repo has its own CLAUDE.md with custom modules/conventions
 
@@ -49,7 +49,7 @@ muleteer/
 
 ### Skills
 
-**Skills are invoked automatically** based on natural language context or explicitly via `/muleteer:skill-name`. Defined by frontmatter in `skills/{name}/SKILL.md`.
+**Skills are invoked automatically** based on natural language context or explicitly via `/escapement:skill-name`. Defined by frontmatter in `skills/{name}/SKILL.md`.
 
 | Skill | Trigger Examples | Purpose |
 |-------|-----------------|---------|
@@ -81,10 +81,10 @@ Currently empty but ready for extension.
 
 ```bash
 # Run Claude Code with the plugin
-claude --plugin-dir /path/to/muleteer
+claude --plugin-dir /path/to/escapement
 
 # Verify plugin loads
-/help  # Should show muleteer skills
+/help  # Should show escapement skills
 ```
 
 ### Creating New Skills
@@ -153,7 +153,7 @@ Module emojis are defined per-project in each repo's CLAUDE.md.
 
 ### Multi-Project Awareness
 
-Muleteer is loaded **once as a plugin** but works across **all projects**:
+Escapement is loaded **once as a plugin** but works across **all projects**:
 - Skills detect current git repo context
 - Read project's CLAUDE.md for conventions
 - Apply project-specific module emojis and standards
@@ -163,7 +163,7 @@ Muleteer is loaded **once as a plugin** but works across **all projects**:
 
 Skills can be invoked two ways:
 1. **Natural Language**: "Commit these changes" -> `commit-changes` skill
-2. **Explicit**: `/muleteer:commit-changes`
+2. **Explicit**: `/escapement:commit-changes`
 
 ### Workflow Philosophy
 
@@ -182,7 +182,7 @@ Skills can be invoked two ways:
 
 ## Project Modules
 
-Since Muleteer is a plugin (not a traditional codebase), modules are organizational:
+Since Escapement is a plugin (not a traditional codebase), modules are organizational:
 
 - **plugin** 🔌: Plugin manifest and configuration
 - **skills** 🎯: Automated workflow skills
@@ -219,7 +219,7 @@ Testing happens through actual usage:
 
 ## Contributing Guidelines
 
-When modifying Muleteer:
+When modifying Escapement:
 
 1. **Test thoroughly**: Use `claude --plugin-dir .` and test in multiple projects
 2. **Preserve compatibility**: Don't break existing project CLAUDE.md files
