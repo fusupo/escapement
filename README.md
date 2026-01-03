@@ -45,11 +45,6 @@ claude --plugin-dir /path/to/escapement
 ```
 
 ## Usage
-Got it. No meta, no “purpose,” no sales language. Just **what happens**, stated plainly, with light operator involvement where it matters.
-
-Below is a **replacement body** for those sections, keeping the same structure but changing the voice and content to what you’re asking for.
-
----
 
 ### High-Level Workflow
 
@@ -61,8 +56,6 @@ Work proceeds through four phases:
 * **Archive**: preserve artifacts and session history
 
 The phases are sequential but not strictly linear; refinement can push work backward before execution begins.
-
----
 
 ### Initialize (`prime-session`, `issue-setup`)
 
@@ -80,8 +73,6 @@ Operator involvement is primarily directional: clarifying intent and approving s
 
 ![Initialize phase subdiagram](./workflow_initialize.png)
 
----
-
 ### Execute (`work-session`, `commit-changes`)
 
 Work is driven by the scratchpad.
@@ -92,8 +83,6 @@ This loop continues until the scratchpad is complete.
 The operator may intervene to adjust task order, clarify intent, or pause execution, but most actions are automated.
 
 ![Execute phase subdiagram](./workflow_do_work.png)
-
----
 
 ### Review (`create-pr`, `review-pr`)
 
@@ -108,8 +97,6 @@ Operator involvement is typically focused on decision-making and judgment rather
 
 ![Review phase subdiagram](./workflow_review.png)
 
----
-
 ### Archive (`archive-work`, hooks)
 
 After merge, the scratchpad is archived.
@@ -121,8 +108,6 @@ The session is then considered complete.
 
 ![Archive phase subdiagram](./workflow_archive.png)
 
----
-
 ### Full Workflow Map
 
 This diagram shows all phases together, with swimlanes for each skill and the operator.
@@ -130,8 +115,6 @@ This diagram shows all phases together, with swimlanes for each skill and the op
 It illustrates where decisions occur, which actions are automated, and how control moves between skills over the life of a session.
 
 ![Full swimlaned workflow diagram](./workflow.png)
-
----
 
 ## Skills
 
@@ -154,15 +137,15 @@ Skills are invoked automatically by Claude Code when relevant, or you can refere
 
 ### Available Skills
 
-| Skill | Triggers | Purpose |
-|-------|----------|---------|
-| `issue-setup` | "setup issue #X", "start issue #X" | Fetch issue, create scratchpad, prepare branch |
-| `commit-changes` | "commit", "commit these changes" | Smart commits with conventional format |
-| `create-pr` | "create a PR", "open pull request" | Context-aware PR creation |
-| `review-pr` | "review PR #X", "check this PR" | Roadmap-aware code review |
-| `work-session` | "start working", "continue work" | Execute tasks from scratchpad |
-| `archive-work` | "archive this work", "clean up" | Move completed scratchpads to archive |
-| `prime-session` | "orient me", "what is this project" | Read project docs for context |
+| Skill            | Triggers                            | Purpose                                        |
+| ---------------- | ----------------------------------- | ---------------------------------------------- |
+| `issue-setup`    | "setup issue #X", "start issue #X"  | Fetch issue, create scratchpad, prepare branch |
+| `commit-changes` | "commit", "commit these changes"    | Smart commits with conventional format         |
+| `create-pr`      | "create a PR", "open pull request"  | Context-aware PR creation                      |
+| `review-pr`      | "review PR #X", "check this PR"     | Roadmap-aware code review                      |
+| `work-session`   | "start working", "continue work"    | Execute tasks from scratchpad                  |
+| `archive-work`   | "archive this work", "clean up"     | Move completed scratchpads to archive          |
+| `prime-session`  | "orient me", "what is this project" | Read project docs for context                  |
 
 ## Hooks
 
