@@ -16,8 +16,8 @@ Escapement is an opinionated workflow and Claude Code plugin that provides reusa
 
 Escapement guides you from idea to merged code through a structured workflow:
 
-1. **Initialize** (`issue-setup`) - Pull GitHub issue → Generate scratchpad plan → Create feature branch
-2. **Execute** (`work-session` + `commit-changes`) - Work through scratchpad tasks → Make atomic commits
+1. **Initialize** (`setup-work`) - Pull GitHub issue → Generate scratchpad plan → Create feature branch
+2. **Execute** (`do-work` + `commit-changes`) - Work through scratchpad tasks → Make atomic commits
 3. **Review** (`create-pr` + `review-pr`) - Create pull request → Review changes → Merge
 4. **Archive** (`archive-work`) - Clean up scratchpad → Preserve session history
 
@@ -57,7 +57,7 @@ Work proceeds through four phases:
 
 The phases are sequential but not strictly linear; refinement can push work backward before execution begins.
 
-### Initialize (`prime-session`, `issue-setup`)
+### Initialize (`prime-session`, `setup-work`)
 
 The session begins either from an idea or an existing GitHub issue.
 
@@ -73,7 +73,7 @@ Operator involvement is primarily directional: clarifying intent and approving s
 
 ![Initialize phase subdiagram](./workflow_initialize.png)
 
-### Execute (`work-session`, `commit-changes`)
+### Execute (`do-work`, `commit-changes`)
 
 Work is driven by the scratchpad.
 
@@ -130,7 +130,7 @@ Skills are invoked automatically by Claude Code when relevant, or you can refere
 
 **Explicit Invocation:**
 ```bash
-/escapement:issue-setup
+/escapement:setup-work
 /escapement:commit-changes
 /escapement:create-pr
 ```
@@ -139,11 +139,11 @@ Skills are invoked automatically by Claude Code when relevant, or you can refere
 
 | Skill            | Triggers                            | Purpose                                        |
 | ---------------- | ----------------------------------- | ---------------------------------------------- |
-| `issue-setup`    | "setup issue #X", "start issue #X"  | Fetch issue, create scratchpad, prepare branch |
+| `setup-work`     | "setup issue #X", "start issue #X"  | Fetch issue, create scratchpad, prepare branch |
 | `commit-changes` | "commit", "commit these changes"    | Smart commits with conventional format         |
 | `create-pr`      | "create a PR", "open pull request"  | Context-aware PR creation                      |
 | `review-pr`      | "review PR #X", "check this PR"     | Roadmap-aware code review                      |
-| `work-session`   | "start working", "continue work"    | Execute tasks from scratchpad                  |
+| `do-work`        | "start working", "continue work"    | Execute tasks from scratchpad                  |
 | `archive-work`   | "archive this work", "clean up"     | Move completed scratchpads to archive          |
 | `prime-session`  | "orient me", "what is this project" | Read project docs for context                  |
 
@@ -159,7 +159,7 @@ Specialized subagents for delegation and deep analysis:
 
 ### scratchpad-planner
 
-**Automatically invoked** during `issue-setup` (Phase 2) for codebase analysis and implementation planning.
+**Automatically invoked** during `setup-work` (Phase 2) for codebase analysis and implementation planning.
 
 **Capabilities:**
 - Reads project's CLAUDE.md for conventions and structure
@@ -185,18 +185,18 @@ escapement/
 ├── .claude-plugin/
 │   └── plugin.json           # Plugin manifest
 ├── skills/
-│   ├── issue-setup/          # GitHub issue -> scratchpad workflow
+│   ├── setup-work/           # GitHub issue -> scratchpad workflow
 │   ├── commit-changes/       # Conventional commits
 │   ├── create-pr/            # Pull request creation
 │   ├── review-pr/            # PR review
-│   ├── work-session/         # Execute from scratchpad
+│   ├── do-work/              # Execute from scratchpad
 │   ├── archive-work/         # Archive completed work
 │   └── prime-session/        # Project orientation
 ├── hooks/
 │   ├── hooks.json            # Hook configuration
 │   └── archive-session-log.sh # Session archiving script
 ├── agents/                   # Specialized subagents
-│   └── scratchpad-planner.md # Codebase analysis for issue-setup
+│   └── scratchpad-planner.md # Codebase analysis for setup-work
 ├── docs/                     # Extended documentation
 │   ├── WORKFLOW.md           # Workflow explanation
 │   └── CUSTOMIZATION.md      # How to customize

@@ -258,7 +258,7 @@ Based on context, automatically determine:
 ## Integration with Other Skills
 
 **Follows:**
-- `work-session` skill - After completing all tasks
+- `do-work` skill - After completing all tasks
 - `commit-changes` skill - After final commit
 
 **Links to:**

@@ -30,7 +30,7 @@ Escapement automates the common pattern of:
 ```
 
 **What happens:**
-The `issue-setup` skill automatically:
+The `setup-work` skill automatically:
 1. Fetches complete issue details from GitHub
 2. Analyzes requirements and codebase context
 3. Creates `SCRATCHPAD_{num}.md` with:
@@ -235,7 +235,7 @@ Avoids suggesting improvements already planned in backlog. Focuses on THIS piece
 - **Location:** Project root
 - **Format:** `SCRATCHPAD_{issue_number}.md`
 - **Purpose:** Implementation plan and progress tracking
-- **Lifecycle:** Created by `issue-setup`, updated during work, archived when done
+- **Lifecycle:** Created by `setup-work`, updated during work, archived when done
 
 ### Project CLAUDE.md
 - **Location:** Project root (each repo has its own)

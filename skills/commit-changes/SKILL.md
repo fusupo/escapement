@@ -216,7 +216,7 @@ If in detached HEAD state:
 ## Integration with Other Skills
 
 **Called by:**
-- `work-session` skill - After completing each scratchpad task
+- `do-work` skill - After completing each scratchpad task
 - User directly via natural language
 
 **Works with:**

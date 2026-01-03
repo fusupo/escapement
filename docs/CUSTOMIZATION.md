@@ -424,7 +424,7 @@ Reads your `CLAUDE.md` to understand:
 - Development phase
 - Standards to check against
 
-### `issue-setup` Skill
+### `setup-work` Skill
 
 Reads your `CLAUDE.md` to:
 - Understand module boundaries

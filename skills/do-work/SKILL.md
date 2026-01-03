@@ -1,5 +1,5 @@
 ---
-name: work-session
+name: do-work
 description: Execute development work from a scratchpad, tracking progress with TodoWrite and making atomic commits. This skill MUST be invoked as the first action when user says "start work on issue #X", "do work on issue #X", "work on issue #X", "continue work", "resume work", or "keep working". Do not fetch issue details or plan manually.
 tools:
   - Read
@@ -49,18 +49,18 @@ This skill activates when the user says things like:
    ```
    ❌ No scratchpad found for issue #{number}
 
-   Would you like to run issue-setup first?
+   Would you like to run setup-work first?
    ```
 
    Use AskUserQuestion:
    ```
    AskUserQuestion:
      questions:
-       - question: "No scratchpad found. Run issue-setup to initialize?"
+       - question: "No scratchpad found. Run setup-work to initialize?"
          header: "Setup Required"
          multiSelect: false
          options:
-           - label: "Yes, run issue-setup"
+           - label: "Yes, run setup-work"
              description: "Create scratchpad and branch for this issue"
            - label: "No, create manually"
              description: "I'll set up the scratchpad myself"
@@ -68,11 +68,11 @@ This skill activates when the user says things like:
 
    If user chooses "Yes":
    ```
-   Skill: issue-setup
+   Skill: setup-work
    args: "{issue_number}"
    ```
 
-   **STOP here** - issue-setup will create scratchpad and can chain to work-session after.
+   **STOP here** - setup-work will create scratchpad and can chain to do-work after.
 
 3. **If scratchpad exists:**
    - Proceed to Phase 1 (normal work flow)
@@ -333,7 +333,7 @@ If Claude Code restarts mid-session:
 ❌ No scratchpad found for issue #{number}
 
    Would you like to:
-   1. Run issue-setup for this issue
+   1. Run setup-work for this issue
    2. Specify a different issue number
    3. Create a new scratchpad manually
 ```
@@ -365,7 +365,7 @@ If Claude Code restarts mid-session:
 
 **Invoked by:**
 - User directly via natural language
-- After `issue-setup` skill completes
+- After `setup-work` skill completes
 
 **Reads from:**
 - Scratchpad - Implementation plan

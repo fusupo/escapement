@@ -266,7 +266,7 @@ AskUserQuestion:
 ## Integration with Other Skills
 
 **Invoked by:**
-- `work-session` skill - After completing all tasks
+- `do-work` skill - After completing all tasks
 - User directly after PR is merged
 
 **Invokes:**

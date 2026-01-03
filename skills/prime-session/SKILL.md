@@ -231,7 +231,7 @@ To avoid re-reading on every interaction:
 **Provides context to:**
 - All other skills - Module emojis, conventions
 - `commit-changes` - Commit format
-- `issue-setup` - Branch naming, priorities
+- `setup-work` - Branch naming, priorities
 
 **Auto-invokes before:**
 - Any skill that needs project context
