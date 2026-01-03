@@ -21,11 +21,11 @@ escapement/
 ├── .claude-plugin/
 │   └── plugin.json      # Plugin manifest (name, version, author)
 ├── skills/              # Automated workflow modules
-│   ├── issue-setup/     # GitHub issue -> scratchpad -> branch
+│   ├── setup-work/      # GitHub issue -> scratchpad -> branch
 │   ├── commit-changes/  # Smart git commits with conventions
 │   ├── create-pr/       # Context-aware pull request creation
 │   ├── review-pr/       # Roadmap-aware PR review
-│   ├── work-session/    # Execute work from scratchpad
+│   ├── do-work/         # Execute work from scratchpad
 │   ├── archive-work/    # Archive completed scratchpads
 │   └── prime-session/   # Project orientation
 ├── hooks/
@@ -53,11 +53,11 @@ escapement/
 
 | Skill | Trigger Examples | Purpose |
 |-------|-----------------|---------|
-| `issue-setup` | "Setup issue #42" | Fetch issue, create scratchpad, prepare branch |
+| `setup-work` | "Setup issue #42" | Fetch issue, create scratchpad, prepare branch |
 | `commit-changes` | "Commit these changes" | Smart commits with project conventions |
 | `create-pr` | "Create a PR" | Context-aware pull request creation |
 | `review-pr` | "Review PR #123" | Roadmap-aware code review |
-| `work-session` | "Start working on issue #42" | Execute tasks from scratchpad with TodoWrite |
+| `do-work` | "Start working on issue #42" | Execute tasks from scratchpad with TodoWrite |
 | `archive-work` | "Archive this work" | Move completed scratchpads to archive |
 | `prime-session` | "Orient me", "What is this project" | Read project docs for context |
 
@@ -125,7 +125,7 @@ Edit `hooks/hooks.json` following Claude Code hooks documentation. Use `${CLAUDE
 
 - **Location**: Project root (created in user's project, not in muleteer)
 - **Format**: `SCRATCHPAD_{issue_number}.md`
-- **Created by**: `issue-setup` skill
+- **Created by**: `setup-work` skill
 - **Purpose**: Implementation plan and progress tracking
 - **Sync**: TodoWrite shows live progress, scratchpad is persistent record
 
