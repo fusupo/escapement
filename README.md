@@ -1,6 +1,6 @@
 # Escapement
 
-**Claude Code plugin for structured development workflows.** The donkey does the work, you do the driving.
+**Claude Code plugin for structured development workflows.** Regulated workflow, one tick at a time.
 
 ## What This Is
 
@@ -364,9 +364,12 @@ fusupo
 
 ## Version
 
-**Current:** 2.0.0 (Plugin architecture)
+**Current:** 3.0.0 (Escapement rename)
 
 **Changelog:**
+- 3.0.0 (2026-01-02): Renamed project from "muleteer" to "escapement"
+  - Breaking change: plugin name changed
+  - Updated all references and branding
 - 2.0.0 (2025-12-31): Converted to Claude Code plugin architecture
   - Replaced symlink installation with plugin manifest
   - Moved hooks to `hooks/hooks.json` with `${CLAUDE_PLUGIN_ROOT}`
