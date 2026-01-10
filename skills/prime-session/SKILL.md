@@ -2,6 +2,7 @@
 name: prime-session
 description: Orient to current project by reading CLAUDE.md and architecture docs. Auto-invokes when Claude detects a new or unfamiliar repository. Can also be triggered by "orient me", "what is this project", or "prime session".
 tools:
+  - mcp__serena__*
   - Read
   - Glob
   - Bash:git *
@@ -169,9 +170,19 @@ AskUserQuestion:
 
 ### Deep Orientation (On Request)
 - Read all architecture docs
-- Scan directory structure
+- **Use Serena for semantic structure understanding:**
+  - `get_symbols_overview()` on key source files
+  - `find_symbol()` to locate major components/modules
+  - Build symbol-level mental model without reading entire files
+- Scan directory structure (for non-code layout)
 - Review recent git history
 - Understand current work in progress
+
+**Serena Integration Benefits:**
+- Understand code architecture without 100+ file reads
+- Get symbol-level structure of main components
+- Identify key classes, functions, types efficiently
+- Build precise mental model for future work
 
 Trigger deep orientation with:
 - User selects "Deep dive" in AskUserQuestion

@@ -2,6 +2,7 @@
 name: review-pr
 description: Conduct comprehensive PR reviews with sprint/roadmap context awareness. Invoke when user says "review PR", "check this PR", "review pull request #X", or when asked to provide feedback on a PR.
 tools:
+  - mcp__serena__*
   - mcp__github__*
   - mcp__linear__*
   - Read

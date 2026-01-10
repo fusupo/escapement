@@ -2,6 +2,7 @@
 name: setup-work
 description: Setup development environment from GitHub issue. Invoke when user says "init work on issue #X", "initialize issue #X", "setup issue #X", "prepare issue #X", "start fresh on issue #X", "start new work on issue #X", or provides a GitHub issue URL.
 tools:
+  - mcp__serena__*
   - mcp__github__*
   - mcp__linear__*
   - Bash:git *

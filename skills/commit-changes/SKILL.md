@@ -2,6 +2,7 @@
 name: commit-changes
 description: Create thoughtful git commits with conventional commits format. Invoke when user says "commit", "commit these changes", "create a commit", "save my changes", or after completing a task.
 tools:
+  - mcp__serena__*
   - Bash:git *
   - Read
   - Grep

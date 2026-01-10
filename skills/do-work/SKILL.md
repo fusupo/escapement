@@ -2,6 +2,7 @@
 name: do-work
 description: Execute development work from a scratchpad, tracking progress with TodoWrite and making atomic commits. This skill MUST be invoked as the first action when user says "start work on issue #X", "do work on issue #X", "work on issue #X", "continue work", "resume work", or "keep working". Do not fetch issue details or plan manually.
 tools:
+  - mcp__serena__*
   - Read
   - Edit
   - Write

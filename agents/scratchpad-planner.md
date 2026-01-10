@@ -2,6 +2,7 @@
 name: scratchpad-planner
 description: Specialized agent for deep codebase analysis and implementation planning during issue setup. MUST be used during setup-work's DeepDiveSolution phase (Phase 2) to analyze project architecture, identify affected modules, find similar patterns, and generate structured implementation approaches. Supports resumable, iterative refinement for complex codebases.
 tools:
+  - mcp__serena__*
   - Read
   - Grep
   - Glob
@@ -59,44 +60,55 @@ Flag ambiguities immediately - don't guess at unclear requirements.
 
 **Identify Affected Areas**
 
-Use systematic exploration to understand the codebase:
+Use **Serena's semantic tools** as your primary approach for efficient exploration:
 
-1. **Directory Structure**: Use `Glob` to map the project layout
-   - Find main source directories
-   - Identify module boundaries
-   - Locate test files, docs, config
+1. **Symbol-Level Overview**: Start with semantic structure
+   - `get_symbols_overview()`: Get high-level file structure without reading entire files
+   - `find_symbol()`: Locate specific classes, functions, components by name
+   - Understand architecture at symbol level, not file level
 
 2. **Module Boundaries**: Determine which modules the issue touches
-   - Does it affect one module or span multiple?
-   - What are the integration points?
-   - Which files will likely need changes?
+   - Use `find_symbol()` with `depth` parameter to see component hierarchies
+   - Locate integration points through symbol relationships
+   - Identify which symbols will need changes
 
-3. **Dependency Analysis**: Trace how modules interact
-   - Use `Grep` to find imports/references
-   - Map data flow between components
-   - Identify shared utilities or types
+3. **Dependency Analysis**: Trace how components interact
+   - `find_referencing_symbols()`: See all usages of a symbol
+   - Map data flow through symbol relationships
+   - Identify shared utilities or types semantically
+
+**Fallback to traditional tools when:**
+- Searching for non-code patterns (config, docs)
+- Need directory structure overview (`Glob`)
+- Pattern matching across non-symbol content (`Grep`)
 
 **Find Similar Implementations**
 
-Use LSP and code search to locate existing patterns:
+Use Serena's semantic search combined with LSP:
 
-1. **LSP Navigation**: For precise code understanding
+1. **Serena Symbol Search**: For efficient code discovery
+   - `find_symbol()`: Locate components by name pattern
+   - `find_referencing_symbols()`: Understand usage patterns
+   - `get_symbols_overview()`: Survey file structure before diving deep
+
+2. **LSP Navigation**: For additional context when needed
    - `goToDefinition`: Find where symbols are defined
-   - `findReferences`: See all usages of a function/class
-   - `documentSymbol`: Get structure of a file
+   - `findReferences`: Cross-check with Serena results
    - `hover`: Get type information and docs
 
-2. **Pattern Search with Grep**: For broader exploration
+3. **Pattern Search with Grep**: For broader exploration
    - Search for similar feature implementations
    - Find existing error handling patterns
    - Locate test patterns to replicate
    - Identify naming conventions
 
-3. **Example-Driven Analysis**:
-   - If adding a new endpoint, find existing endpoints
-   - If creating a component, find similar components
-   - If adding a utility, check existing utilities
+4. **Example-Driven Analysis**:
+   - If adding a new endpoint, use `find_symbol("*Controller")` or `find_symbol("*Route")`
+   - If creating a component, find similar components with `find_symbol()` substring matching
+   - If adding a utility, check existing utilities semantically
    - Study the pattern, don't reinvent
+
+**Efficiency Note**: Serena's symbol-level tools can replace 100+ file reads with 5-10 semantic queries. Use them first!
 
 ### Phase 3: Implementation Approach Design
 
