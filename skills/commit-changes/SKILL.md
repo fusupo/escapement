@@ -148,6 +148,8 @@ Display the proposed commit message clearly before asking.
    )"
    ```
 
+   **IMPORTANT:** Do NOT add Claude attribution (e.g., "Co-Authored-By: Claude") to commit messages.
+
 3. **Confirm success:**
    ```bash
    git log -1 --oneline

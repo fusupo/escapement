@@ -179,6 +179,8 @@ Display the proposed title and description before asking.
    mcp__github__create_pull_request(...)
    ```
 
+   **IMPORTANT:** Do NOT add Claude attribution (e.g., "Generated with Claude Code") to PR descriptions.
+
 3. **Apply labels** (from issue + modules affected)
 
 4. **Link to issue** (auto-close on merge via "Closes #X")
@@ -280,6 +282,7 @@ Based on context, automatically determine:
 - Write vague descriptions
 - Include unrelated changes
 - Force push after PR is created (without warning)
+- Add Claude attribution to PR descriptions
 
 ---
 
