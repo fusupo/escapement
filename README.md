@@ -347,9 +347,10 @@ fusupo
 
 ## Version
 
-**Current:** 3.1.2
+**Current:** 3.2.0
 
 **Changelog:**
+- 3.2.0 (2026-02-08): Add explicit plan approval gate to setup-work
 - 3.1.2 (2026-02-08): Exclude workflow artifacts from commits
 - 3.1.1 (2026-01-09): Add directive to omit Claude attribution in git messages
 - 3.1.0 (2026-01-09): Integrate Serena MCP for semantic code intelligence

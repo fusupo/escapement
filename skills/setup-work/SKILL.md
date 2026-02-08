@@ -380,8 +380,47 @@ Proceeding to branch creation...
 ```
 
 **Skip Conditions:**
-- No items in "Clarifications Needed" → Skip directly to Phase 4
+- No items in "Clarifications Needed" → Skip directly to Phase 3.6
 - User explicitly requests to skip → Note unresolved questions, proceed with assumptions
+
+### Phase 3.6: Plan Approval
+
+**Goal:** Get explicit user approval of the implementation plan before preparing the workspace.
+
+This mirrors Claude's EnterPlanMode/ExitPlanMode approval pattern — the user reviews and signs off on the plan before any workspace changes.
+
+1. **Present Plan Summary:**
+   ```
+   📋 SCRATCHPAD_{issue_number}.md ready for review:
+
+      {X} implementation tasks
+      {Y} quality checks
+      {Z} decisions resolved
+
+   Key changes:
+   - {Brief summary of major tasks}
+   ```
+
+2. **Request Approval:**
+   ```
+   AskUserQuestion:
+     question: "Approve this implementation plan?"
+     header: "Plan"
+     options:
+       - label: "Approve"
+         description: "Plan looks good, create branch and proceed"
+       - label: "Revise plan"
+         description: "Re-run planning with adjusted focus"
+       - label: "Let me review"
+         description: "I'll read the scratchpad first, then decide"
+   ```
+
+3. **Handle Response:**
+   - **Approve:** Proceed to Phase 4
+   - **Revise plan:** Resume scratchpad-planner agent with user feedback, then return to Phase 3.6
+   - **Let me review:** Wait for user to read SCRATCHPAD, then re-ask approval
+
+**This phase is NOT skippable.** The user must explicitly approve before workspace preparation begins.
 
 ### Phase 4: Prepare Workspace
 
@@ -506,6 +545,7 @@ If can't access repository:
 
 ### ❌ DON'T:
 - Start coding before scratchpad approved
+- Skip Phase 3.6 plan approval — user must sign off before branch creation
 - Guess at unclear requirements
 - Create tasks too large to review
 - Skip codebase investigation
@@ -519,10 +559,9 @@ If issue is complex or ambiguous, ask:
 - "This issue affects multiple modules. Should we break it into sub-issues?"
 - "Acceptance criteria unclear on X. Should we clarify before planning?"
 
-**After Scratchpad Created:**
-Present for review:
-- "I've created SCRATCHPAD_42.md. Please review the implementation plan."
-- "I flagged 2 questions in the Blockers section - need clarification?"
+**After Scratchpad Created (Phase 3.6):**
+Explicit approval required — handled by Phase 3.6 Plan Approval step.
+User must approve, request revision, or review before branch creation proceeds.
 
 **Before Branch Creation:**
 Confirm readiness:
