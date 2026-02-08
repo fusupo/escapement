@@ -56,7 +56,12 @@ Execute these in parallel for efficiency:
    - Don't mix unrelated changes in one commit
    - If multiple logical changes exist, use `AskUserQuestion` to ask which to commit first
 
-3. **Validate Commit-Worthiness:**
+3. **Exclude Workflow Artifacts:**
+   - **NEVER stage or commit** `SCRATCHPAD_*.md` files (working implementation plans)
+   - **NEVER stage or commit** `SESSION_LOG_*.md` files (session transcripts)
+   - If these appear in `git status`, ignore them — they are ephemeral workflow files
+
+4. **Validate Commit-Worthiness:**
    - Ensure changes represent one logical unit of work
    - Check for debugging code, console.logs, temp files
    - Verify no secrets or sensitive data included
@@ -187,6 +192,7 @@ When unstaged changes exist across multiple areas:
 ## Quality Checks
 
 Before committing, verify:
+- [ ] No `SCRATCHPAD_*.md` or `SESSION_LOG_*.md` files staged
 - [ ] No `console.log` or debug statements (unless intentional)
 - [ ] No TODO comments that should be addressed first
 - [ ] No secrets, API keys, or sensitive data
@@ -259,6 +265,7 @@ This skill would then use 🌐 for api changes, 🎨 for frontend changes, etc.
 - Commit secrets or credentials
 - Skip the body when context is needed
 - Add Claude attribution to commit messages
+- Commit SCRATCHPAD_*.md or SESSION_LOG_*.md files
 
 ---
 

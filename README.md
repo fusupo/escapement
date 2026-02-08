@@ -347,9 +347,12 @@ fusupo
 
 ## Version
 
-**Current:** 3.0.0 (Escapement rename)
+**Current:** 3.1.2
 
 **Changelog:**
+- 3.1.2 (2026-02-08): Exclude workflow artifacts from commits
+- 3.1.1 (2026-01-09): Add directive to omit Claude attribution in git messages
+- 3.1.0 (2026-01-09): Integrate Serena MCP for semantic code intelligence
 - 3.0.0 (2026-01-02): Renamed project from "muleteer" to "escapement"
   - Breaking change: plugin name changed
   - Updated all references and branding
