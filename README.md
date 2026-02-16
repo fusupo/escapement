@@ -145,11 +145,14 @@ Skills are invoked automatically by Claude Code when relevant, or you can refere
 | `review-pr`      | "review PR #X", "check this PR"     | Roadmap-aware code review                      |
 | `do-work`        | "start working", "continue work"    | Execute tasks from scratchpad                  |
 | `archive-work`   | "archive this work", "clean up"     | Move completed scratchpads to archive          |
+| `stash-artifact` | "stash this script", "save to context" | Save artifacts to context directory         |
 | `prime-session`  | "orient me", "what is this project" | Read project docs for context                  |
 
 ## Hooks
 
 Escapement includes a **PreCompact hook** that archives your session transcript before Claude Code's automatic compaction. This preserves your work history in `SESSION_LOG_{N}.md` files.
+
+The hook is **context-path aware**: if your project configures a `context-path`, session logs are written to the context directory under the current branch instead of the project root. See [Context Path](#context-path) below.
 
 **Requirements:** `jq` must be installed for the hook to function.
 
@@ -190,7 +193,8 @@ escapement/
 │   ├── create-pr/            # Pull request creation
 │   ├── review-pr/            # PR review
 │   ├── do-work/              # Execute from scratchpad
-│   ├── archive-work/         # Archive completed work
+│   ├── archive-work/         # Archive completed work (context-path aware)
+│   ├── stash-artifact/       # Save artifacts to context directory
 │   └── prime-session/        # Project orientation
 ├── hooks/
 │   ├── hooks.json            # Hook configuration
@@ -199,7 +203,8 @@ escapement/
 │   └── scratchpad-planner.md # Codebase analysis for setup-work
 ├── docs/                     # Extended documentation
 │   ├── WORKFLOW.md           # Workflow explanation
-│   └── CUSTOMIZATION.md      # How to customize
+│   ├── CUSTOMIZATION.md      # How to customize
+│   └── CONTEXT_PATH.md       # Context path design and usage
 ├── workflow.png              # Workflow diagram
 └── README.md                 # This file
 ```
@@ -236,6 +241,27 @@ Example: feat(api): Add user authentication endpoint
 ```
 
 See `docs/CUSTOMIZATION.md` for detailed examples and patterns.
+
+## Context Path
+
+By default, development artifacts (session logs, archives) live inside your code repo. For larger projects this causes search pollution, repo bloat, and noisy diffs.
+
+The **context-path** feature redirects these artifacts to a sibling directory outside the code repo. Projects opt in by adding to their `CLAUDE.md`:
+
+```markdown
+## Escapement Settings
+
+- **context-path**: ../myproject-ctx
+```
+
+When set:
+- **`archive-work`** archives scratchpads and session logs to `{context-path}/{branch}/archive/` instead of `docs/dev/cc-archive/`
+- **PreCompact hook** writes `SESSION_LOG_{N}.md` to `{context-path}/{branch}/` instead of the project root
+- **`stash-artifact`** saves ad hoc scripts and notes to `{context-path}/{branch}/scripts/` or `{context-path}/{branch}/notes/`
+
+When not set, all behavior is unchanged.
+
+The context directory is plain markdown files that can be optionally git-tracked and work well with tools like Obsidian. See `docs/CONTEXT_PATH.md` for the full design.
 
 ## Development
 
@@ -347,9 +373,14 @@ fusupo
 
 ## Version
 
-**Current:** 3.2.0
+**Current:** 3.3.0
 
 **Changelog:**
+- 3.3.0 (2026-02-15): Add context-path support for external artifact storage
+  - New `stash-artifact` skill for saving scripts/notes to context directory
+  - `archive-work` v2.0.0 with dual-mode archive (context/in-repo)
+  - PreCompact hook writes session logs to context directory when configured
+  - Portable shell scripts (BSD/macOS compatible)
 - 3.2.0 (2026-02-08): Add explicit plan approval gate to setup-work
 - 3.1.2 (2026-02-08): Exclude workflow artifacts from commits
 - 3.1.1 (2026-01-09): Add directive to omit Claude attribution in git messages
