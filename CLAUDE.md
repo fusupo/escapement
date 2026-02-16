@@ -26,7 +26,8 @@ escapement/
 │   ├── create-pr/       # Context-aware pull request creation
 │   ├── review-pr/       # Roadmap-aware PR review
 │   ├── do-work/         # Execute work from scratchpad
-│   ├── archive-work/    # Archive completed scratchpads
+│   ├── archive-work/    # Archive completed scratchpads (context-path aware)
+│   ├── stash-artifact/  # Save artifacts to context directory
 │   └── prime-session/   # Project orientation
 ├── hooks/
 │   ├── hooks.json       # Hook configuration
@@ -34,7 +35,8 @@ escapement/
 ├── agents/              # Future: specialized subagents
 ├── docs/                # Extended documentation
 │   ├── WORKFLOW.md      # Workflow explanation
-│   └── CUSTOMIZATION.md # Customization guide
+│   ├── CUSTOMIZATION.md # Customization guide
+│   └── CONTEXT_PATH.md  # Context path design and usage
 └── README.md            # User-facing documentation
 ```
 
@@ -58,7 +60,8 @@ escapement/
 | `create-pr` | "Create a PR" | Context-aware pull request creation |
 | `review-pr` | "Review PR #123" | Roadmap-aware code review |
 | `do-work` | "Start working on issue #42" | Execute tasks from scratchpad with TodoWrite |
-| `archive-work` | "Archive this work" | Move completed scratchpads to archive |
+| `archive-work` | "Archive this work" | Move completed scratchpads to archive (context-path aware) |
+| `stash-artifact` | "Stash this script", "Save to context" | Save artifacts to context directory |
 | `prime-session` | "Orient me", "What is this project" | Read project docs for context |
 
 ### Hooks
@@ -66,7 +69,8 @@ escapement/
 **PreCompact hook** archives session transcripts before auto-compaction:
 - Configured in `hooks/hooks.json`
 - Uses `${CLAUDE_PLUGIN_ROOT}` for portable paths
-- Creates `SESSION_LOG_{N}.md` files in project root
+- **Context-path aware**: writes to `{context-path}/{branch}/` if configured, otherwise project root
+- Creates `SESSION_LOG_{N}.md` files
 - Requires `jq` to be installed
 
 ### Agents
@@ -120,6 +124,18 @@ tools:
 Edit `hooks/hooks.json` following Claude Code hooks documentation. Use `${CLAUDE_PLUGIN_ROOT}` for paths to ensure portability.
 
 ## File Patterns and Conventions
+
+### Context Path (Optional)
+
+Projects can redirect development artifacts (session logs, archives) to an external directory by adding to their CLAUDE.md:
+
+```markdown
+## Escapement Settings
+
+- **context-path**: ../myproject-ctx
+```
+
+When set, `archive-work`, `stash-artifact`, and the PreCompact hook write to this directory instead of the code repo. See `docs/CONTEXT_PATH.md` for full design details.
 
 ### Scratchpad Files
 
@@ -280,3 +296,4 @@ The `description` field should include natural language trigger patterns so Clau
 - `hooks/hooks.json`: Hook configuration
 - `docs/WORKFLOW.md`: Detailed workflow explanation
 - `docs/CUSTOMIZATION.md`: Guide for per-project customization
+- `docs/CONTEXT_PATH.md`: Context path design and usage

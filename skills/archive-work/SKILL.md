@@ -6,8 +6,11 @@ tools:
   - Write
   - Bash:mkdir *
   - Bash:mv *
+  - Bash:cp *
+  - Bash:realpath *
   - Bash:git *
   - Glob
+  - Grep
   - AskUserQuestion
   - Skill
 ---
@@ -17,6 +20,8 @@ tools:
 ## Purpose
 
 Archive completed scratchpads and development artifacts to maintain clean project roots while preserving work history for future reference. This skill organizes completed work into a structured archive.
+
+**Context-path aware:** If the project's CLAUDE.md defines a `context-path`, archives are written to the external context directory instead of `docs/dev/cc-archive/`. This keeps the code repo clean of development artifacts.
 
 ## Natural Language Triggers
 
@@ -30,7 +35,28 @@ This skill activates when the user says things like:
 
 ## Workflow Execution
 
-### Phase 1: Detect Artifacts (Parallel)
+### Phase 1: Detect Context Path
+
+**Read project's CLAUDE.md** and check for Escapement Settings:
+
+```markdown
+## Escapement Settings
+
+- **context-path**: ../myproject-ctx
+```
+
+**If context-path is set:**
+- Resolve the path relative to project root
+- Determine current branch name
+- Target directory: `{context-path}/{branch}/archive/`
+- Create the directory structure if it doesn't exist
+- Set `ARCHIVE_MODE=context`
+
+**If context-path is NOT set:**
+- Fall back to `docs/dev/cc-archive/` (existing behavior)
+- Set `ARCHIVE_MODE=in-repo`
+
+### Phase 2: Detect Artifacts (Parallel)
 
 **Execute these searches in parallel** for faster detection:
 
@@ -40,6 +66,8 @@ This skill activates when the user says things like:
 
 2. **Find Session Logs:**
    - `Glob: SESSION_LOG_*.md` in project root
+   - **Also check context directory** if context-path is set:
+     `Glob: {context-path}/{branch}/SESSION_LOG_*.md`
    - These are created by the PreCompact hook before auto-compaction
    - Associate with scratchpad (same issue context)
 
@@ -50,51 +78,67 @@ This skill activates when the user says things like:
 4. **Check Git Status:**
    - Current branch for context
    - Recent commits for PR detection
+   - HEAD SHA for linking
 
 **After parallel detection, verify completion:**
 - Check if scratchpad tasks are all complete
 - Check if PR was created/merged
 - Warn if work appears incomplete
 
-### Phase 2: Determine Archive Location
+### Phase 3: Determine Archive Location
 
-**Default Structure:**
+**Context Mode (context-path set):**
+
+```
+{context-path}/
+└── {branch-name}/
+    └── archive/
+        ├── SCRATCHPAD_{issue_number}.md
+        ├── SESSION_LOG_1.md
+        ├── SESSION_LOG_2.md
+        └── README.md
+```
+
+No timestamp prefix on the branch directory — the branch name is the identifier.
+If multiple archives exist for the same branch (rare), add a timestamp suffix to the archive directory.
+
+**In-Repo Mode (no context-path):**
+
 ```
 docs/dev/cc-archive/
 └── {YYYYMMDDHHMM}-{issue-number}-{brief-description}/
     ├── SCRATCHPAD_{issue_number}.md
-    ├── session-log.md (if exists)
+    ├── SESSION_LOG_1.md (if exists)
     └── README.md (summary)
 ```
 
-**Timestamp Prefix:** Archives use `YYYYMMDDHHMM` prefix for chronological ordering.
-This ensures archives sort by completion date, not ticket number.
+### Phase 4: Prepare Archive
 
-**Check Project Conventions:**
-- Read CLAUDE.md for custom archive location
-- Check if `docs/dev/cc-archive/` exists
-- Create directory structure if needed
+1. **Create Archive Directory:**
 
-### Phase 3: Prepare Archive
-
-1. **Generate Timestamp and Directory Name:**
+   **Context mode:**
    ```bash
-   # Generate timestamp prefix
+   CONTEXT_PATH=$(sed -n 's/^[[:space:]]*-[[:space:]]*\*\*context-path\*\*:[[:space:]]*\([^[:space:]]*\).*/\1/p' CLAUDE.md | head -1)
+   BRANCH=$(git branch --show-current)
+   ARCHIVE_DIR="$CONTEXT_PATH/$BRANCH/archive"
+   mkdir -p "$ARCHIVE_DIR"
+   ```
+
+   **In-repo mode:**
+   ```bash
    TIMESTAMP=$(date +%Y%m%d%H%M)
-   ARCHIVE_DIR="${TIMESTAMP}-{issue-number}-{description}"
+   ARCHIVE_DIR="docs/dev/cc-archive/${TIMESTAMP}-{issue-number}-{description}"
+   mkdir -p "$ARCHIVE_DIR"
    ```
 
-2. **Create Archive Directory:**
-   ```bash
-   mkdir -p docs/dev/cc-archive/${ARCHIVE_DIR}
-   ```
-
-3. **Generate Archive Summary:**
+2. **Generate Archive Summary:**
    Create `README.md` in archive folder:
    ```markdown
    # Issue #{issue_number} - {title}
 
    **Archived:** {date}
+   **Branch:** {branch_name}
+   **Code SHA:** {HEAD sha at time of archive}
    **PR:** #{pr_number} (if applicable)
    **Status:** {Completed/Merged/Abandoned}
 
@@ -111,15 +155,50 @@ This ensures archives sort by completion date, not ticket number.
    {Any notable insights from Work Log}
    ```
 
-4. **Move Files (using git mv for proper tracking):**
+3. **Move Files:**
+
+   **Context mode:**
    ```bash
-   git mv SCRATCHPAD_{issue_number}.md docs/dev/cc-archive/${ARCHIVE_DIR}/
+   # Copy scratchpad to context directory FIRST (before git rm deletes it)
+   cp SCRATCHPAD_{issue_number}.md "$ARCHIVE_DIR/"
+
+   # Then remove scratchpad from code repo tracking
+   git rm SCRATCHPAD_{issue_number}.md
+
+   # Move session logs from project root (if any landed here)
+   for log in SESSION_LOG_*.md; do
+     if [ -f "$log" ]; then
+       mv "$log" "$ARCHIVE_DIR/"
+     fi
+   done
+
+   # Move session logs from context branch dir (hook may have written them there)
+   BRANCH_DIR="$CONTEXT_PATH/$BRANCH"
+   for log in "$BRANCH_DIR"/SESSION_LOG_*.md; do
+     if [ -f "$log" ]; then
+       mv "$log" "$ARCHIVE_DIR/"
+     fi
+   done
    ```
 
-   **Important:** Use `git mv` instead of `mv` to ensure both the addition to
-   archive AND the removal from project root are tracked in the same commit.
+   **In-repo mode (existing behavior):**
+   ```bash
+   git mv SCRATCHPAD_{issue_number}.md "$ARCHIVE_DIR/"
 
-### Phase 4: Confirm with User
+   for log in SESSION_LOG_*.md; do
+     if [ -f "$log" ]; then
+       mv "$log" "$ARCHIVE_DIR/"
+     fi
+   done
+   git add "$ARCHIVE_DIR"/SESSION_LOG_*.md 2>/dev/null || true
+   ```
+
+   **Important (context mode):** Copy the scratchpad BEFORE `git rm` — `git rm` deletes
+   the working tree copy. The scratchpad content is preserved in the context directory.
+   The context directory is NOT a git repo managed by this skill — the operator handles
+   that separately.
+
+### Phase 5: Confirm with User
 
 ```
 AskUserQuestion:
@@ -136,27 +215,43 @@ AskUserQuestion:
       description: "Keep scratchpad in current location"
 ```
 
-### Phase 5: Execute Archive
+**Context mode additional info:**
+```
+Archive destination: {resolved context path}/{branch}/archive/
+   (outside code repo — context directory)
 
-1. **Move Files (with git tracking):**
-   ```bash
-   # Use git mv to track both addition and removal in same commit
-   git mv SCRATCHPAD_{issue_number}.md docs/dev/cc-archive/${ARCHIVE_DIR}/
+Code repo changes:
+   - SCRATCHPAD_{issue_number}.md will be removed (git rm)
 
-   # Move session logs (created by PreCompact hook)
-   # These are untracked, so use mv then git add
-   for log in SESSION_LOG_*.md; do
-     if [ -f "$log" ]; then
-       mv "$log" docs/dev/cc-archive/${ARCHIVE_DIR}/
-     fi
-   done
-   git add docs/dev/cc-archive/${ARCHIVE_DIR}/SESSION_LOG_*.md 2>/dev/null || true
-   ```
-   - Create summary README in archive directory
-   - Stage the new README: `git add docs/dev/cc-archive/${ARCHIVE_DIR}/README.md`
+Context directory changes:
+   - Scratchpad, session logs, and summary will be written
+   - You'll need to commit the context directory separately if it's git-tracked
+```
 
-2. **Commit Archive:**
+### Phase 6: Execute Archive
+
+1. **Move Files** (per Phase 4 instructions based on mode)
+
+2. **Write README.md** to archive directory
+
+3. **Commit in Code Repo:**
    If user opted to commit:
+
+   **Context mode:**
+   ```
+   Skill: commit-changes
+
+   # Commit message will be:
+   # 📚🗃️ chore(docs): Archive work for issue #{issue_number}
+   #
+   # Scratchpad archived to context directory
+   # PR: #{pr_number}
+   ```
+
+   The commit only contains the removal of the scratchpad from project root.
+   No archive files are added to the code repo.
+
+   **In-repo mode:**
    ```
    Skill: commit-changes
 
@@ -167,31 +262,51 @@ AskUserQuestion:
    # PR: #{pr_number}
    ```
 
-   **The commit will include:**
-   - Removal of SCRATCHPAD from project root (via git mv)
-   - Addition of SCRATCHPAD in archive directory
-   - Session logs (SESSION_LOG_*.md) if present
-   - New README.md summary
+### Phase 7: Report Result
 
-### Phase 6: Report Result
-
+**Context mode:**
 ```
-✓ Work archived successfully!
+Work archived successfully.
 
-📁 Archive location:
-   docs/dev/cc-archive/{YYYYMMDDHHMM}-{issue-number}-{description}/
+Context archive:
+   {context-path}/{branch}/archive/
 
-📄 Files archived:
+Files archived (to context directory):
    - SCRATCHPAD_{issue_number}.md
    - SESSION_LOG_*.md (if any existed)
    - README.md (summary generated)
 
-🗑️ Cleaned up:
+Code repo cleanup:
+   - Removed SCRATCHPAD_{issue_number}.md (git rm)
+   - Removed SESSION_LOG_*.md from project root
+
+{If committed}
+Code repo committed: {commit hash}
+   - Removed: SCRATCHPAD_{issue_number}.md
+
+Note: context directory changes are not auto-committed.
+   If your context directory is git-tracked, commit separately:
+   cd {context-path} && git add -A && git commit -m "Archive {branch} work"
+```
+
+**In-repo mode:**
+```
+Work archived successfully.
+
+Archive location:
+   docs/dev/cc-archive/{YYYYMMDDHHMM}-{issue-number}-{description}/
+
+Files archived:
+   - SCRATCHPAD_{issue_number}.md
+   - SESSION_LOG_*.md (if any existed)
+   - README.md (summary generated)
+
+Cleaned up:
    - Removed scratchpad from project root (tracked via git mv)
    - Removed session logs from project root
 
 {If committed}
-📝 Committed: {commit hash}
+Committed: {commit hash}
    - Added: archive directory with scratchpad, session logs, README
    - Removed: SCRATCHPAD_{issue_number}.md from project root
    - Removed: SESSION_LOG_*.md from project root
@@ -221,7 +336,7 @@ Allow user to specify different archive location:
 AskUserQuestion:
   question: "Archive to default location?"
   options:
-    - "Yes, use docs/dev/cc-archive/"
+    - "Yes, use {detected location}"
     - "Specify custom location"
 ```
 
@@ -229,13 +344,13 @@ AskUserQuestion:
 
 ### No Scratchpad Found
 ```
-ℹ️ No scratchpad found to archive.
+No scratchpad found to archive.
    Looking for: SCRATCHPAD_*.md in project root
 ```
 
 ### Work Incomplete
 ```
-⚠️ Scratchpad has incomplete tasks:
+Scratchpad has incomplete tasks:
    - {unchecked task 1}
    - {unchecked task 2}
 
@@ -244,19 +359,31 @@ AskUserQuestion:
    2. No, continue working first
 ```
 
-### Archive Directory Exists
+### Context Path Not Found
 ```
-⚠️ Archive already exists for issue #{number}
+Context path configured but directory not found:
+   {context-path}
 
    Options:
-   1. Overwrite existing archive
-   2. Create numbered version (archive-2/)
+   1. Create it now
+   2. Fall back to in-repo archive
+   3. Cancel
+```
+
+### Archive Directory Exists
+```
+Archive already exists for this branch
+   {context-path}/{branch}/archive/
+
+   Options:
+   1. Merge into existing archive
+   2. Create timestamped subdirectory
    3. Cancel
 ```
 
 ### No PR Created
 ```
-ℹ️ No PR found for this work.
+No PR found for this work.
 
    Archive anyway?
    1. Yes, archive without PR reference
@@ -275,71 +402,36 @@ AskUserQuestion:
 **Reads from:**
 - Scratchpad - Content to archive
 - Git history - PR information
-
-## Archive Structure Best Practices
-
-### Recommended Directory Layout
-```
-docs/
-└── dev/
-    └── cc-archive/
-        ├── 202512281430-42-add-authentication/
-        │   ├── SCRATCHPAD_42.md
-        │   └── README.md
-        ├── 202512281545-43-fix-login-bug/
-        │   ├── SCRATCHPAD_43.md
-        │   ├── SESSION_LOG_1.md
-        │   └── README.md
-        └── 202512290900-44-refactor-api/
-            ├── SCRATCHPAD_44.md
-            ├── SESSION_LOG_1.md
-            ├── SESSION_LOG_2.md
-            └── README.md
-```
-
-### Archive Naming Convention
-`{YYYYMMDDHHMM}-{issue-number}-{slugified-description}/`
-
-**Format breakdown:**
-- `YYYYMMDDHHMM` - Timestamp when archived (enables chronological sorting)
-- `{issue-number}` - GitHub issue number for reference
-- `{slugified-description}` - Brief description from issue title
-
-Examples:
-- `202512281430-42-add-user-authentication/`
-- `202512290915-123-fix-payment-bug/`
-- `202512271000-7-initial-project-setup/`
-
-**Why timestamp prefix?**
-- Archives sort chronologically regardless of ticket number order
-- Easy to scan for recent work
-- Preserves actual completion order
+- CLAUDE.md - Context path setting
 
 ## Best Practices
 
-### ✅ DO:
+### DO:
 - Archive after PR is merged
 - Include summary README
 - Preserve decision history
 - Use consistent archive location
-- Commit archives to repo
-- Use `git mv` to move scratchpads (tracks removal properly)
-- Use timestamp prefix for chronological ordering
+- Commit code repo changes (scratchpad removal)
+- Remember to commit context directory separately if git-tracked
+- Use `git rm` for scratchpads in context mode (clean code repo history)
+- Copy scratchpad to context dir BEFORE running git rm
 
-### ❌ DON'T:
+### DON'T:
 - Archive incomplete work without noting it
 - Delete without archiving (lose history)
-- Mix archives from different projects
+- Mix archives from different projects in one context directory
 - Skip the summary README
 - Leave scratchpads in project root long-term
-- Use plain `mv` for tracked files (leaves unstaged deletion)
+- Assume the context directory auto-commits (it doesn't)
+- Run `git rm` before copying the file (it deletes the working copy)
 
 ---
 
-**Version:** 1.3.0
-**Last Updated:** 2025-12-31
+**Version:** 2.0.0
+**Last Updated:** 2026-02-13
 **Maintained By:** Escapement
 **Changelog:**
+- v2.0.0: Added context-path support for external archive directories
 - v1.3.0: Added parallel execution for artifact detection
 - v1.2.0: Added SESSION_LOG_*.md detection and archiving (from PreCompact hook)
 - v1.1.0: Added timestamp prefix for chronological sorting; use git mv for proper tracking
