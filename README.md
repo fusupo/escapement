@@ -375,9 +375,13 @@ fusupo
 
 ## Version
 
-**Current:** 3.3.0
+**Current:** 3.4.0
 
 **Changelog:**
+- 3.4.0 (2026-02-18): Add create-issue skill for ad hoc GitHub issue creation
+  - New `create-issue` skill for capturing ideas mid-flow without leaving session
+  - Conversational refinement scales to prompt vagueness
+  - Optional chaining to `setup-work` for immediate follow-through
 - 3.3.0 (2026-02-15): Add context-path support for external artifact storage
   - New `stash-artifact` skill for saving scripts/notes to context directory
   - `archive-work` v2.0.0 with dual-mode archive (context/in-repo)
