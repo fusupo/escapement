@@ -145,6 +145,7 @@ Skills are invoked automatically by Claude Code when relevant, or you can refere
 | `review-pr`      | "review PR #X", "check this PR"     | Roadmap-aware code review                      |
 | `do-work`        | "start working", "continue work"    | Execute tasks from scratchpad                  |
 | `archive-work`   | "archive this work", "clean up"     | Move completed scratchpads to archive          |
+| `create-issue`   | "create an issue", "file a bug"     | Ad hoc GitHub issue creation from natural language |
 | `stash-artifact` | "stash this script", "save to context" | Save artifacts to context directory         |
 | `prime-session`  | "orient me", "what is this project" | Read project docs for context                  |
 
@@ -194,6 +195,7 @@ escapement/
 │   ├── review-pr/            # PR review
 │   ├── do-work/              # Execute from scratchpad
 │   ├── archive-work/         # Archive completed work (context-path aware)
+│   ├── create-issue/         # Ad hoc GitHub issue creation
 │   ├── stash-artifact/       # Save artifacts to context directory
 │   └── prime-session/        # Project orientation
 ├── hooks/
@@ -373,9 +375,13 @@ fusupo
 
 ## Version
 
-**Current:** 3.3.0
+**Current:** 3.4.0
 
 **Changelog:**
+- 3.4.0 (2026-02-18): Add create-issue skill for ad hoc GitHub issue creation
+  - New `create-issue` skill for capturing ideas mid-flow without leaving session
+  - Conversational refinement scales to prompt vagueness
+  - Optional chaining to `setup-work` for immediate follow-through
 - 3.3.0 (2026-02-15): Add context-path support for external artifact storage
   - New `stash-artifact` skill for saving scripts/notes to context directory
   - `archive-work` v2.0.0 with dual-mode archive (context/in-repo)

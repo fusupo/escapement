@@ -27,6 +27,7 @@ escapement/
 │   ├── review-pr/       # Roadmap-aware PR review
 │   ├── do-work/         # Execute work from scratchpad
 │   ├── archive-work/    # Archive completed scratchpads (context-path aware)
+│   ├── create-issue/    # Ad hoc GitHub issue creation
 │   ├── stash-artifact/  # Save artifacts to context directory
 │   └── prime-session/   # Project orientation
 ├── hooks/
@@ -61,6 +62,7 @@ escapement/
 | `review-pr` | "Review PR #123" | Roadmap-aware code review |
 | `do-work` | "Start working on issue #42" | Execute tasks from scratchpad with TodoWrite |
 | `archive-work` | "Archive this work" | Move completed scratchpads to archive (context-path aware) |
+| `create-issue` | "Create an issue", "File a bug" | Ad hoc GitHub issue creation from natural language |
 | `stash-artifact` | "Stash this script", "Save to context" | Save artifacts to context directory |
 | `prime-session` | "Orient me", "What is this project" | Read project docs for context |
 
