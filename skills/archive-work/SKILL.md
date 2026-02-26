@@ -284,7 +284,7 @@ Context directory changes:
       - `{branch}`: the branch being archived (from `git branch --show-current`)
       - `{issue_number}`, `{issue_title}`, `{issue_github_url}`: from the scratchpad
       - `{status}`: the same value used in the archive README (Merged, Completed, or Abandoned)
-   4. Insert the new row **immediately after** the separator line (`|----------|--------|-------|--------|`) so that newest entries appear first
+   4. Append the new row **at the end** of the table so that entries are in chronological order (oldest first, newest last)
    5. Write the full updated content back with the Write tool
 
    **Example result after two archives:**
@@ -293,8 +293,8 @@ Context directory changes:
 
    | Archived | Branch | Issue | Status |
    |----------|--------|-------|--------|
-   | 2026-02-25 | 44-refactor-api | [#44](https://github.com/owner/repo/issues/44) Refactor API | Merged |
    | 2026-02-20 | 43-fix-login-bug | [#43](https://github.com/owner/repo/issues/43) Fix login bug | Merged |
+   | 2026-02-25 | 44-refactor-api | [#44](https://github.com/owner/repo/issues/44) Refactor API | Merged |
    ```
 
 4. **Commit in Code Repo:**
