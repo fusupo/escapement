@@ -153,7 +153,7 @@ Skills are invoked automatically by Claude Code when relevant, or you can refere
 
 Escapement includes a **PreCompact hook** that archives your session transcript before Claude Code's automatic compaction. This preserves your work history in `SESSION_LOG_{N}.md` files.
 
-The hook is **context-path aware**: if your project configures a `context-path`, session logs are written to the context directory under the current branch instead of the project root. See [Context Path](#context-path) below.
+The hook always writes to the **project root** alongside the active scratchpad, regardless of context-path configuration. The `archive-work` skill is responsible for moving session logs to the context directory at archive time.
 
 **Requirements:** `jq` must be installed for the hook to function.
 
@@ -258,8 +258,9 @@ The **context-path** feature redirects these artifacts to a sibling directory ou
 
 When set:
 - **`archive-work`** archives scratchpads and session logs to `{context-path}/{branch}/archive/` instead of `docs/dev/cc-archive/`
-- **PreCompact hook** writes `SESSION_LOG_{N}.md` to `{context-path}/{branch}/` instead of the project root
 - **`stash-artifact`** saves ad hoc scripts and notes to `{context-path}/{branch}/scripts/` or `{context-path}/{branch}/notes/`
+
+Note: The PreCompact hook always writes `SESSION_LOG_{N}.md` to the project root (alongside the scratchpad). Session logs are moved to the context directory by `archive-work` at archive time.
 
 When not set, all behavior is unchanged.
 
@@ -375,9 +376,13 @@ fusupo
 
 ## Version
 
-**Current:** 3.4.0
+**Current:** 3.4.1
 
 **Changelog:**
+- 3.4.1 (2026-02-25): Fix PreCompact hook writing session logs to context directory
+  - Hook now always writes `SESSION_LOG_{N}.md` to project root alongside scratchpad
+  - `archive-work` is the sole mover of files to context directory
+  - Simplified session log collection in `archive-work` skill
 - 3.4.0 (2026-02-18): Add create-issue skill for ad hoc GitHub issue creation
   - New `create-issue` skill for capturing ideas mid-flow without leaving session
   - Conversational refinement scales to prompt vagueness
