@@ -33,6 +33,8 @@ escapement/
 ├── hooks/
 │   ├── hooks.json       # Hook configuration
 │   └── archive-session-log.sh  # PreCompact hook script
+├── scripts/             # Reusable utility scripts for skills
+│   └── convert-session-log.py  # JSONL→markdown session log converter
 ├── agents/              # Future: specialized subagents
 ├── docs/                # Extended documentation
 │   ├── WORKFLOW.md      # Workflow explanation

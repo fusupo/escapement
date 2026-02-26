@@ -9,6 +9,8 @@ tools:
   - Bash:cp *
   - Bash:realpath *
   - Bash:git *
+  - Bash:python3 *
+  - Bash:rm *
   - Glob
   - Grep
   - AskUserQuestion
@@ -117,56 +119,25 @@ docs/dev/cc-archive/
 
 **For each `SESSION_LOG_*.jsonl` file found in Phase 2**, convert to markdown before archiving.
 
-The conversion is performed by Claude (reading JSONL with the Read tool, writing markdown with the Write tool). No external scripts needed.
+The conversion uses `scripts/convert-session-log.py` from the Escapement plugin directory (`${CLAUDE_PLUGIN_ROOT}`).
 
-**Conversion Algorithm:**
+**For each `.jsonl` file:**
 
-1. **Read the JSONL file** with the Read tool.
+```bash
+CODE_SHA=$(git rev-parse --short HEAD)
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/convert-session-log.py" \
+  SESSION_LOG_{N}.jsonl SESSION_LOG_{N}.md "$CODE_SHA"
+rm SESSION_LOG_{N}.jsonl
+```
 
-2. **Write a markdown file** with the same base name (e.g., `SESSION_LOG_1.jsonl` → `SESSION_LOG_1.md`) in the project root:
+This produces a markdown file with:
+- Metadata table (session ID, branch, timestamp, code SHA)
+- Conversation sections (`### User` / `### Assistant` / `### Summary`)
+- Tool use in collapsible `<details>` blocks
+- Thinking blocks and system messages stripped
+- Long content truncated to 100 lines
 
-   ```markdown
-   # Session Log
-
-   ## Metadata
-
-   | Field | Value |
-   |-------|-------|
-   | Session ID | {sessionId from first user/assistant line} |
-   | Branch | {gitBranch from first user/assistant line} |
-   | Timestamp | {timestamp from first user/assistant line} |
-   | Code SHA | {run: git rev-parse --short HEAD} |
-
-   ---
-
-   ## Conversation
-
-   {converted content — see rules below}
-
-   ---
-
-   *Session log converted by Escapement archive-work skill*
-   ```
-
-3. **Content conversion rules** (process each JSONL line):
-
-   | Line `type` | Action |
-   |-------------|--------|
-   | `user` | Write `### User\n\n{text content}`. If `content` is an array, extract items with `type: "text"` only. Skip `tool_result` items. |
-   | `assistant` | Write `### Assistant\n\n{text content}`. If `content` is an array: write `text` items as paragraphs; wrap `tool_use` items in `<details><summary>Tool: {name}</summary>\n\n```json\n{input, truncated to 100 lines}\n```\n</details>`. **Skip `thinking` blocks.** |
-   | `summary` | Write `### Summary (Previous Compaction)\n\n{summary text}` |
-   | `progress` | Skip |
-   | `system` | Skip |
-   | `file-history-snapshot` | Skip |
-   | Other/unknown | Skip |
-
-   **Tool output truncation:** Limit tool input/result content to 100 lines to keep archives readable.
-
-   **Thinking blocks:** Skip — do not include Claude's internal reasoning in archived markdown.
-
-4. **Delete the `.jsonl` file** from the project root after successful conversion.
-
-5. **The resulting `.md` file** is now ready to be moved to the archive directory in Phase 4 (alongside any legacy `.md` session logs).
+**The resulting `.md` file** is ready to be moved to the archive directory in Phase 4 (alongside any legacy `.md` session logs).
 
 **Legacy `.md` files:** Session logs already in `.md` format (from before this change) need no conversion — they pass through to Phase 4 directly.
 
@@ -523,10 +494,11 @@ No PR found for this work.
 
 ---
 
-**Version:** 2.2.0
-**Last Updated:** 2026-02-25
+**Version:** 2.2.1
+**Last Updated:** 2026-02-26
 **Maintained By:** Escapement
 **Changelog:**
+- v2.2.1: Extract JSONL→markdown conversion to reusable script (scripts/convert-session-log.py)
 - v2.2.0: Maintain INDEX.md manifest at context-path root on archive (#25)
 - v2.1.0: Added JSONL→markdown conversion (Phase 3.5) for simplified PreCompact hook (#27)
 - v2.0.0: Added context-path support for external archive directories
