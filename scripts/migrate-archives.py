@@ -231,8 +231,23 @@ def build_index_row(meta):
     return f"| {date} | {branch} | {issue_cell} | {status} |"
 
 
+INDEX_ROW_RE = re.compile(
+    r"^\| (\S+) \| (\S+) \| .+ \|$", re.MULTILINE
+)
+
+
+def parse_index_rows(content):
+    """Parse existing INDEX.md rows into (date, branch, full_line) tuples."""
+    rows = []
+    for line in content.split("\n"):
+        match = re.match(r"^\| (\S+) \| (\S+) \|", line)
+        if match and match.group(1) != "Archived" and match.group(1) != "----------":
+            rows.append((match.group(1), match.group(2), line))
+    return rows
+
+
 def update_index(index_path, archive_metas, dry_run=False):
-    """Update INDEX.md with new entries, merging with existing rows.
+    """Update INDEX.md with new entries, merging and sorting all rows.
 
     Returns (new_content, rows_added).
     """
@@ -241,28 +256,39 @@ def update_index(index_path, archive_metas, dry_run=False):
     else:
         content = INDEX_HEADER
 
-    # Detect already-present branches
-    existing_branches = set(
-        re.findall(r"^\| \S+ \| (\S+) \|", content, re.MULTILINE)
-    )
+    # Parse existing rows
+    existing_rows = parse_index_rows(content)
+    existing_branches = {branch for _, branch, _ in existing_rows}
 
     # Filter to only new entries
     new_metas = [m for m in archive_metas if m["branch"] not in existing_branches]
 
     if not new_metas:
+        # Still re-sort existing rows for consistency
+        if existing_rows:
+            existing_rows.sort(
+                key=lambda r: "0000-00-00" if r[0] == "unknown" else r[0],
+                reverse=True,
+            )
+            all_lines = "\n".join(line for _, _, line in existing_rows)
+            new_content = INDEX_HEADER + all_lines + "\n"
+            if new_content != content and not dry_run:
+                index_path.write_text(new_content)
+            return new_content, 0
         return content, 0
 
-    # Sort by archived_date descending (newest first), unknowns last
-    def sort_key(m):
-        d = m["archived_date"]
-        return "0000-00-00" if d == "unknown" else d
+    # Build new row lines
+    new_rows = [(m["archived_date"], m["branch"], build_index_row(m)) for m in new_metas]
 
-    new_metas.sort(key=sort_key, reverse=True)
-
-    row_lines = "\n".join(build_index_row(m) for m in new_metas)
-    new_content = content.replace(
-        INDEX_SEPARATOR, INDEX_SEPARATOR + "\n" + row_lines, 1
+    # Merge all rows and sort by date descending (newest first), unknowns last
+    all_rows = existing_rows + new_rows
+    all_rows.sort(
+        key=lambda r: "0000-00-00" if r[0] == "unknown" else r[0],
+        reverse=True,
     )
+
+    all_lines = "\n".join(line for _, _, line in all_rows)
+    new_content = INDEX_HEADER + all_lines + "\n"
 
     if not dry_run:
         index_path.parent.mkdir(parents=True, exist_ok=True)
