@@ -202,7 +202,8 @@ escapement/
 │   ├── hooks.json            # Hook configuration
 │   └── archive-session-log.sh # PreCompact hook (JSONL copy)
 ├── scripts/
-│   └── convert-session-log.py # JSONL→markdown session log converter
+│   ├── convert-session-log.py # JSONL→markdown session log converter
+│   └── migrate-archives.py    # Migrate in-repo archives to context-path
 ├── agents/                   # Specialized subagents
 │   └── scratchpad-planner.md # Codebase analysis for setup-work
 ├── docs/                     # Extended documentation
@@ -260,7 +261,7 @@ The **context-path** feature redirects these artifacts to a sibling directory ou
 
 When set:
 - **`archive-work`** archives scratchpads and session logs to `{context-path}/{branch}/archive/` instead of `docs/dev/cc-archive/`
-- **`archive-work`** also maintains `{context-path}/INDEX.md` — a chronological table of all archived work across branches (newest-first)
+- **`archive-work`** also maintains `{context-path}/INDEX.md` — a chronological table of all archived work across branches (oldest-first)
 - **`stash-artifact`** saves ad hoc scripts and notes to `{context-path}/{branch}/scripts/` or `{context-path}/{branch}/notes/`
 
 Note: The PreCompact hook always writes `SESSION_LOG_{N}.jsonl` to the project root (alongside the scratchpad). Session logs are converted to markdown and moved to the context directory by `archive-work` at archive time.
@@ -379,11 +380,15 @@ fusupo
 
 ## Version
 
-**Current:** 3.5.0
+**Current:** 3.6.0
 
 **Changelog:**
+- 3.6.0 (2026-02-26): Archive migration and chronological ordering (#31)
+  - **Migration script** (#31): `scripts/migrate-archives.py` copies in-repo archives (`docs/dev/cc-archive/`) to context-path structure and backfills INDEX.md
+  - **Chronological ordering**: INDEX.md now uses oldest-first ordering (both migration script and `archive-work` skill)
+  - **In-repo archives removed**: Historical archives migrated to context-path, `docs/dev/cc-archive/` deleted
 - 3.5.0 (2026-02-26): Session archiving pipeline overhaul (#25, #26, #27)
-  - **INDEX.md manifest** (#25): `archive-work` maintains a chronological table at the context-path root tracking all archived work across branches (newest-first)
+  - **INDEX.md manifest** (#25): `archive-work` maintains a chronological table at the context-path root tracking all archived work across branches
   - **Simplified PreCompact hook** (#27): Hook now copies raw JSONL transcript instead of parsing; `archive-work` converts JSONL→markdown at archive time
   - **Hook write location fix** (#26): Hook always writes `SESSION_LOG_{N}.jsonl` to project root, not context directory
   - **Reusable conversion script**: `scripts/convert-session-log.py` for JSONL→markdown conversion
