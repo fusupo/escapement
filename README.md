@@ -151,9 +151,9 @@ Skills are invoked automatically by Claude Code when relevant, or you can refere
 
 ## Hooks
 
-Escapement includes a **PreCompact hook** that archives your session transcript before Claude Code's automatic compaction. This preserves your work history in `SESSION_LOG_{N}.md` files.
+Escapement includes a **PreCompact hook** that captures your raw session transcript before Claude Code's automatic compaction. The hook copies the JSONL transcript to `SESSION_LOG_{N}.jsonl` in the **project root** — a minimal, reliable preservation step.
 
-The hook always writes to the **project root** alongside the active scratchpad, regardless of context-path configuration. The `archive-work` skill is responsible for moving session logs to the context directory at archive time.
+The `archive-work` skill later converts these `.jsonl` files to readable markdown (using `scripts/convert-session-log.py`) and moves them to the archive directory.
 
 **Requirements:** `jq` must be installed for the hook to function.
 
@@ -200,7 +200,9 @@ escapement/
 │   └── prime-session/        # Project orientation
 ├── hooks/
 │   ├── hooks.json            # Hook configuration
-│   └── archive-session-log.sh # Session archiving script
+│   └── archive-session-log.sh # PreCompact hook (JSONL copy)
+├── scripts/
+│   └── convert-session-log.py # JSONL→markdown session log converter
 ├── agents/                   # Specialized subagents
 │   └── scratchpad-planner.md # Codebase analysis for setup-work
 ├── docs/                     # Extended documentation
@@ -261,7 +263,7 @@ When set:
 - **`archive-work`** also maintains `{context-path}/INDEX.md` — a chronological table of all archived work across branches (newest-first)
 - **`stash-artifact`** saves ad hoc scripts and notes to `{context-path}/{branch}/scripts/` or `{context-path}/{branch}/notes/`
 
-Note: The PreCompact hook always writes `SESSION_LOG_{N}.md` to the project root (alongside the scratchpad). Session logs are moved to the context directory by `archive-work` at archive time.
+Note: The PreCompact hook always writes `SESSION_LOG_{N}.jsonl` to the project root (alongside the scratchpad). Session logs are converted to markdown and moved to the context directory by `archive-work` at archive time.
 
 When not set, all behavior is unchanged.
 
@@ -377,13 +379,14 @@ fusupo
 
 ## Version
 
-**Current:** 3.4.1
+**Current:** 3.5.0
 
 **Changelog:**
-- 3.4.1 (2026-02-25): Fix PreCompact hook writing session logs to context directory
-  - Hook now always writes `SESSION_LOG_{N}.md` to project root alongside scratchpad
-  - `archive-work` is the sole mover of files to context directory
-  - Simplified session log collection in `archive-work` skill
+- 3.5.0 (2026-02-26): Session archiving pipeline overhaul (#25, #26, #27)
+  - **INDEX.md manifest** (#25): `archive-work` maintains a chronological table at the context-path root tracking all archived work across branches (newest-first)
+  - **Simplified PreCompact hook** (#27): Hook now copies raw JSONL transcript instead of parsing; `archive-work` converts JSONL→markdown at archive time
+  - **Hook write location fix** (#26): Hook always writes `SESSION_LOG_{N}.jsonl` to project root, not context directory
+  - **Reusable conversion script**: `scripts/convert-session-log.py` for JSONL→markdown conversion
 - 3.4.0 (2026-02-18): Add create-issue skill for ad hoc GitHub issue creation
   - New `create-issue` skill for capturing ideas mid-flow without leaving session
   - Conversational refinement scales to prompt vagueness
