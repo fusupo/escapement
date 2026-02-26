@@ -2,14 +2,13 @@
 #
 # archive-session-log.sh
 #
-# PreCompact hook script for Claude Code that archives the session transcript
-# before auto-compaction occurs.
-# Always writes to the project root alongside the active scratchpad.
-# The archive-work skill is responsible for moving session logs to the
-# context directory (if configured) at archive time.
+# PreCompact hook script for Claude Code that archives the raw session transcript
+# before auto-compaction occurs. Copies the JSONL transcript as-is to the project
+# root. Markdown conversion is deferred to the archive-work skill, where Claude
+# can render it natively with higher fidelity.
 #
 # Input (via stdin): JSON with session_id, transcript_path, trigger, hook_event_name
-# Output: Creates SESSION_LOG_{N}.md in project root
+# Output: Creates SESSION_LOG_{N}.jsonl in project root
 # Exit: 0 (always - don't block compaction)
 #
 
@@ -18,10 +17,9 @@ set -euo pipefail
 # Read hook input from stdin
 INPUT=$(cat)
 
-# Parse JSON input
+# Parse JSON input (minimal jq — extract only what we need)
 TRANSCRIPT_PATH=$(echo "$INPUT" | jq -r '.transcript_path // empty')
 SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty')
-TRIGGER=$(echo "$INPUT" | jq -r '.trigger // empty')
 
 # Validate required fields
 if [ -z "$TRANSCRIPT_PATH" ] || [ -z "$SESSION_ID" ]; then
@@ -40,128 +38,21 @@ fi
 
 # Get project directory
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-}"
-if [ -z "$PROJECT_DIR" ]; then
-    echo "Error: CLAUDE_PROJECT_DIR not set" >&2
+if [ -z "$PROJECT_DIR" ] || [ ! -d "$PROJECT_DIR" ]; then
+    echo "Error: CLAUDE_PROJECT_DIR not set or not found" >&2
     exit 0  # Don't block compaction
 fi
 
-# Ensure project directory exists
-if [ ! -d "$PROJECT_DIR" ]; then
-    echo "Error: Project directory not found: $PROJECT_DIR" >&2
-    exit 0  # Don't block compaction
-fi
-
-# Get current branch (if in git repo)
-CURRENT_BRANCH=""
-if git -C "$PROJECT_DIR" rev-parse --git-dir > /dev/null 2>&1; then
-    CURRENT_BRANCH=$(git -C "$PROJECT_DIR" branch --show-current 2>/dev/null || echo "unknown")
-fi
-
-# Always write to project root (archive-work moves to context dir later)
-OUTPUT_DIR="$PROJECT_DIR"
-
-# Find next session log number
+# Find next available session log number
 NEXT_NUM=1
-while [ -f "$OUTPUT_DIR/SESSION_LOG_${NEXT_NUM}.md" ]; do
+while [ -f "$PROJECT_DIR/SESSION_LOG_${NEXT_NUM}.jsonl" ]; do
     NEXT_NUM=$((NEXT_NUM + 1))
 done
 
-OUTPUT_FILE="$OUTPUT_DIR/SESSION_LOG_${NEXT_NUM}.md"
+OUTPUT_FILE="$PROJECT_DIR/SESSION_LOG_${NEXT_NUM}.jsonl"
 
-# Get current timestamp
-TIMESTAMP=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-
-# Get HEAD SHA
-HEAD_SHA=""
-if git -C "$PROJECT_DIR" rev-parse --git-dir > /dev/null 2>&1; then
-    HEAD_SHA=$(git -C "$PROJECT_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
-fi
-
-# Start building output
-{
-    echo "# Session Log"
-    echo ""
-    echo "## Metadata"
-    echo ""
-    echo "| Field | Value |"
-    echo "|-------|-------|"
-    echo "| Archived | $TIMESTAMP |"
-    echo "| Session ID | $SESSION_ID |"
-    echo "| Branch | $CURRENT_BRANCH |"
-    echo "| Code SHA | $HEAD_SHA |"
-    echo "| Trigger | $TRIGGER (auto-compaction) |"
-    echo "| Source | \`$TRANSCRIPT_PATH\` |"
-    echo ""
-    echo "---"
-    echo ""
-    echo "## Conversation"
-    echo ""
-
-    # Process JSONL transcript
-    # Each line is a JSON object with role, content, timestamp, etc.
-    while IFS= read -r line; do
-        # Skip empty lines
-        [ -z "$line" ] && continue
-
-        # Parse JSON line
-        TYPE=$(echo "$line" | jq -r '.type // empty')
-
-        case "$TYPE" in
-            "user")
-                CONTENT=$(echo "$line" | jq -r '.message.content // empty')
-                if [ -n "$CONTENT" ]; then
-                    echo "### User"
-                    echo ""
-                    echo "$CONTENT"
-                    echo ""
-                fi
-                ;;
-            "assistant")
-                CONTENT=$(echo "$line" | jq -r '.message.content // empty')
-                if [ -n "$CONTENT" ]; then
-                    echo "### Assistant"
-                    echo ""
-                    # Handle content that might be an array
-                    if echo "$CONTENT" | jq -e 'type == "array"' > /dev/null 2>&1; then
-                        echo "$CONTENT" | jq -r '.[] | if type == "object" then .text // .content // "" else . end' 2>/dev/null || echo "$CONTENT"
-                    else
-                        echo "$CONTENT"
-                    fi
-                    echo ""
-                fi
-                ;;
-            "tool_use"|"tool_result")
-                TOOL_NAME=$(echo "$line" | jq -r '.name // .tool_name // "tool"')
-                echo "<details>"
-                echo "<summary>Tool: $TOOL_NAME</summary>"
-                echo ""
-                echo "\`\`\`json"
-                echo "$line" | jq -r '.input // .result // .content // .' 2>/dev/null | head -100
-                echo "\`\`\`"
-                echo "</details>"
-                echo ""
-                ;;
-            "summary")
-                CONTENT=$(echo "$line" | jq -r '.summary // empty')
-                if [ -n "$CONTENT" ]; then
-                    echo "### Summary (Previous Compaction)"
-                    echo ""
-                    echo "$CONTENT"
-                    echo ""
-                fi
-                ;;
-            *)
-                # Skip unknown types silently
-                ;;
-        esac
-    done < "$TRANSCRIPT_PATH"
-
-    echo ""
-    echo "---"
-    echo ""
-    echo "*Session log archived by Escapement PreCompact hook*"
-
-} > "$OUTPUT_FILE"
+# Copy raw transcript — no parsing, no formatting
+cp "$TRANSCRIPT_PATH" "$OUTPUT_FILE"
 
 echo "Session log archived to: $OUTPUT_FILE" >&2
 
