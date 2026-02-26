@@ -4,13 +4,12 @@
 #
 # PreCompact hook script for Claude Code that archives the session transcript
 # before auto-compaction occurs.
-#
-# Context-path aware: if the project's CLAUDE.md defines a context-path,
-# session logs are written to the context directory under the current branch.
-# Otherwise, falls back to writing to the project root.
+# Always writes to the project root alongside the active scratchpad.
+# The archive-work skill is responsible for moving session logs to the
+# context directory (if configured) at archive time.
 #
 # Input (via stdin): JSON with session_id, transcript_path, trigger, hook_event_name
-# Output: Creates SESSION_LOG_{N}.md in context dir or project root
+# Output: Creates SESSION_LOG_{N}.md in project root
 # Exit: 0 (always - don't block compaction)
 #
 
@@ -58,38 +57,8 @@ if git -C "$PROJECT_DIR" rev-parse --git-dir > /dev/null 2>&1; then
     CURRENT_BRANCH=$(git -C "$PROJECT_DIR" branch --show-current 2>/dev/null || echo "unknown")
 fi
 
-# Determine output directory: context-path or project root
+# Always write to project root (archive-work moves to context dir later)
 OUTPUT_DIR="$PROJECT_DIR"
-
-if [ -f "$PROJECT_DIR/CLAUDE.md" ]; then
-    # Extract context-path from CLAUDE.md
-    # Looks for: - **context-path**: <path>
-    # Uses sed instead of grep -P for portability (BSD/macOS compatibility)
-    CONTEXT_PATH=$(sed -n 's/^[[:space:]]*-[[:space:]]*\*\*context-path\*\*:[[:space:]]*\([^[:space:]]*\).*/\1/p' "$PROJECT_DIR/CLAUDE.md" 2>/dev/null | head -1)
-
-    if [ -n "$CONTEXT_PATH" ]; then
-        # Expand tilde
-        CONTEXT_PATH="${CONTEXT_PATH/#\~/$HOME}"
-
-        # Resolve relative paths against project directory
-        if [[ "$CONTEXT_PATH" != /* ]]; then
-            CONTEXT_PATH="$PROJECT_DIR/$CONTEXT_PATH"
-        fi
-
-        # Normalize the path
-        CONTEXT_PATH=$(cd "$PROJECT_DIR" && realpath -m "$CONTEXT_PATH" 2>/dev/null || echo "$CONTEXT_PATH")
-
-        # Use branch subdirectory within context path
-        BRANCH_DIR="$CONTEXT_PATH/${CURRENT_BRANCH:-main}"
-
-        if mkdir -p "$BRANCH_DIR" 2>/dev/null; then
-            OUTPUT_DIR="$BRANCH_DIR"
-            echo "Context path detected: writing to $OUTPUT_DIR" >&2
-        else
-            echo "Warning: Could not create context directory $BRANCH_DIR, falling back to project root" >&2
-        fi
-    fi
-fi
 
 # Find next session log number
 NEXT_NUM=1
