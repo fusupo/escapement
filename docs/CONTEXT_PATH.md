@@ -73,12 +73,9 @@ Key conventions:
 - No timestamp prefix on branch directories (the branch name IS the identifier)
 - Timestamp stays on archive artifacts if multiple archives per branch
 
-### 3. Modified Hook (archive-session-log.sh)
+### 3. Hook (archive-session-log.sh)
 
-The hook script gains context-path awareness:
-1. Check if `CLAUDE.md` contains `context-path` setting
-2. If set, resolve the path and write `SESSION_LOG_{N}.md` there (under the current branch directory)
-3. If not set, fall back to current behavior (write to project root)
+The hook always writes `SESSION_LOG_{N}.md` to the **project root**, regardless of context-path configuration. This keeps session logs alongside the active scratchpad during work. The `archive-work` skill is responsible for moving session logs to the context directory at archive time.
 
 ### 4. Modified Skill (archive-work)
 
@@ -86,7 +83,7 @@ The archive-work skill gains context-path awareness:
 1. Read `CLAUDE.md` for `context-path` setting
 2. If set, archive to `{context-path}/{branch}/archive/` instead of `docs/dev/cc-archive/`
 3. Scratchpad is copied to context directory, then removed from code repo (`git rm`)
-4. Session logs are moved from wherever they landed (project root or context dir)
+4. Session logs are moved from project root to the archive directory
 5. README summary still generated
 6. Commit in code repo only removes the scratchpad (clean)
 7. Context directory changes are left for the operator to commit/push separately

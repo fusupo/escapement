@@ -66,8 +66,6 @@ This skill activates when the user says things like:
 
 2. **Find Session Logs:**
    - `Glob: SESSION_LOG_*.md` in project root
-   - **Also check context directory** if context-path is set:
-     `Glob: {context-path}/{branch}/SESSION_LOG_*.md`
    - These are created by the PreCompact hook before auto-compaction
    - Associate with scratchpad (same issue context)
 
@@ -165,16 +163,8 @@ docs/dev/cc-archive/
    # Then remove scratchpad from code repo tracking
    git rm SCRATCHPAD_{issue_number}.md
 
-   # Move session logs from project root (if any landed here)
+   # Move session logs from project root
    for log in SESSION_LOG_*.md; do
-     if [ -f "$log" ]; then
-       mv "$log" "$ARCHIVE_DIR/"
-     fi
-   done
-
-   # Move session logs from context branch dir (hook may have written them there)
-   BRANCH_DIR="$CONTEXT_PATH/$BRANCH"
-   for log in "$BRANCH_DIR"/SESSION_LOG_*.md; do
      if [ -f "$log" ]; then
        mv "$log" "$ARCHIVE_DIR/"
      fi
