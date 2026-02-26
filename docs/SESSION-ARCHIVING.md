@@ -74,11 +74,13 @@ When you use the `archive-work` skill after completing work, session logs are co
 
 **With context-path configured:**
 ```
-{context-path}/{branch}/archive/
-├── SCRATCHPAD_{issue_number}.md
-├── SESSION_LOG_1.md          # Converted from JSONL
-├── SESSION_LOG_2.md
-└── README.md
+{context-path}/
+├── INDEX.md                          # Chronological archive manifest
+└── {branch}/archive/
+    ├── SCRATCHPAD_{issue_number}.md
+    ├── SESSION_LOG_1.md              # Converted from JSONL
+    ├── SESSION_LOG_2.md
+    └── README.md
 ```
 
 **Without context-path (in-repo):**

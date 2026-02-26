@@ -285,7 +285,48 @@ Context directory changes:
 
 2. **Write README.md** to archive directory
 
-3. **Commit in Code Repo:**
+3. **Update INDEX.md** (context mode only)
+
+   **Skip this step entirely if `ARCHIVE_MODE=in-repo`.**
+
+   When `ARCHIVE_MODE=context`, maintain a chronological manifest at the context-path root:
+
+   ```
+   INDEX_FILE="{context-path}/INDEX.md"
+   ```
+
+   **Algorithm:**
+
+   1. Read `INDEX_FILE` with the Read tool (if it exists)
+   2. If the file does not exist, initialize it with this header:
+      ```markdown
+      # Archive Index
+
+      | Archived | Branch | Issue | Status |
+      |----------|--------|-------|--------|
+      ```
+   3. Build a new row from the archive metadata (already available from Phase 2/4):
+      ```
+      | {YYYY-MM-DD} | {branch} | [#{issue_number}]({issue_github_url}) {issue_title} | {status} |
+      ```
+      - `{YYYY-MM-DD}`: today's date
+      - `{branch}`: the branch being archived (from `git branch --show-current`)
+      - `{issue_number}`, `{issue_title}`, `{issue_github_url}`: from the scratchpad
+      - `{status}`: the same value used in the archive README (Merged, Completed, or Abandoned)
+   4. Insert the new row **immediately after** the separator line (`|----------|--------|-------|--------|`) so that newest entries appear first
+   5. Write the full updated content back with the Write tool
+
+   **Example result after two archives:**
+   ```markdown
+   # Archive Index
+
+   | Archived | Branch | Issue | Status |
+   |----------|--------|-------|--------|
+   | 2026-02-25 | 44-refactor-api | [#44](https://github.com/owner/repo/issues/44) Refactor API | Merged |
+   | 2026-02-20 | 43-fix-login-bug | [#43](https://github.com/owner/repo/issues/43) Fix login bug | Merged |
+   ```
+
+4. **Commit in Code Repo:**
    If user opted to commit:
 
    **Context mode:**
@@ -326,6 +367,10 @@ Files archived (to context directory):
    - SCRATCHPAD_{issue_number}.md
    - SESSION_LOG_*.md (if any existed)
    - README.md (summary generated)
+
+INDEX.md updated:
+   - {context-path}/INDEX.md
+   - Added row: {date} | {branch} | #{issue_number} | {status}
 
 Code repo cleanup:
    - Removed SCRATCHPAD_{issue_number}.md (git rm)
@@ -478,10 +523,11 @@ No PR found for this work.
 
 ---
 
-**Version:** 2.1.0
+**Version:** 2.2.0
 **Last Updated:** 2026-02-25
 **Maintained By:** Escapement
 **Changelog:**
+- v2.2.0: Maintain INDEX.md manifest at context-path root on archive (#25)
 - v2.1.0: Added JSONL→markdown conversion (Phase 3.5) for simplified PreCompact hook (#27)
 - v2.0.0: Added context-path support for external archive directories
 - v1.3.0: Added parallel execution for artifact detection
