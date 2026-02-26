@@ -258,6 +258,7 @@ The **context-path** feature redirects these artifacts to a sibling directory ou
 
 When set:
 - **`archive-work`** archives scratchpads and session logs to `{context-path}/{branch}/archive/` instead of `docs/dev/cc-archive/`
+- **`archive-work`** also maintains `{context-path}/INDEX.md` — a chronological table of all archived work across branches (newest-first)
 - **`stash-artifact`** saves ad hoc scripts and notes to `{context-path}/{branch}/scripts/` or `{context-path}/{branch}/notes/`
 
 Note: The PreCompact hook always writes `SESSION_LOG_{N}.md` to the project root (alongside the scratchpad). Session logs are moved to the context directory by `archive-work` at archive time.

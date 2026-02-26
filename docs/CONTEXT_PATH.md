@@ -45,6 +45,7 @@ The context directory uses a flat-on-main, directory-per-branch layout:
 
 ```
 myproject-ctx/
+├── INDEX.md
 ├── main/
 │   ├── notes/
 │   └── scripts/
@@ -88,7 +89,34 @@ The archive-work skill gains context-path awareness:
 6. Commit in code repo only removes the scratchpad (clean)
 7. Context directory changes are left for the operator to commit/push separately
 
-### 5. New Skill (stash-artifact)
+### 5. INDEX.md Manifest
+
+The `archive-work` skill maintains an `INDEX.md` file at the root of the context directory. Each time work is archived, a row is added to a chronological table:
+
+```
+{context-path}/INDEX.md
+```
+
+**Format:**
+
+```markdown
+# Archive Index
+
+| Archived | Branch | Issue | Status |
+|----------|--------|-------|--------|
+| 2026-02-25 | 44-refactor-api | [#44](url) Refactor API | Merged |
+| 2026-02-20 | 43-fix-login-bug | [#43](url) Fix login bug | Merged |
+| 2026-02-13 | 42-add-authentication | [#42](url) Add authentication | Merged |
+```
+
+- Rows are newest-first (most recent archive at the top)
+- Created automatically on first archive if it doesn't exist
+- `Status` matches the archive README: `Merged`, `Completed`, or `Abandoned`
+- Renders correctly in both Obsidian and GitHub markdown
+
+The `INDEX.md` file is outside the code repo and not auto-committed. Commit it alongside other context directory changes when desired.
+
+### 6. New Skill (stash-artifact)
 
 A lightweight skill for saving ad hoc scripts and notes to the context directory:
 
