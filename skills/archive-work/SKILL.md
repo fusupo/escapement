@@ -65,7 +65,8 @@ This skill activates when the user says things like:
    - Identify issue numbers from filenames
 
 2. **Find Session Logs:**
-   - `Glob: SESSION_LOG_*.md` in project root
+   - `Glob: SESSION_LOG_*.jsonl` in project root (current format — raw JSONL transcripts)
+   - `Glob: SESSION_LOG_*.md` in project root (legacy format — pre-converted markdown)
    - These are created by the PreCompact hook before auto-compaction
    - Associate with scratchpad (same issue context)
 
@@ -92,8 +93,8 @@ This skill activates when the user says things like:
 └── {branch-name}/
     └── archive/
         ├── SCRATCHPAD_{issue_number}.md
-        ├── SESSION_LOG_1.md
-        ├── SESSION_LOG_2.md
+        ├── SESSION_LOG_1.md          # Converted from .jsonl during archive
+        ├── SESSION_LOG_2.md          # (or legacy .md moved directly)
         └── README.md
 ```
 
@@ -106,9 +107,68 @@ If multiple archives exist for the same branch (rare), add a timestamp suffix to
 docs/dev/cc-archive/
 └── {YYYYMMDDHHMM}-{issue-number}-{brief-description}/
     ├── SCRATCHPAD_{issue_number}.md
-    ├── SESSION_LOG_1.md (if exists)
+    ├── SESSION_LOG_1.md (converted or legacy)
     └── README.md (summary)
 ```
+
+**Note:** The final archive always contains `.md` files only. Any `.jsonl` files are converted to markdown during archiving (see Phase 4).
+
+### Phase 3.5: Convert JSONL Session Logs to Markdown
+
+**For each `SESSION_LOG_*.jsonl` file found in Phase 2**, convert to markdown before archiving.
+
+The conversion is performed by Claude (reading JSONL with the Read tool, writing markdown with the Write tool). No external scripts needed.
+
+**Conversion Algorithm:**
+
+1. **Read the JSONL file** with the Read tool.
+
+2. **Write a markdown file** with the same base name (e.g., `SESSION_LOG_1.jsonl` → `SESSION_LOG_1.md`) in the project root:
+
+   ```markdown
+   # Session Log
+
+   ## Metadata
+
+   | Field | Value |
+   |-------|-------|
+   | Session ID | {sessionId from first user/assistant line} |
+   | Branch | {gitBranch from first user/assistant line} |
+   | Timestamp | {timestamp from first user/assistant line} |
+   | Code SHA | {run: git rev-parse --short HEAD} |
+
+   ---
+
+   ## Conversation
+
+   {converted content — see rules below}
+
+   ---
+
+   *Session log converted by Escapement archive-work skill*
+   ```
+
+3. **Content conversion rules** (process each JSONL line):
+
+   | Line `type` | Action |
+   |-------------|--------|
+   | `user` | Write `### User\n\n{text content}`. If `content` is an array, extract items with `type: "text"` only. Skip `tool_result` items. |
+   | `assistant` | Write `### Assistant\n\n{text content}`. If `content` is an array: write `text` items as paragraphs; wrap `tool_use` items in `<details><summary>Tool: {name}</summary>\n\n```json\n{input, truncated to 100 lines}\n```\n</details>`. **Skip `thinking` blocks.** |
+   | `summary` | Write `### Summary (Previous Compaction)\n\n{summary text}` |
+   | `progress` | Skip |
+   | `system` | Skip |
+   | `file-history-snapshot` | Skip |
+   | Other/unknown | Skip |
+
+   **Tool output truncation:** Limit tool input/result content to 100 lines to keep archives readable.
+
+   **Thinking blocks:** Skip — do not include Claude's internal reasoning in archived markdown.
+
+4. **Delete the `.jsonl` file** from the project root after successful conversion.
+
+5. **The resulting `.md` file** is now ready to be moved to the archive directory in Phase 4 (alongside any legacy `.md` session logs).
+
+**Legacy `.md` files:** Session logs already in `.md` format (from before this change) need no conversion — they pass through to Phase 4 directly.
 
 ### Phase 4: Prepare Archive
 
@@ -163,7 +223,8 @@ docs/dev/cc-archive/
    # Then remove scratchpad from code repo tracking
    git rm SCRATCHPAD_{issue_number}.md
 
-   # Move session logs from project root
+   # Move converted session logs from project root (.md only — .jsonl already
+   # converted and deleted in Phase 3.5)
    for log in SESSION_LOG_*.md; do
      if [ -f "$log" ]; then
        mv "$log" "$ARCHIVE_DIR/"
@@ -417,10 +478,11 @@ No PR found for this work.
 
 ---
 
-**Version:** 2.0.0
-**Last Updated:** 2026-02-13
+**Version:** 2.1.0
+**Last Updated:** 2026-02-25
 **Maintained By:** Escapement
 **Changelog:**
+- v2.1.0: Added JSONL→markdown conversion (Phase 3.5) for simplified PreCompact hook (#27)
 - v2.0.0: Added context-path support for external archive directories
 - v1.3.0: Added parallel execution for artifact detection
 - v1.2.0: Added SESSION_LOG_*.md detection and archiving (from PreCompact hook)
