@@ -268,7 +268,6 @@ def update_index(index_path, archive_metas, dry_run=False):
         if existing_rows:
             existing_rows.sort(
                 key=lambda r: "0000-00-00" if r[0] == "unknown" else r[0],
-                reverse=True,
             )
             all_lines = "\n".join(line for _, _, line in existing_rows)
             new_content = INDEX_HEADER + all_lines + "\n"
@@ -284,7 +283,6 @@ def update_index(index_path, archive_metas, dry_run=False):
     all_rows = existing_rows + new_rows
     all_rows.sort(
         key=lambda r: "0000-00-00" if r[0] == "unknown" else r[0],
-        reverse=True,
     )
 
     all_lines = "\n".join(line for _, _, line in all_rows)
