@@ -1,9 +1,6 @@
 # Claude Code local settings
 .claude/
 
-# Session logs at project root (archived ones should be committed)
-/SESSION_LOG_*.md
-
 # OS files
 .DS_Store
 Thumbs.db

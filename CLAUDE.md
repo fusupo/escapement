@@ -299,3 +299,7 @@ The `description` field should include natural language trigger patterns so Clau
 - `docs/WORKFLOW.md`: Detailed workflow explanation
 - `docs/CUSTOMIZATION.md`: Guide for per-project customization
 - `docs/CONTEXT_PATH.md`: Context path design and usage
+
+## Escapement Settings
+
+- **context-path**: ../escapement-ctx
