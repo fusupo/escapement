@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
+    "manifest": "node --import tsx manifest/manifest-cli.ts",
     "test": "node --import tsx manifest/test-schema.ts",
     "test:queries": "node --import tsx manifest/test-queries.ts"
   },
