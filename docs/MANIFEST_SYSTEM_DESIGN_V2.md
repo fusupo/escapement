@@ -235,8 +235,8 @@ CREATE TABLE work_items (
     scope_hint      TEXT,
     branch          TEXT,
     archive_path    TEXT,
-    predicted_files TEXT[] DEFAULT '{}',
-    actual_files    TEXT[] DEFAULT '{}',
+    predicted_files TEXT[] NOT NULL DEFAULT '{}',
+    actual_files    TEXT[] NOT NULL DEFAULT '{}',
     meta            JSONB NOT NULL DEFAULT '{}',
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -357,7 +357,7 @@ WITH frontier AS (
   FROM work_items
   WHERE kind IN ('issue', 'capability')
     AND state = 'planned'
-    AND predicted_files <> '{}'
+    AND cardinality(predicted_files) > 0
     AND COALESCE((meta->>'needs_human')::boolean, false) = false
     AND NOT EXISTS (
       SELECT 1
