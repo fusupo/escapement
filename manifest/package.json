@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "test": "node --import tsx manifest/test-schema.ts"
+    "test": "node --import tsx manifest/test-schema.ts",
+    "test:queries": "node --import tsx manifest/test-queries.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.2.17"
