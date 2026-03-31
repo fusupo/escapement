@@ -1,7 +1,10 @@
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { initManifest } from "./init.ts";
 import type { PGlite } from "@electric-sql/pglite";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -12,7 +15,15 @@ Commands:
   seed <file.sql>   Load a SQL seed file into the manifest database
   frontier          Display dispatchable work items (planned, no unmet deps)
   done <id>         Mark a work item as done and show updated frontier
-  status            Show overall progress (phase/track rollup)`);
+  status            Show overall progress (phase/track rollup)
+  check <sub>       Run manifest health checks
+
+Check subcommands:
+  check superseded         Detect in_progress items superseded by newer ones
+  check reconcile          Compare predicted vs actual files for done items
+  check overlap            Re-run file overlap analysis on current frontier
+  check drift              Analyze and record repeated prediction misses
+  check new-issues         List manifest issue_numbers for diffing against GitHub`);
   process.exit(1);
 }
 
@@ -203,6 +214,309 @@ async function cmdStatus(db: PGlite): Promise<void> {
   }
 }
 
+// ── Check subcommands ───────────────────────────────────────────────
+
+async function cmdCheckSuperseded(db: PGlite): Promise<void> {
+  const sqlPath = resolve(__dirname, "queries", "superseded.sql");
+  const sql = readFileSync(sqlPath, "utf-8");
+  const result = await db.query<{
+    older_id: string;
+    older_name: string;
+    older_scope: string | null;
+    newer_id: string;
+    newer_name: string;
+    newer_scope: string | null;
+    shared_files: string[];
+  }>(sql);
+
+  if (result.rows.length === 0) {
+    console.log("No superseded in_progress items detected.");
+    return;
+  }
+
+  console.log(`Supersession Check: ${result.rows.length} potential supersession(s)\n`);
+  console.log(
+    `  ${pad("OLDER ITEM", 20)} ${pad("NEWER ITEM", 20)} SHARED FILES`
+  );
+  console.log(
+    `  ${"─".repeat(20)} ${"─".repeat(20)} ${"─".repeat(40)}`
+  );
+  for (const row of result.rows) {
+    const files = row.shared_files.length > 0 ? row.shared_files.join(", ") : "(scope match)";
+    console.log(`  ${pad(row.older_id, 20)} ${pad(row.newer_id, 20)} ${files}`);
+    console.log(`    ${row.older_name}`);
+    console.log(`    -> ${row.newer_name}`);
+    console.log();
+  }
+}
+
+async function cmdCheckReconcile(db: PGlite): Promise<void> {
+  const sqlPath = resolve(__dirname, "queries", "reconcile.sql");
+  const sql = readFileSync(sqlPath, "utf-8");
+  const result = await db.query<{
+    id: string;
+    name: string;
+    predicted_files: string[];
+    actual_files: string[];
+    hits: string[];
+    misses: string[];
+    false_positives: string[];
+  }>(sql);
+
+  if (result.rows.length === 0) {
+    console.log("No completed items with both predicted and actual files. Reconciliation skipped.");
+    return;
+  }
+
+  console.log(`Reconciliation: ${result.rows.length} item(s)\n`);
+
+  let totalHits = 0;
+  let totalMisses = 0;
+  let totalFP = 0;
+
+  for (const row of result.rows) {
+    const h = row.hits.length;
+    const m = row.misses.length;
+    const fp = row.false_positives.length;
+    const denom = h + m + fp;
+    const accuracy = denom === 0 ? 100 : Math.round((h / denom) * 100);
+
+    totalHits += h;
+    totalMisses += m;
+    totalFP += fp;
+
+    console.log(`  ${row.id}: ${row.name}`);
+    console.log(`    Predicted: ${row.predicted_files.length} files`);
+    console.log(`    Actual:    ${row.actual_files.length} files`);
+    console.log(`    Hits:      ${h}  Misses: ${m}  False pos: ${fp}  Accuracy: ${accuracy}%`);
+    if (m > 0) console.log(`    Missed:    ${row.misses.join(", ")}`);
+    if (fp > 0) console.log(`    False pos: ${row.false_positives.join(", ")}`);
+    console.log();
+
+    // Store reconciliation in meta
+    await db.query(
+      `UPDATE work_items
+       SET meta = jsonb_set(
+         meta,
+         '{reconciliation}',
+         $1::jsonb
+       ),
+       updated_at = now()
+       WHERE id = $2`,
+      [
+        JSON.stringify({
+          hits: row.hits,
+          misses: row.misses,
+          false_positives: row.false_positives,
+          accuracy: denom === 0 ? 1.0 : h / denom,
+          checked_at: new Date().toISOString(),
+        }),
+        row.id,
+      ]
+    );
+  }
+
+  const totalDenom = totalHits + totalMisses + totalFP;
+  const overallAccuracy = totalDenom === 0 ? 100 : Math.round((totalHits / totalDenom) * 100);
+  console.log(`  Overall: ${totalHits} hits, ${totalMisses} misses, ${totalFP} false positives — ${overallAccuracy}% accuracy`);
+}
+
+async function cmdCheckOverlap(db: PGlite): Promise<void> {
+  const sqlPath = resolve(__dirname, "queries", "overlap.sql");
+  const sql = readFileSync(sqlPath, "utf-8");
+  const result = await db.query<{
+    node_a: string;
+    node_b: string;
+    shared_files: string[];
+  }>(sql);
+
+  // Count frontier items
+  const frontierCount = await db.query<{ count: string }>(`
+    SELECT count(*)::text AS count
+    FROM work_items w
+    WHERE w.kind IN ('issue', 'capability')
+      AND w.state = 'planned'
+      AND COALESCE((w.meta->>'needs_human')::boolean, false) = false
+      AND NOT EXISTS (
+        SELECT 1 FROM edges e
+        JOIN work_items dep ON dep.id = e.to_id
+        WHERE e.rel = 'depends_on'
+          AND e.from_id = w.id
+          AND dep.state != 'done'
+      )
+  `);
+
+  console.log(`File Overlap Analysis (current frontier)\n`);
+  console.log(`  Frontier items: ${frontierCount.rows[0].count}`);
+
+  if (result.rows.length === 0) {
+    console.log("  No overlapping file sets detected.");
+    return;
+  }
+
+  console.log(`  Overlapping pairs: ${result.rows.length}\n`);
+  console.log(
+    `  ${pad("ITEM A", 20)} ${pad("ITEM B", 20)} SHARED FILES`
+  );
+  console.log(
+    `  ${"─".repeat(20)} ${"─".repeat(20)} ${"─".repeat(40)}`
+  );
+  for (const row of result.rows) {
+    console.log(
+      `  ${pad(row.node_a, 20)} ${pad(row.node_b, 20)} ${row.shared_files.join(", ")}`
+    );
+  }
+}
+
+async function cmdCheckDrift(db: PGlite): Promise<void> {
+  // Find files that appear as misses in multiple reconciliation records
+  const result = await db.query<{
+    id: string;
+    misses: string[];
+  }>(`
+    SELECT id, meta->'reconciliation'->'misses' AS misses
+    FROM work_items
+    WHERE meta->'reconciliation'->'misses' IS NOT NULL
+      AND jsonb_array_length(meta->'reconciliation'->'misses') > 0
+  `);
+
+  if (result.rows.length === 0) {
+    console.log("No reconciliation data available for drift analysis.");
+    console.log("Run 'manifest check reconcile' first on items with actual_files.");
+    return;
+  }
+
+  // Count miss frequency across items
+  const fileMissCounts: Record<string, string[]> = {};
+  for (const row of result.rows) {
+    const misses: string[] = typeof row.misses === "string"
+      ? JSON.parse(row.misses)
+      : row.misses as unknown as string[];
+    for (const file of misses) {
+      if (!fileMissCounts[file]) fileMissCounts[file] = [];
+      fileMissCounts[file].push(row.id);
+    }
+  }
+
+  // Filter to files missed in 2+ items
+  const driftFiles = Object.entries(fileMissCounts)
+    .filter(([, ids]) => ids.length >= 2)
+    .sort((a, b) => b[1].length - a[1].length);
+
+  console.log("Drift Analysis\n");
+
+  if (driftFiles.length === 0) {
+    console.log("  No repeated drift patterns detected (need 2+ misses for same file).");
+    console.log(`  Reconciliation data available for ${result.rows.length} item(s).`);
+    return;
+  }
+
+  console.log(`  Frequently missed files (appeared in 2+ reconciliation misses):\n`);
+  for (const [file, ids] of driftFiles) {
+    console.log(`    ${file}: missed in ${ids.length} items (${ids.join(", ")})`);
+  }
+
+  // Record drift patterns on affected items
+  const affectedItems = new Set<string>();
+  const driftFileList = driftFiles.map(([f]) => f);
+  for (const [, ids] of driftFiles) {
+    for (const id of ids) affectedItems.add(id);
+  }
+
+  for (const id of affectedItems) {
+    await db.query(
+      `UPDATE work_items
+       SET meta = jsonb_set(
+         meta,
+         '{drift_patterns}',
+         $1::jsonb
+       ),
+       updated_at = now()
+       WHERE id = $2`,
+      [
+        JSON.stringify({
+          files: driftFileList,
+          frequency: driftFiles.reduce((sum, [, ids]) =>
+            ids.includes(id) ? sum + 1 : sum, 0),
+          recorded_at: new Date().toISOString(),
+        }),
+        id,
+      ]
+    );
+  }
+
+  console.log(`\n  Drift patterns recorded on ${affectedItems.size} item(s).`);
+}
+
+async function cmdCheckNewIssues(db: PGlite): Promise<void> {
+  // List all issue_numbers currently in the manifest, grouped by repo
+  const result = await db.query<{
+    repo: string;
+    issue_number: number;
+  }>(`
+    SELECT repo, issue_number
+    FROM work_items
+    WHERE issue_number IS NOT NULL AND repo IS NOT NULL
+    ORDER BY repo, issue_number
+  `);
+
+  if (result.rows.length === 0) {
+    console.log("No issues in manifest. Run manifest-bootstrap first.");
+    return;
+  }
+
+  const byRepo: Record<string, number[]> = {};
+  for (const row of result.rows) {
+    if (!byRepo[row.repo]) byRepo[row.repo] = [];
+    byRepo[row.repo].push(row.issue_number);
+  }
+
+  console.log("Manifest Issue Numbers (for diffing against GitHub):\n");
+  for (const [repo, numbers] of Object.entries(byRepo)) {
+    console.log(`  ${repo}: ${numbers.join(", ")}`);
+  }
+  console.log(`\n  Total: ${result.rows.length} issue(s) across ${Object.keys(byRepo).length} repo(s)`);
+}
+
+async function cmdCheck(db: PGlite, args: string[]): Promise<void> {
+  const sub = args[0];
+
+  if (!sub) {
+    // Run all checks in sequence
+    console.log("=== Supersession Check ===\n");
+    await cmdCheckSuperseded(db);
+    console.log("\n=== Reconciliation ===\n");
+    await cmdCheckReconcile(db);
+    console.log("\n=== Overlap Analysis ===\n");
+    await cmdCheckOverlap(db);
+    console.log("\n=== Drift Analysis ===\n");
+    await cmdCheckDrift(db);
+    return;
+  }
+
+  switch (sub) {
+    case "superseded":
+      await cmdCheckSuperseded(db);
+      break;
+    case "reconcile":
+      await cmdCheckReconcile(db);
+      break;
+    case "overlap":
+      await cmdCheckOverlap(db);
+      break;
+    case "drift":
+      await cmdCheckDrift(db);
+      break;
+    case "new-issues":
+      await cmdCheckNewIssues(db);
+      break;
+    default:
+      console.error(`Unknown check subcommand: ${sub}`);
+      console.error("Available: superseded, reconcile, overlap, drift, new-issues");
+      process.exit(1);
+  }
+}
+
 // ── Main ─────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -226,6 +540,9 @@ async function main(): Promise<void> {
         break;
       case "status":
         await cmdStatus(db);
+        break;
+      case "check":
+        await cmdCheck(db, args.slice(1));
         break;
       default:
         console.error(`Unknown command: ${command}\n`);
