@@ -7,7 +7,9 @@
     "build": "tsc",
     "test": "node --import tsx manifest/test-schema.ts",
     "seed": "node --import tsx manifest/seed.ts",
-    "test:seed": "node --import tsx manifest/test-seed.ts"
+    "test:seed": "node --import tsx manifest/test-seed.ts",
+    "manifest": "node --import tsx manifest/manifest-cli.ts",
+    "test:queries": "node --import tsx manifest/test-queries.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.2.17"
