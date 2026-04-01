@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { initManifest } from "./init.ts";
+import { buildDispatchPlan, formatPlan } from "./plan.ts";
 import type { PGlite } from "@electric-sql/pglite";
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -12,7 +13,8 @@ Commands:
   seed <file.sql>   Load a SQL seed file into the manifest database
   frontier          Display dispatchable work items (planned, no unmet deps)
   done <id>         Mark a work item as done and show updated frontier
-  status            Show overall progress (phase/track rollup)`);
+  status            Show overall progress (phase/track rollup)
+  plan              Generate dispatch plan with parallel groups and overlaps`);
   process.exit(1);
 }
 
@@ -203,6 +205,11 @@ async function cmdStatus(db: PGlite): Promise<void> {
   }
 }
 
+async function cmdPlan(db: PGlite): Promise<void> {
+  const plan = await buildDispatchPlan(db);
+  console.log(formatPlan(plan));
+}
+
 // ── Main ─────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -226,6 +233,9 @@ async function main(): Promise<void> {
         break;
       case "status":
         await cmdStatus(db);
+        break;
+      case "plan":
+        await cmdPlan(db);
         break;
       default:
         console.error(`Unknown command: ${command}\n`);
