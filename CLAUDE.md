@@ -29,7 +29,9 @@ escapement/
 │   ├── archive-work/    # Archive completed scratchpads (context-path aware)
 │   ├── create-issue/    # Ad hoc GitHub issue creation
 │   ├── stash-artifact/  # Save artifacts to context directory
-│   └── prime-session/   # Project orientation
+│   ├── prime-session/   # Project orientation
+│   ├── manifest-bootstrap/  # Bootstrap manifest dependency graph
+│   └── manifest-sync/  # Sync manifest after work completion
 ├── hooks/
 │   ├── hooks.json       # Hook configuration
 │   └── archive-session-log.sh  # PreCompact hook script
@@ -67,6 +69,8 @@ escapement/
 | `create-issue` | "Create an issue", "File a bug" | Ad hoc GitHub issue creation from natural language |
 | `stash-artifact` | "Stash this script", "Save to context" | Save artifacts to context directory |
 | `prime-session` | "Orient me", "What is this project" | Read project docs for context |
+| `manifest-bootstrap` | "Bootstrap the manifest" | Build manifest dependency graph from GitHub issues |
+| `manifest-sync` | "Sync the manifest", "Mark work done" | Mark items done, record actuals, recompute frontier |
 
 ### Hooks
 
