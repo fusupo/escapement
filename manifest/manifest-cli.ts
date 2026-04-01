@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { initManifest } from "./init.ts";
+import { buildDispatchPlan, formatPlan } from "./plan.ts";
 import type { PGlite } from "@electric-sql/pglite";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -24,6 +25,7 @@ Check subcommands:
   check overlap            Re-run file overlap analysis on current frontier
   check drift              Analyze and record repeated prediction misses
   check new-issues         List manifest issue_numbers for diffing against GitHub`);
+  plan              Generate dispatch plan with parallel groups and overlaps`);
   process.exit(1);
 }
 
@@ -515,6 +517,9 @@ async function cmdCheck(db: PGlite, args: string[]): Promise<void> {
       console.error("Available: superseded, reconcile, overlap, drift, new-issues");
       process.exit(1);
   }
+async function cmdPlan(db: PGlite): Promise<void> {
+  const plan = await buildDispatchPlan(db);
+  console.log(formatPlan(plan));
 }
 
 // ── Main ─────────────────────────────────────────────────────────────
@@ -543,6 +548,8 @@ async function main(): Promise<void> {
         break;
       case "check":
         await cmdCheck(db, args.slice(1));
+      case "plan":
+        await cmdPlan(db);
         break;
       default:
         console.error(`Unknown command: ${command}\n`);

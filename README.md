@@ -148,6 +148,8 @@ Skills are invoked automatically by Claude Code when relevant, or you can refere
 | `create-issue`   | "create an issue", "file a bug"     | Ad hoc GitHub issue creation from natural language |
 | `stash-artifact` | "stash this script", "save to context" | Save artifacts to context directory         |
 | `prime-session`  | "orient me", "what is this project" | Read project docs for context                  |
+| `manifest-bootstrap` | "bootstrap the manifest"       | Build manifest dependency graph from GitHub issues |
+| `manifest-sync`  | "sync the manifest", "mark work done" | Mark items done, record actuals, recompute frontier |
 
 ## Hooks
 
@@ -197,7 +199,9 @@ escapement/
 │   ├── archive-work/         # Archive completed work (context-path aware)
 │   ├── create-issue/         # Ad hoc GitHub issue creation
 │   ├── stash-artifact/       # Save artifacts to context directory
-│   └── prime-session/        # Project orientation
+│   ├── prime-session/        # Project orientation
+│   ├── manifest-bootstrap/   # Bootstrap manifest dependency graph
+│   └── manifest-sync/        # Sync manifest after work completion
 ├── hooks/
 │   ├── hooks.json            # Hook configuration
 │   └── archive-session-log.sh # PreCompact hook (JSONL copy)
