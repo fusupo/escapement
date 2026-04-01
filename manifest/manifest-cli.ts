@@ -25,7 +25,9 @@ Check subcommands:
   check overlap            Re-run file overlap analysis on current frontier
   check drift              Analyze and record repeated prediction misses
   check new-issues         List manifest issue_numbers for diffing against GitHub
-  plan              Generate dispatch plan with parallel groups and overlaps`);
+  plan              Generate dispatch plan with parallel groups and overlaps
+  query <sql>       Execute inline SQL and print results
+  in-progress <id> <branch>  Mark a work item as in_progress and record its branch`);
   process.exit(1);
 }
 
@@ -519,6 +521,61 @@ async function cmdCheck(db: PGlite, args: string[]): Promise<void> {
   }
 }
 
+async function cmdQuery(db: PGlite, args: string[]): Promise<void> {
+  const sql = args[0];
+  if (!sql) {
+    console.error("Error: query requires a SQL string.\n  manifest query \"SELECT ...\"");
+    process.exit(1);
+  }
+  const result = await db.query(sql);
+  if (result.rows.length === 0) {
+    console.log("(0 rows)");
+    return;
+  }
+  const cols = Object.keys(result.rows[0] as Record<string, unknown>);
+  const widths = cols.map((c) =>
+    Math.max(c.length, ...result.rows.map((r) => {
+      const v = (r as Record<string, unknown>)[c];
+      return String(v ?? "NULL").length;
+    }))
+  );
+  console.log(cols.map((c, i) => pad(c, widths[i])).join("  "));
+  console.log(widths.map((w) => "─".repeat(w)).join("  "));
+  for (const row of result.rows) {
+    const r = row as Record<string, unknown>;
+    console.log(cols.map((c, i) => pad(String(r[c] ?? "NULL"), widths[i])).join("  "));
+  }
+  console.log(`\n(${result.rows.length} row${result.rows.length === 1 ? "" : "s"})`);
+}
+
+async function cmdInProgress(db: PGlite, args: string[]): Promise<void> {
+  const id = args[0];
+  const branch = args[1];
+  if (!id || !branch) {
+    console.error("Error: in-progress requires id and branch.\n  manifest in-progress <id> <branch>");
+    process.exit(1);
+  }
+
+  const existing = await db.query<{ id: string; state: string }>(
+    "SELECT id, state FROM work_items WHERE id = $1",
+    [id]
+  );
+  if (existing.rows.length === 0) {
+    console.error(`Error: work item '${id}' not found.`);
+    process.exit(1);
+  }
+  if (existing.rows[0].state === "in_progress") {
+    console.log(`Work item '${id}' is already in_progress.`);
+    return;
+  }
+
+  await db.query(
+    "UPDATE work_items SET state = 'in_progress', branch = $2, updated_at = now() WHERE id = $1",
+    [id, branch]
+  );
+  console.log(`Marked '${id}' as in_progress on branch '${branch}'.`);
+}
+
 async function cmdPlan(db: PGlite): Promise<void> {
   const plan = await buildDispatchPlan(db);
   console.log(formatPlan(plan));
@@ -553,6 +610,12 @@ async function main(): Promise<void> {
         break;
       case "plan":
         await cmdPlan(db);
+        break;
+      case "query":
+        await cmdQuery(db, args.slice(1));
+        break;
+      case "in-progress":
+        await cmdInProgress(db, args.slice(1));
         break;
       default:
         console.error(`Unknown command: ${command}\n`);

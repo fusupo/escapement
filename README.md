@@ -149,7 +149,10 @@ Skills are invoked automatically by Claude Code when relevant, or you can refere
 | `stash-artifact` | "stash this script", "save to context" | Save artifacts to context directory         |
 | `prime-session`  | "orient me", "what is this project" | Read project docs for context                  |
 | `manifest-bootstrap` | "bootstrap the manifest"       | Build manifest dependency graph from GitHub issues |
+| `manifest-plan`  | "plan the dispatch"             | Generate dispatch plan with parallel groups and overlaps |
 | `manifest-sync`  | "sync the manifest", "mark work done" | Mark items done, record actuals, recompute frontier |
+| `manifest-check` | "check manifest health"         | Detect stale items, reconcile predictions, find drift |
+| `manifest-dispatch` | "dispatch work"              | Create worktrees, constraint blocks, launch parallel agents |
 
 ## Hooks
 
@@ -201,7 +204,10 @@ escapement/
 │   ├── stash-artifact/       # Save artifacts to context directory
 │   ├── prime-session/        # Project orientation
 │   ├── manifest-bootstrap/   # Bootstrap manifest dependency graph
-│   └── manifest-sync/        # Sync manifest after work completion
+│   ├── manifest-plan/        # Generate dispatch plan with parallel groups
+│   ├── manifest-sync/        # Sync manifest after work completion
+│   ├── manifest-check/       # Manifest health checks and drift detection
+│   └── manifest-dispatch/    # Dispatch parallel work from manifest plan
 ├── hooks/
 │   ├── hooks.json            # Hook configuration
 │   └── archive-session-log.sh # PreCompact hook (JSONL copy)

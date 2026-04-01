@@ -31,7 +31,10 @@ escapement/
 │   ├── stash-artifact/  # Save artifacts to context directory
 │   ├── prime-session/   # Project orientation
 │   ├── manifest-bootstrap/  # Bootstrap manifest dependency graph
-│   └── manifest-sync/  # Sync manifest after work completion
+│   ├── manifest-plan/  # Generate dispatch plan with parallel groups
+│   ├── manifest-sync/  # Sync manifest after work completion
+│   ├── manifest-check/ # Manifest health checks and drift detection
+│   └── manifest-dispatch/ # Dispatch parallel work from manifest plan
 ├── hooks/
 │   ├── hooks.json       # Hook configuration
 │   └── archive-session-log.sh  # PreCompact hook script
@@ -70,7 +73,10 @@ escapement/
 | `stash-artifact` | "Stash this script", "Save to context" | Save artifacts to context directory |
 | `prime-session` | "Orient me", "What is this project" | Read project docs for context |
 | `manifest-bootstrap` | "Bootstrap the manifest" | Build manifest dependency graph from GitHub issues |
+| `manifest-plan` | "Plan the dispatch", "What can run in parallel" | Generate dispatch plan with parallel groups and overlaps |
 | `manifest-sync` | "Sync the manifest", "Mark work done" | Mark items done, record actuals, recompute frontier |
+| `manifest-check` | "Check manifest health", "Run manifest checks" | Detect stale items, reconcile predictions, find drift |
+| `manifest-dispatch` | "Dispatch work", "Launch parallel agents" | Create worktrees, constraint blocks, launch parallel agents |
 
 ### Hooks
 
