@@ -1,4 +1,4 @@
--- Manifest System V2 Schema
+-- Manifest System V2 Schema (SQLite)
 -- See: docs/MANIFEST_SYSTEM_DESIGN_V2.md Section 7.2
 
 CREATE TABLE work_items (
@@ -25,14 +25,14 @@ CREATE TABLE work_items (
     scope_hint      TEXT,
     branch          TEXT,
     archive_path    TEXT,
-    predicted_files TEXT[] DEFAULT '{}',
-    actual_files    TEXT[] DEFAULT '{}',
-    meta            JSONB NOT NULL DEFAULT '{}',
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    predicted_files TEXT NOT NULL DEFAULT '[]',
+    actual_files    TEXT NOT NULL DEFAULT '[]',
+    meta            TEXT NOT NULL DEFAULT '{}',
+    updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
 CREATE TABLE edges (
-    id          SERIAL PRIMARY KEY,
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
     from_id     TEXT NOT NULL REFERENCES work_items(id),
     rel         TEXT NOT NULL
                 CHECK (rel IN (
@@ -43,8 +43,8 @@ CREATE TABLE edges (
     to_id       TEXT NOT NULL REFERENCES work_items(id),
     confidence  TEXT NOT NULL DEFAULT 'certain'
                 CHECK (confidence IN ('certain', 'inferred', 'ambiguous')),
-    meta        JSONB NOT NULL DEFAULT '{}',
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    meta        TEXT NOT NULL DEFAULT '{}',
+    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     UNIQUE (from_id, rel, to_id)
 );
 
@@ -52,8 +52,6 @@ CREATE TABLE edges (
 CREATE INDEX idx_work_items_kind ON work_items(kind);
 CREATE INDEX idx_work_items_state ON work_items(state);
 CREATE INDEX idx_work_items_repo ON work_items(repo);
-CREATE INDEX idx_work_items_predicted_files ON work_items USING gin(predicted_files);
-CREATE INDEX idx_work_items_actual_files ON work_items USING gin(actual_files);
 
 -- Indexes for edges
 CREATE INDEX idx_edges_rel ON edges(rel);

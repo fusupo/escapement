@@ -254,7 +254,7 @@ This is the simplest case -- every item gets its own parallel group.
 - Before `manifest-dispatch` begins
 
 **Reads from:**
-- Manifest PGlite database (via CLI)
+- Manifest SQLite database (via CLI)
 - Shared files in the codebase (for conflict classification)
 - Project CLAUDE.md (for resource constraints)
 

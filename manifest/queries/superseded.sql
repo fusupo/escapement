@@ -12,14 +12,17 @@ SELECT
   newer.id          AS newer_id,
   newer.name        AS newer_name,
   newer.scope_hint  AS newer_scope,
-  ARRAY(
-    SELECT shared_file
-    FROM (
-      SELECT unnest(older.predicted_files) AS shared_file
-      INTERSECT
-      SELECT unnest(newer.predicted_files) AS shared_file
-    ) s
-    ORDER BY shared_file
+  COALESCE(
+    (
+      SELECT json_group_array(af.value)
+      FROM (
+        SELECT DISTINCT af.value
+        FROM json_each(older.predicted_files) af
+        JOIN json_each(newer.predicted_files) bf ON af.value = bf.value
+        ORDER BY af.value
+      ) af
+    ),
+    '[]'
   ) AS shared_files
 FROM work_items older
 JOIN work_items newer
@@ -31,7 +34,10 @@ WHERE older.kind IN ('issue', 'capability')
   AND older.state = 'in_progress'
   AND (
     -- File-based overlap
-    older.predicted_files && newer.predicted_files
+    EXISTS (
+      SELECT 1 FROM json_each(older.predicted_files) af
+      JOIN json_each(newer.predicted_files) bf ON af.value = bf.value
+    )
     -- Scope-based overlap (both have scope_hint and they match)
     OR (
       older.scope_hint IS NOT NULL

@@ -13,9 +13,10 @@
     "test:plan": "node --import tsx manifest/test-plan.ts"
   },
   "dependencies": {
-    "@electric-sql/pglite": "^0.2.17"
+    "better-sqlite3": "^11.0.0"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
     "@types/node": "^25.5.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"

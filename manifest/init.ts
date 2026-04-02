@@ -1,60 +1,96 @@
-import { PGlite } from "@electric-sql/pglite";
-import { readFileSync } from "node:fs";
+import Database from "better-sqlite3";
+import type { Database as DatabaseType } from "better-sqlite3";
+import { readFileSync, existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { mkdirSync } from "node:fs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCHEMA_PATH = resolve(__dirname, "schema.sql");
 
 /**
- * Get or create a PGlite database instance at the given data directory.
- * If no dataDir is provided, defaults to {context-path}/manifest/pgdata/
- * where context-path is ../escapement-ctx relative to the repo root.
+ * Parse context-path from the project's CLAUDE.md.
+ * Walks up from the manifest directory to find CLAUDE.md,
+ * then extracts the context-path setting.
  */
-export async function getDb(
-  dataDir?: string
-): Promise<PGlite> {
-  const resolvedDir =
-    dataDir ?? resolve(__dirname, "..", "..", "escapement-ctx", "manifest", "pgdata");
-  const db = await PGlite.create(resolvedDir);
+function resolveContextPath(): string | null {
+  // Look for CLAUDE.md in the repo root (parent of manifest/)
+  const repoRoot = resolve(__dirname, "..");
+  const claudeMd = resolve(repoRoot, "CLAUDE.md");
+  if (!existsSync(claudeMd)) return null;
+
+  const content = readFileSync(claudeMd, "utf-8");
+  // Match: - **context-path**: <value>
+  const match = content.match(/\*\*context-path\*\*:\s*(.+)/);
+  if (!match) return null;
+
+  const raw = match[1].trim();
+  // Resolve relative to repo root
+  return resolve(repoRoot, raw);
+}
+
+/**
+ * Get or create a SQLite database instance at the given path.
+ * If no dataDir is provided, derives the path from CLAUDE.md context-path,
+ * falling back to {repo-root}/../escapement-ctx/manifest/manifest.db.
+ */
+export function getDb(dataDir?: string): DatabaseType {
+  let dbPath: string;
+  if (dataDir) {
+    dbPath = resolve(dataDir, "manifest.db");
+  } else {
+    const contextPath = resolveContextPath();
+    const base = contextPath ?? resolve(__dirname, "..", "..", "escapement-ctx");
+    dbPath = resolve(base, "manifest", "manifest.db");
+  }
+
+  // Ensure parent directory exists
+  const parentDir = dirname(dbPath);
+  if (!existsSync(parentDir)) {
+    mkdirSync(parentDir, { recursive: true });
+  }
+
+  const db = new Database(dbPath);
+  // Enable WAL mode for better concurrent read performance
+  db.pragma("journal_mode = WAL");
+  // Enable foreign key enforcement (off by default in SQLite)
+  db.pragma("foreign_keys = ON");
   return db;
 }
 
 /**
- * Apply the V2 schema to a PGlite instance.
+ * Apply the V2 schema to a SQLite instance.
  * Safe to call on a fresh database. Will error if tables already exist
  * (use ensureSchema for idempotent setup).
  */
-export async function applySchema(db: PGlite): Promise<void> {
+export function applySchema(db: DatabaseType): void {
   const sql = readFileSync(SCHEMA_PATH, "utf-8");
-  await db.exec(sql);
+  db.exec(sql);
 }
 
 /**
  * Idempotent schema setup: only applies if work_items table doesn't exist.
  */
-export async function ensureSchema(db: PGlite): Promise<boolean> {
-  const result = await db.query<{ exists: boolean }>(`
-    SELECT EXISTS (
-      SELECT 1 FROM information_schema.tables
-      WHERE table_name = 'work_items'
-    ) AS exists
-  `);
-  if (result.rows[0].exists) {
+export function ensureSchema(db: DatabaseType): boolean {
+  const row = db
+    .prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='work_items'"
+    )
+    .get() as { name: string } | undefined;
+
+  if (row) {
     return false;
   }
-  await applySchema(db);
+  applySchema(db);
   return true;
 }
 
 /**
- * Initialize the manifest database: create/open the PGlite instance
+ * Initialize the manifest database: create/open the SQLite instance
  * and ensure the schema is applied.
  */
-export async function initManifest(
-  dataDir?: string
-): Promise<PGlite> {
-  const db = await getDb(dataDir);
-  await ensureSchema(db);
+export function initManifest(dataDir?: string): DatabaseType {
+  const db = getDb(dataDir);
+  ensureSchema(db);
   return db;
 }

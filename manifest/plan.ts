@@ -13,7 +13,7 @@
  * See: docs/MANIFEST_SYSTEM_DESIGN_V2.md Section 11
  */
 
-import type { PGlite } from "@electric-sql/pglite";
+import type { Database } from "better-sqlite3";
 import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -121,25 +121,35 @@ export interface HumanGatedItem {
 }
 
 // ---------------------------------------------------------------------------
-// Query functions
+// Helpers
 // ---------------------------------------------------------------------------
 
 function loadQuery(name: string): string {
   return readFileSync(resolve(__dirname, "queries", `${name}.sql`), "utf-8");
 }
 
+function parseJsonArray(v: unknown): string[] {
+  if (typeof v === "string") return JSON.parse(v);
+  if (Array.isArray(v)) return v;
+  return [];
+}
+
+// ---------------------------------------------------------------------------
+// Query functions
+// ---------------------------------------------------------------------------
+
 /**
  * Query the frontier: planned items with no unmet dependencies
  * and no human gate.
  */
-export async function queryFrontier(db: PGlite): Promise<FrontierItem[]> {
+export function queryFrontier(db: Database): FrontierItem[] {
   const sql = `
     SELECT w.id, w.name, w.kind, w.repo, w.scope_hint, w.branch,
            w.issue_url, w.predicted_files
     FROM work_items w
     WHERE w.kind IN ('issue', 'capability')
       AND w.state = 'planned'
-      AND COALESCE((w.meta->>'needs_human')::boolean, false) = false
+      AND COALESCE(json_extract(w.meta, '$.needs_human'), 0) = 0
       AND NOT EXISTS (
         SELECT 1
         FROM edges e
@@ -150,30 +160,37 @@ export async function queryFrontier(db: PGlite): Promise<FrontierItem[]> {
       )
     ORDER BY w.id
   `;
-  const result = await db.query<FrontierItem>(sql);
-  return result.rows;
+  const rows = db.prepare(sql).all() as (Omit<FrontierItem, "predicted_files"> & { predicted_files: string })[];
+  return rows.map((r) => ({
+    ...r,
+    predicted_files: parseJsonArray(r.predicted_files),
+  }));
 }
 
 /**
  * Detect file overlaps across frontier items.
  * Returns pairs of items that share predicted files.
  */
-export async function queryOverlaps(db: PGlite): Promise<OverlapPair[]> {
+export function queryOverlaps(db: Database): OverlapPair[] {
   const sql = loadQuery("overlap");
-  const result = await db.query<OverlapPair>(sql);
-  return result.rows;
+  const rows = db.prepare(sql).all() as { node_a: string; node_b: string; shared_files: string }[];
+  return rows.map((r) => ({
+    node_a: r.node_a,
+    node_b: r.node_b,
+    shared_files: parseJsonArray(r.shared_files),
+  }));
 }
 
 /**
  * Query blocked items: planned items with unmet dependencies.
  */
-export async function queryBlocked(db: PGlite): Promise<BlockedItem[]> {
+export function queryBlocked(db: Database): BlockedItem[] {
   const sql = `
     SELECT w.id, w.name
     FROM work_items w
     WHERE w.kind IN ('issue', 'capability')
       AND w.state = 'planned'
-      AND COALESCE((w.meta->>'needs_human')::boolean, false) = false
+      AND COALESCE(json_extract(w.meta, '$.needs_human'), 0) = 0
       AND EXISTS (
         SELECT 1
         FROM edges e
@@ -184,28 +201,24 @@ export async function queryBlocked(db: PGlite): Promise<BlockedItem[]> {
       )
     ORDER BY w.id
   `;
-  const items = await db.query<{ id: string; name: string }>(sql);
+  const items = db.prepare(sql).all() as { id: string; name: string }[];
 
   const blocked: BlockedItem[] = [];
-  for (const item of items.rows) {
-    const blockerResult = await db.query<{
-      id: string;
-      name: string;
-      state: string;
-    }>(
+  for (const item of items) {
+    const blockers = db.prepare(
       `SELECT blocker.id, blocker.name, blocker.state
        FROM edges e
        JOIN work_items blocker ON blocker.id = e.to_id
        WHERE e.rel = 'depends_on'
-         AND e.from_id = $1
+         AND e.from_id = ?
          AND blocker.state != 'done'
-       ORDER BY blocker.id`,
-      [item.id]
-    );
+       ORDER BY blocker.id`
+    ).all(item.id) as { id: string; name: string; state: string }[];
+
     blocked.push({
       id: item.id,
       name: item.name,
-      blockers: blockerResult.rows,
+      blockers,
     });
   }
 
@@ -215,17 +228,16 @@ export async function queryBlocked(db: PGlite): Promise<BlockedItem[]> {
 /**
  * Query human-gated items.
  */
-export async function queryHumanGated(db: PGlite): Promise<HumanGatedItem[]> {
+export function queryHumanGated(db: Database): HumanGatedItem[] {
   const sql = `
     SELECT w.id, w.name
     FROM work_items w
     WHERE w.kind IN ('issue', 'capability')
       AND w.state = 'planned'
-      AND COALESCE((w.meta->>'needs_human')::boolean, false) = true
+      AND COALESCE(json_extract(w.meta, '$.needs_human'), 0) != 0
     ORDER BY w.id
   `;
-  const result = await db.query<HumanGatedItem>(sql);
-  return result.rows;
+  return db.prepare(sql).all() as HumanGatedItem[];
 }
 
 // ---------------------------------------------------------------------------
@@ -548,14 +560,14 @@ export function buildSequentialNodes(
 /**
  * Assemble the full DispatchPlan from all components.
  */
-export async function buildDispatchPlan(
-  db: PGlite,
+export function buildDispatchPlan(
+  db: Database,
   assessments?: Map<string, Assessment>
-): Promise<DispatchPlan> {
-  const frontier = await queryFrontier(db);
-  const overlaps = await queryOverlaps(db);
-  const blocked = await queryBlocked(db);
-  const humanGated = await queryHumanGated(db);
+): DispatchPlan {
+  const frontier = queryFrontier(db);
+  const overlaps = queryOverlaps(db);
+  const blocked = queryBlocked(db);
+  const humanGated = queryHumanGated(db);
 
   const groups = buildParallelGroups(frontier, overlaps, assessments);
 

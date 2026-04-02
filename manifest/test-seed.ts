@@ -9,7 +9,7 @@
  * 5. Idempotency: running seed twice does not duplicate data
  */
 
-import { PGlite } from "@electric-sql/pglite";
+import Database from "better-sqlite3";
 import { applySchema } from "./init.ts";
 import { seed } from "./seed.ts";
 
@@ -26,11 +26,17 @@ function assert(condition: boolean, msg: string) {
   }
 }
 
+function parseJsonArray(v: unknown): string[] {
+  if (typeof v === "string") return JSON.parse(v);
+  if (Array.isArray(v)) return v;
+  return [];
+}
+
 /**
  * Frontier query: planned issues whose dependencies are all done.
  */
-async function queryFrontier(db: PGlite): Promise<string[]> {
-  const result = await db.query<{ id: string }>(`
+function queryFrontier(db: Database.Database): string[] {
+  const result = db.prepare(`
     SELECT wi.id
     FROM work_items wi
     WHERE wi.state = 'planned'
@@ -43,60 +49,61 @@ async function queryFrontier(db: PGlite): Promise<string[]> {
           AND dep.state != 'done'
       )
     ORDER BY wi.id
-  `);
-  return result.rows.map((r) => r.id);
+  `).all() as { id: string }[];
+  return result.map((r) => r.id);
 }
 
-async function run() {
+function run() {
   console.log("Manifest seed tests\n");
 
-  // Setup: in-memory PGlite with schema
-  const db = await PGlite.create("memory://");
-  await applySchema(db);
+  // Setup: in-memory SQLite with schema
+  const db = new Database(":memory:");
+  db.pragma("foreign_keys = ON");
+  applySchema(db);
 
   // -----------------------------------------------------------------------
   // 1. Run seed and verify counts
   // -----------------------------------------------------------------------
   console.log("1. Seed execution and item counts");
-  const result = await seed(db);
+  const result = seed(db);
   assert(result.itemsInserted === 13, `Inserted ${result.itemsInserted} items (expected 13: 1 phase + 3 tracks + 9 issues)`);
   assert(result.edgesInserted === 22, `Inserted ${result.edgesInserted} edges (expected 22: 10 deps + 12 hierarchy)`);
 
   // Verify total counts from DB
-  const itemCount = await db.query<{ count: string }>(`SELECT count(*) AS count FROM work_items`);
-  assert(parseInt(itemCount.rows[0].count) === 13, `DB has 13 work items`);
+  const itemCount = db.prepare("SELECT count(*) AS count FROM work_items").get() as { count: number };
+  assert(itemCount.count === 13, `DB has 13 work items`);
 
-  const edgeCount = await db.query<{ count: string }>(`SELECT count(*) AS count FROM edges`);
-  assert(parseInt(edgeCount.rows[0].count) === 22, `DB has 22 edges`);
+  const edgeCount = db.prepare("SELECT count(*) AS count FROM edges").get() as { count: number };
+  assert(edgeCount.count === 22, `DB has 22 edges`);
 
   // -----------------------------------------------------------------------
   // 2. Verify work item kinds
   // -----------------------------------------------------------------------
   console.log("\n2. Work item kinds");
-  const phases = await db.query<{ count: string }>(`SELECT count(*) AS count FROM work_items WHERE kind = 'phase'`);
-  assert(parseInt(phases.rows[0].count) === 1, `1 phase entity`);
+  const phases = db.prepare("SELECT count(*) AS count FROM work_items WHERE kind = 'phase'").get() as { count: number };
+  assert(phases.count === 1, `1 phase entity`);
 
-  const trackCount = await db.query<{ count: string }>(`SELECT count(*) AS count FROM work_items WHERE kind = 'track'`);
-  assert(parseInt(trackCount.rows[0].count) === 3, `3 track entities`);
+  const trackCount = db.prepare("SELECT count(*) AS count FROM work_items WHERE kind = 'track'").get() as { count: number };
+  assert(trackCount.count === 3, `3 track entities`);
 
-  const issueCount = await db.query<{ count: string }>(`SELECT count(*) AS count FROM work_items WHERE kind = 'issue'`);
-  assert(parseInt(issueCount.rows[0].count) === 9, `9 issue entities`);
+  const issueCount = db.prepare("SELECT count(*) AS count FROM work_items WHERE kind = 'issue'").get() as { count: number };
+  assert(issueCount.count === 9, `9 issue entities`);
 
   // -----------------------------------------------------------------------
   // 3. Verify m#1 is done
   // -----------------------------------------------------------------------
   console.log("\n3. State verification");
-  const m1 = await db.query<{ state: string }>(`SELECT state FROM work_items WHERE id = 'm#1'`);
-  assert(m1.rows[0].state === "done", `m#1 state is 'done'`);
+  const m1 = db.prepare("SELECT state FROM work_items WHERE id = 'm#1'").get() as { state: string };
+  assert(m1.state === "done", `m#1 state is 'done'`);
 
-  const m4 = await db.query<{ state: string }>(`SELECT state FROM work_items WHERE id = 'm#4'`);
-  assert(m4.rows[0].state === "in_progress", `m#4 state is 'in_progress'`);
+  const m4 = db.prepare("SELECT state FROM work_items WHERE id = 'm#4'").get() as { state: string };
+  assert(m4.state === "in_progress", `m#4 state is 'in_progress'`);
 
   // -----------------------------------------------------------------------
   // 4. Frontier query: initial dispatchable set
   // -----------------------------------------------------------------------
   console.log("\n4. Frontier query (initial)");
-  const frontier1 = await queryFrontier(db);
+  const frontier1 = queryFrontier(db);
   assert(
     frontier1.length === 2,
     `Frontier has 2 items (expected: m#2, m#3 -- m#4 is in_progress so excluded)`
@@ -111,9 +118,9 @@ async function run() {
   // 5. Mark m#2 and m#3 done -> m#5 becomes dispatchable
   // -----------------------------------------------------------------------
   console.log("\n5. Unblocking behavior");
-  await db.exec(`UPDATE work_items SET state = 'done' WHERE id IN ('m#2', 'm#3')`);
+  db.exec(`UPDATE work_items SET state = 'done' WHERE id IN ('m#2', 'm#3')`);
 
-  const frontier2 = await queryFrontier(db);
+  const frontier2 = queryFrontier(db);
   assert(frontier2.includes("m#5"), `m#5 unblocked after m#2 and m#3 done`);
   assert(!frontier2.includes("m#6"), `m#6 still blocked (needs m#5)`);
   assert(!frontier2.includes("m#9"), `m#9 still blocked (needs m#6, m#7)`);
@@ -122,15 +129,15 @@ async function run() {
   // 6. Full chain: mark through to m#9
   // -----------------------------------------------------------------------
   console.log("\n6. Full dependency chain");
-  await db.exec(`UPDATE work_items SET state = 'done' WHERE id = 'm#5'`);
-  const frontier3 = await queryFrontier(db);
+  db.exec(`UPDATE work_items SET state = 'done' WHERE id = 'm#5'`);
+  const frontier3 = queryFrontier(db);
   assert(frontier3.includes("m#6"), `m#6 unblocked after m#5 done`);
   assert(frontier3.includes("m#7"), `m#7 unblocked after m#5 done`);
   assert(frontier3.includes("m#8"), `m#8 unblocked after m#5 done`);
   assert(!frontier3.includes("m#9"), `m#9 still blocked (needs m#6 and m#7)`);
 
-  await db.exec(`UPDATE work_items SET state = 'done' WHERE id IN ('m#6', 'm#7')`);
-  const frontier4 = await queryFrontier(db);
+  db.exec(`UPDATE work_items SET state = 'done' WHERE id IN ('m#6', 'm#7')`);
+  const frontier4 = queryFrontier(db);
   assert(frontier4.includes("m#9"), `m#9 unblocked after m#6 and m#7 done`);
   assert(frontier4.includes("m#8"), `m#8 still in frontier (independent)`);
 
@@ -138,19 +145,19 @@ async function run() {
   // 7. Hierarchy edges
   // -----------------------------------------------------------------------
   console.log("\n7. Hierarchy edges");
-  const trackToPhase = await db.query<{ count: string }>(`
+  const trackToPhase = db.prepare(`
     SELECT count(*) AS count FROM edges
     WHERE rel = 'is_part_of' AND to_id = 'phase:manifest'
     AND from_id LIKE 'track:%'
-  `);
-  assert(parseInt(trackToPhase.rows[0].count) === 3, `3 tracks belong to phase:manifest`);
+  `).get() as { count: number };
+  assert(trackToPhase.count === 3, `3 tracks belong to phase:manifest`);
 
-  const foundationItems = await db.query<{ from_id: string }>(`
+  const foundationItems = db.prepare(`
     SELECT from_id FROM edges
     WHERE rel = 'is_part_of' AND to_id = 'track:foundation'
     ORDER BY from_id
-  `);
-  const foundationIds = foundationItems.rows.map((r) => r.from_id);
+  `).all() as { from_id: string }[];
+  const foundationIds = foundationItems.map((r) => r.from_id);
   assert(
     foundationIds.length === 4 &&
       foundationIds.includes("m#1") &&
@@ -160,19 +167,19 @@ async function run() {
     `Foundation track has m#1-m#4`
   );
 
-  const planningItems = await db.query<{ from_id: string }>(`
+  const planningItems = db.prepare(`
     SELECT from_id FROM edges
     WHERE rel = 'is_part_of' AND to_id = 'track:planning'
     ORDER BY from_id
-  `);
-  assert(planningItems.rows.length === 4, `Planning track has 4 items (m#5-m#8)`);
+  `).all() as { from_id: string }[];
+  assert(planningItems.length === 4, `Planning track has 4 items (m#5-m#8)`);
 
-  const dispatchItems = await db.query<{ from_id: string }>(`
+  const dispatchItems = db.prepare(`
     SELECT from_id FROM edges
     WHERE rel = 'is_part_of' AND to_id = 'track:dispatch'
-  `);
+  `).all() as { from_id: string }[];
   assert(
-    dispatchItems.rows.length === 1 && dispatchItems.rows[0].from_id === "m#9",
+    dispatchItems.length === 1 && dispatchItems[0].from_id === "m#9",
     `Dispatch track has m#9`
   );
 
@@ -180,25 +187,25 @@ async function run() {
   // 8. Idempotency: running seed again should not duplicate
   // -----------------------------------------------------------------------
   console.log("\n8. Idempotency");
-  // Reset states for clean re-seed test
-  await db.exec(`UPDATE work_items SET state = 'done' WHERE id IN ('m#6', 'm#7', 'm#8')`);
-  const result2 = await seed(db);
+  db.exec(`UPDATE work_items SET state = 'done' WHERE id IN ('m#6', 'm#7', 'm#8')`);
+  const result2 = seed(db);
   assert(result2.itemsInserted === 0, `Re-seed inserted 0 items (idempotent)`);
   assert(result2.edgesInserted === 0, `Re-seed inserted 0 edges (idempotent)`);
 
-  const finalItemCount = await db.query<{ count: string }>(`SELECT count(*) AS count FROM work_items`);
-  assert(parseInt(finalItemCount.rows[0].count) === 13, `Still 13 items after re-seed`);
+  const finalItemCount = db.prepare("SELECT count(*) AS count FROM work_items").get() as { count: number };
+  assert(finalItemCount.count === 13, `Still 13 items after re-seed`);
 
   // -----------------------------------------------------------------------
   // 9. Predicted files populated
   // -----------------------------------------------------------------------
   console.log("\n9. Predicted files");
-  const m1files = await db.query<{ predicted_files: string[] }>(
-    `SELECT predicted_files FROM work_items WHERE id = 'm#1'`
-  );
-  assert(m1files.rows[0].predicted_files.length === 5, `m#1 has 5 predicted files`);
+  const m1files = db.prepare(
+    "SELECT predicted_files FROM work_items WHERE id = 'm#1'"
+  ).get() as { predicted_files: string };
+  const m1filesParsed = parseJsonArray(m1files.predicted_files);
+  assert(m1filesParsed.length === 5, `m#1 has 5 predicted files`);
   assert(
-    m1files.rows[0].predicted_files.includes("manifest/schema.sql"),
+    m1filesParsed.includes("manifest/schema.sql"),
     `m#1 predicted files include manifest/schema.sql`
   );
 
@@ -214,10 +221,12 @@ async function run() {
     console.log(`\nAll tests passed.`);
   }
 
-  await db.close();
+  db.close();
 }
 
-run().catch((e) => {
+try {
+  run();
+} catch (e: any) {
   console.error("\nTest crashed:", e.message);
   process.exit(1);
-});
+}

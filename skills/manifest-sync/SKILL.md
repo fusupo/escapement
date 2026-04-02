@@ -59,7 +59,7 @@ Read the project's `CLAUDE.md` and extract the `context-path` setting:
 grep -E '^\s*-\s*\*\*context-path\*\*' CLAUDE.md
 ```
 
-The manifest database lives at `{context-path}/manifest/pgdata/`.
+The manifest database lives at `{context-path}/manifest/manifest.db`.
 
 ### 0.2 Verify Manifest CLI
 
@@ -70,12 +70,12 @@ Confirm the manifest CLI and database exist:
 ls manifest/manifest-cli.ts
 
 # Check database exists
-ls {context-path}/manifest/pgdata/
+ls {context-path}/manifest/manifest.db
 ```
 
 If database does not exist:
 ```
-No manifest database found at {context-path}/manifest/pgdata/.
+No manifest database found at {context-path}/manifest/manifest.db.
 Run manifest-bootstrap first to initialize the manifest.
 ```
 **Stop.**
