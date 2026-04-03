@@ -9,7 +9,7 @@ SELECT w.id, w.name, w.kind, w.repo, w.scope_hint, w.predicted_files
 FROM work_items w
 WHERE w.kind IN ('issue', 'capability')
   AND w.state = 'planned'
-  AND COALESCE((w.meta->>'needs_human')::boolean, false) = false
+  AND COALESCE(json_extract(w.meta, '$.needs_human'), 0) = 0
   AND NOT EXISTS (
     SELECT 1
     FROM edges e

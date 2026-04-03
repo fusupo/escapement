@@ -3,14 +3,14 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { initManifest } from "./init.ts";
 import { buildDispatchPlan, formatPlan } from "./plan.ts";
-import type { PGlite } from "@electric-sql/pglite";
+import type { Database } from "better-sqlite3";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
 function usage(): never {
-  console.log(`Usage: manifest <command> [args]
+  console.log(`Usage: manifest [--data-dir <path>] <command> [args]
 
 Commands:
   seed <file.sql>   Load a SQL seed file into the manifest database
@@ -27,7 +27,10 @@ Check subcommands:
   check new-issues         List manifest issue_numbers for diffing against GitHub
   plan              Generate dispatch plan with parallel groups and overlaps
   query <sql>       Execute inline SQL and print results
-  in-progress <id> <branch>  Mark a work item as in_progress and record its branch`);
+  in-progress <id> <branch>  Mark a work item as in_progress and record its branch
+
+Options:
+  --data-dir <path>  Override the manifest data directory`);
   process.exit(1);
 }
 
@@ -40,9 +43,15 @@ function pct(done: number, total: number): string {
   return `${Math.round((done / total) * 100).toString().padStart(3)}%`;
 }
 
+function parseJsonArray(v: unknown): string[] {
+  if (typeof v === "string") return JSON.parse(v);
+  if (Array.isArray(v)) return v;
+  return [];
+}
+
 // ── Commands ─────────────────────────────────────────────────────────
 
-async function cmdSeed(db: PGlite, args: string[]): Promise<void> {
+function cmdSeed(db: Database, args: string[]): void {
   const filePath = args[0];
   if (!filePath) {
     console.error("Error: seed requires a SQL file path.\n  manifest seed <file.sql>");
@@ -52,36 +61,26 @@ async function cmdSeed(db: PGlite, args: string[]): Promise<void> {
   let sql: string;
   try {
     sql = readFileSync(resolved, "utf-8");
-  } catch (err) {
+  } catch {
     console.error(`Error: cannot read file: ${resolved}`);
     process.exit(1);
   }
-  await db.exec(sql);
+  db.exec(sql);
   // Report what was loaded
-  const items = await db.query<{ count: string }>(
-    "SELECT count(*)::text AS count FROM work_items"
-  );
-  const edges = await db.query<{ count: string }>(
-    "SELECT count(*)::text AS count FROM edges"
-  );
+  const items = db.prepare("SELECT count(*) AS count FROM work_items").get() as { count: number };
+  const edges = db.prepare("SELECT count(*) AS count FROM edges").get() as { count: number };
   console.log(
-    `Seed applied.\n  work_items: ${items.rows[0].count}\n  edges:      ${edges.rows[0].count}`
+    `Seed applied.\n  work_items: ${items.count}\n  edges:      ${edges.count}`
   );
 }
 
-async function cmdFrontier(db: PGlite): Promise<void> {
-  const result = await db.query<{
-    id: string;
-    name: string;
-    kind: string;
-    repo: string | null;
-    scope_hint: string | null;
-  }>(`
+function cmdFrontier(db: Database): void {
+  const rows = db.prepare(`
     SELECT w.id, w.name, w.kind, w.repo, w.scope_hint
     FROM work_items w
     WHERE w.kind IN ('issue', 'capability')
       AND w.state = 'planned'
-      AND COALESCE((w.meta->>'needs_human')::boolean, false) = false
+      AND COALESCE(json_extract(w.meta, '$.needs_human'), 0) = 0
       AND NOT EXISTS (
         SELECT 1
         FROM edges e
@@ -91,68 +90,63 @@ async function cmdFrontier(db: PGlite): Promise<void> {
           AND dep.state != 'done'
       )
     ORDER BY w.id
-  `);
+  `).all() as { id: string; name: string; kind: string; repo: string | null; scope_hint: string | null }[];
 
-  if (result.rows.length === 0) {
+  if (rows.length === 0) {
     console.log("No dispatchable work items.");
     return;
   }
 
-  console.log(`Frontier: ${result.rows.length} dispatchable item(s)\n`);
+  console.log(`Frontier: ${rows.length} dispatchable item(s)\n`);
   console.log(
     `  ${pad("ID", 20)} ${pad("KIND", 12)} ${pad("REPO", 24)} NAME`
   );
   console.log(`  ${"─".repeat(20)} ${"─".repeat(12)} ${"─".repeat(24)} ${"─".repeat(30)}`);
-  for (const row of result.rows) {
+  for (const row of rows) {
     console.log(
       `  ${pad(row.id, 20)} ${pad(row.kind, 12)} ${pad(row.repo ?? "-", 24)} ${row.name}`
     );
   }
 }
 
-async function cmdDone(db: PGlite, args: string[]): Promise<void> {
+function cmdDone(db: Database, args: string[]): void {
   const id = args[0];
   if (!id) {
     console.error("Error: done requires a work item id.\n  manifest done <id>");
     process.exit(1);
   }
 
-  // Check item exists
-  const existing = await db.query<{ id: string; state: string }>(
-    "SELECT id, state FROM work_items WHERE id = $1",
-    [id]
-  );
-  if (existing.rows.length === 0) {
+  const existing = db.prepare(
+    "SELECT id, state FROM work_items WHERE id = ?"
+  ).get(id) as { id: string; state: string } | undefined;
+
+  if (!existing) {
     console.error(`Error: work item '${id}' not found.`);
     process.exit(1);
   }
-  if (existing.rows[0].state === "done") {
+  if (existing.state === "done") {
     console.log(`Work item '${id}' is already done.`);
     return;
   }
 
-  await db.query(
-    "UPDATE work_items SET state = 'done', updated_at = now() WHERE id = $1",
-    [id]
-  );
+  db.prepare(
+    "UPDATE work_items SET state = 'done', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?"
+  ).run(id);
   console.log(`Marked '${id}' as done.\n`);
 
-  // Show updated frontier
-  await cmdFrontier(db);
+  cmdFrontier(db);
 }
 
-async function cmdStatus(db: PGlite): Promise<void> {
-  // Summary counts across all work items
-  const summary = await db.query<{
-    state: string;
-    count: string;
-  }>("SELECT state, count(*)::text AS count FROM work_items GROUP BY state ORDER BY state");
+function cmdStatus(db: Database): void {
+  const summary = db.prepare(
+    "SELECT state, count(*) AS count FROM work_items GROUP BY state ORDER BY state"
+  ).all() as { state: string; count: number }[];
 
   let total = 0;
   const byState: Record<string, number> = {};
-  for (const row of summary.rows) {
-    byState[row.state] = parseInt(row.count, 10);
-    total += byState[row.state];
+  for (const row of summary) {
+    byState[row.state] = row.count;
+    total += row.count;
   }
 
   console.log("Overall Status\n");
@@ -163,12 +157,7 @@ async function cmdStatus(db: PGlite): Promise<void> {
     }
   }
 
-  // Hierarchical rollup
-  const rollup = await db.query<{
-    name: string;
-    total_items: string;
-    done_items: string;
-  }>(`
+  const rollup = db.prepare(`
     WITH RECURSIVE tree AS (
       SELECT
         parent.id AS root_id,
@@ -189,18 +178,16 @@ async function cmdStatus(db: PGlite): Promise<void> {
     )
     SELECT
       root.name,
-      COUNT(*) FILTER (WHERE leaf.kind IN ('issue', 'capability'))::text AS total_items,
-      COUNT(*) FILTER (
-        WHERE leaf.kind IN ('issue', 'capability') AND leaf.state = 'done'
-      )::text AS done_items
+      COUNT(CASE WHEN leaf.kind IN ('issue', 'capability') THEN 1 END) AS total_items,
+      COUNT(CASE WHEN leaf.kind IN ('issue', 'capability') AND leaf.state = 'done' THEN 1 END) AS done_items
     FROM tree
     JOIN work_items root ON root.id = tree.root_id
     JOIN work_items leaf ON leaf.id = tree.child_id
     GROUP BY root.id, root.name
     ORDER BY root.name
-  `);
+  `).all() as { name: string; total_items: number; done_items: number }[];
 
-  if (rollup.rows.length > 0) {
+  if (rollup.length > 0) {
     console.log(`\nPhase / Track Rollup\n`);
     console.log(
       `  ${pad("NAME", 44)} ${pad("DONE", 6)} ${pad("TOTAL", 6)} PROGRESS`
@@ -208,11 +195,9 @@ async function cmdStatus(db: PGlite): Promise<void> {
     console.log(
       `  ${"─".repeat(44)} ${"─".repeat(6)} ${"─".repeat(6)} ${"─".repeat(8)}`
     );
-    for (const row of rollup.rows) {
-      const done = parseInt(row.done_items, 10);
-      const tot = parseInt(row.total_items, 10);
+    for (const row of rollup) {
       console.log(
-        `  ${pad(row.name, 44)} ${pad(String(done), 6)} ${pad(String(tot), 6)} ${pct(done, tot)}`
+        `  ${pad(row.name, 44)} ${pad(String(row.done_items), 6)} ${pad(String(row.total_items), 6)} ${pct(row.done_items, row.total_items)}`
       );
     }
   }
@@ -220,103 +205,108 @@ async function cmdStatus(db: PGlite): Promise<void> {
 
 // ── Check subcommands ───────────────────────────────────────────────
 
-async function cmdCheckSuperseded(db: PGlite): Promise<void> {
+function cmdCheckSuperseded(db: Database): void {
   const sqlPath = resolve(__dirname, "queries", "superseded.sql");
   const sql = readFileSync(sqlPath, "utf-8");
-  const result = await db.query<{
+  const rows = db.prepare(sql).all() as {
     older_id: string;
     older_name: string;
     older_scope: string | null;
     newer_id: string;
     newer_name: string;
     newer_scope: string | null;
-    shared_files: string[];
-  }>(sql);
+    shared_files: string;
+  }[];
 
-  if (result.rows.length === 0) {
+  if (rows.length === 0) {
     console.log("No superseded in_progress items detected.");
     return;
   }
 
-  console.log(`Supersession Check: ${result.rows.length} potential supersession(s)\n`);
+  console.log(`Supersession Check: ${rows.length} potential supersession(s)\n`);
   console.log(
     `  ${pad("OLDER ITEM", 20)} ${pad("NEWER ITEM", 20)} SHARED FILES`
   );
   console.log(
     `  ${"─".repeat(20)} ${"─".repeat(20)} ${"─".repeat(40)}`
   );
-  for (const row of result.rows) {
-    const files = row.shared_files.length > 0 ? row.shared_files.join(", ") : "(scope match)";
-    console.log(`  ${pad(row.older_id, 20)} ${pad(row.newer_id, 20)} ${files}`);
+  for (const row of rows) {
+    const files = parseJsonArray(row.shared_files);
+    const display = files.length > 0 ? files.join(", ") : "(scope match)";
+    console.log(`  ${pad(row.older_id, 20)} ${pad(row.newer_id, 20)} ${display}`);
     console.log(`    ${row.older_name}`);
     console.log(`    -> ${row.newer_name}`);
     console.log();
   }
 }
 
-async function cmdCheckReconcile(db: PGlite): Promise<void> {
+function cmdCheckReconcile(db: Database): void {
   const sqlPath = resolve(__dirname, "queries", "reconcile.sql");
   const sql = readFileSync(sqlPath, "utf-8");
-  const result = await db.query<{
+  const rows = db.prepare(sql).all() as {
     id: string;
     name: string;
-    predicted_files: string[];
-    actual_files: string[];
-    hits: string[];
-    misses: string[];
-    false_positives: string[];
-  }>(sql);
+    predicted_files: string;
+    actual_files: string;
+    hits: string;
+    misses: string;
+    false_positives: string;
+  }[];
 
-  if (result.rows.length === 0) {
+  if (rows.length === 0) {
     console.log("No completed items with both predicted and actual files. Reconciliation skipped.");
     return;
   }
 
-  console.log(`Reconciliation: ${result.rows.length} item(s)\n`);
+  console.log(`Reconciliation: ${rows.length} item(s)\n`);
 
   let totalHits = 0;
   let totalMisses = 0;
   let totalFP = 0;
 
-  for (const row of result.rows) {
-    const h = row.hits.length;
-    const m = row.misses.length;
-    const fp = row.false_positives.length;
-    const denom = h + m + fp;
+  for (const row of rows) {
+    const predicted = parseJsonArray(row.predicted_files);
+    const actual = parseJsonArray(row.actual_files);
+    const hits = parseJsonArray(row.hits);
+    const misses = parseJsonArray(row.misses);
+    const fp = parseJsonArray(row.false_positives);
+    const h = hits.length;
+    const m = misses.length;
+    const fpLen = fp.length;
+    const denom = h + m + fpLen;
     const accuracy = denom === 0 ? 100 : Math.round((h / denom) * 100);
 
     totalHits += h;
     totalMisses += m;
-    totalFP += fp;
+    totalFP += fpLen;
 
     console.log(`  ${row.id}: ${row.name}`);
-    console.log(`    Predicted: ${row.predicted_files.length} files`);
-    console.log(`    Actual:    ${row.actual_files.length} files`);
-    console.log(`    Hits:      ${h}  Misses: ${m}  False pos: ${fp}  Accuracy: ${accuracy}%`);
-    if (m > 0) console.log(`    Missed:    ${row.misses.join(", ")}`);
-    if (fp > 0) console.log(`    False pos: ${row.false_positives.join(", ")}`);
+    console.log(`    Predicted: ${predicted.length} files`);
+    console.log(`    Actual:    ${actual.length} files`);
+    console.log(`    Hits:      ${h}  Misses: ${m}  False pos: ${fpLen}  Accuracy: ${accuracy}%`);
+    if (m > 0) console.log(`    Missed:    ${misses.join(", ")}`);
+    if (fpLen > 0) console.log(`    False pos: ${fp.join(", ")}`);
     console.log();
 
     // Store reconciliation in meta
-    await db.query(
+    db.prepare(
       `UPDATE work_items
-       SET meta = jsonb_set(
+       SET meta = json_set(
          meta,
-         '{reconciliation}',
-         $1::jsonb
+         '$.reconciliation',
+         json(?)
        ),
-       updated_at = now()
-       WHERE id = $2`,
-      [
-        JSON.stringify({
-          hits: row.hits,
-          misses: row.misses,
-          false_positives: row.false_positives,
-          accuracy: denom === 0 ? 1.0 : h / denom,
-          checked_at: new Date().toISOString(),
-        }),
-        row.id,
-      ]
+       updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+       WHERE id = ?`
+    ).run(
+      JSON.stringify({
+        hits,
+        misses,
+        false_positives: fp,
+        accuracy: denom === 0 ? 1.0 : h / denom,
+        checked_at: new Date().toISOString(),
+      }),
+      row.id
     );
   }
 
@@ -325,22 +315,21 @@ async function cmdCheckReconcile(db: PGlite): Promise<void> {
   console.log(`  Overall: ${totalHits} hits, ${totalMisses} misses, ${totalFP} false positives — ${overallAccuracy}% accuracy`);
 }
 
-async function cmdCheckOverlap(db: PGlite): Promise<void> {
+function cmdCheckOverlap(db: Database): void {
   const sqlPath = resolve(__dirname, "queries", "overlap.sql");
   const sql = readFileSync(sqlPath, "utf-8");
-  const result = await db.query<{
+  const rows = db.prepare(sql).all() as {
     node_a: string;
     node_b: string;
-    shared_files: string[];
-  }>(sql);
+    shared_files: string;
+  }[];
 
-  // Count frontier items
-  const frontierCount = await db.query<{ count: string }>(`
-    SELECT count(*)::text AS count
+  const frontierCount = db.prepare(`
+    SELECT count(*) AS count
     FROM work_items w
     WHERE w.kind IN ('issue', 'capability')
       AND w.state = 'planned'
-      AND COALESCE((w.meta->>'needs_human')::boolean, false) = false
+      AND COALESCE(json_extract(w.meta, '$.needs_human'), 0) = 0
       AND NOT EXISTS (
         SELECT 1 FROM edges e
         JOIN work_items dep ON dep.id = e.to_id
@@ -348,61 +337,54 @@ async function cmdCheckOverlap(db: PGlite): Promise<void> {
           AND e.from_id = w.id
           AND dep.state != 'done'
       )
-  `);
+  `).get() as { count: number };
 
   console.log(`File Overlap Analysis (current frontier)\n`);
-  console.log(`  Frontier items: ${frontierCount.rows[0].count}`);
+  console.log(`  Frontier items: ${frontierCount.count}`);
 
-  if (result.rows.length === 0) {
+  if (rows.length === 0) {
     console.log("  No overlapping file sets detected.");
     return;
   }
 
-  console.log(`  Overlapping pairs: ${result.rows.length}\n`);
+  console.log(`  Overlapping pairs: ${rows.length}\n`);
   console.log(
     `  ${pad("ITEM A", 20)} ${pad("ITEM B", 20)} SHARED FILES`
   );
   console.log(
     `  ${"─".repeat(20)} ${"─".repeat(20)} ${"─".repeat(40)}`
   );
-  for (const row of result.rows) {
+  for (const row of rows) {
+    const files = parseJsonArray(row.shared_files);
     console.log(
-      `  ${pad(row.node_a, 20)} ${pad(row.node_b, 20)} ${row.shared_files.join(", ")}`
+      `  ${pad(row.node_a, 20)} ${pad(row.node_b, 20)} ${files.join(", ")}`
     );
   }
 }
 
-async function cmdCheckDrift(db: PGlite): Promise<void> {
-  // Find files that appear as misses in multiple reconciliation records
-  const result = await db.query<{
-    id: string;
-    misses: string[];
-  }>(`
-    SELECT id, meta->'reconciliation'->'misses' AS misses
+function cmdCheckDrift(db: Database): void {
+  const rows = db.prepare(`
+    SELECT id, json_extract(meta, '$.reconciliation.misses') AS misses
     FROM work_items
-    WHERE meta->'reconciliation'->'misses' IS NOT NULL
-      AND jsonb_array_length(meta->'reconciliation'->'misses') > 0
-  `);
+    WHERE json_extract(meta, '$.reconciliation.misses') IS NOT NULL
+      AND json_array_length(json_extract(meta, '$.reconciliation.misses')) > 0
+  `).all() as { id: string; misses: string }[];
 
-  if (result.rows.length === 0) {
+  if (rows.length === 0) {
     console.log("No reconciliation data available for drift analysis.");
     console.log("Run 'manifest check reconcile' first on items with actual_files.");
     return;
   }
 
-  // Count miss frequency across items
   const fileMissCounts: Record<string, string[]> = {};
-  for (const row of result.rows) {
-    const misses: string[] = typeof row.misses === "string"
-      ? JSON.parse(row.misses)
-      : row.misses as unknown as string[];
+  for (const row of rows) {
+    const misses = parseJsonArray(row.misses);
     for (const file of misses) {
       if (!fileMissCounts[file]) fileMissCounts[file] = [];
       fileMissCounts[file].push(row.id);
     }
   }
 
-  // Filter to files missed in 2+ items
   const driftFiles = Object.entries(fileMissCounts)
     .filter(([, ids]) => ids.length >= 2)
     .sort((a, b) => b[1].length - a[1].length);
@@ -411,7 +393,7 @@ async function cmdCheckDrift(db: PGlite): Promise<void> {
 
   if (driftFiles.length === 0) {
     console.log("  No repeated drift patterns detected (need 2+ misses for same file).");
-    console.log(`  Reconciliation data available for ${result.rows.length} item(s).`);
+    console.log(`  Reconciliation data available for ${rows.length} item(s).`);
     return;
   }
 
@@ -420,7 +402,6 @@ async function cmdCheckDrift(db: PGlite): Promise<void> {
     console.log(`    ${file}: missed in ${ids.length} items (${ids.join(", ")})`);
   }
 
-  // Record drift patterns on affected items
   const affectedItems = new Set<string>();
   const driftFileList = driftFiles.map(([f]) => f);
   for (const [, ids] of driftFiles) {
@@ -428,49 +409,44 @@ async function cmdCheckDrift(db: PGlite): Promise<void> {
   }
 
   for (const id of affectedItems) {
-    await db.query(
+    db.prepare(
       `UPDATE work_items
-       SET meta = jsonb_set(
+       SET meta = json_set(
          meta,
-         '{drift_patterns}',
-         $1::jsonb
+         '$.drift_patterns',
+         json(?)
        ),
-       updated_at = now()
-       WHERE id = $2`,
-      [
-        JSON.stringify({
-          files: driftFileList,
-          frequency: driftFiles.reduce((sum, [, ids]) =>
-            ids.includes(id) ? sum + 1 : sum, 0),
-          recorded_at: new Date().toISOString(),
-        }),
-        id,
-      ]
+       updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+       WHERE id = ?`
+    ).run(
+      JSON.stringify({
+        files: driftFileList,
+        frequency: driftFiles.reduce((sum, [, ids]) =>
+          ids.includes(id) ? sum + 1 : sum, 0),
+        recorded_at: new Date().toISOString(),
+      }),
+      id
     );
   }
 
   console.log(`\n  Drift patterns recorded on ${affectedItems.size} item(s).`);
 }
 
-async function cmdCheckNewIssues(db: PGlite): Promise<void> {
-  // List all issue_numbers currently in the manifest, grouped by repo
-  const result = await db.query<{
-    repo: string;
-    issue_number: number;
-  }>(`
+function cmdCheckNewIssues(db: Database): void {
+  const rows = db.prepare(`
     SELECT repo, issue_number
     FROM work_items
     WHERE issue_number IS NOT NULL AND repo IS NOT NULL
     ORDER BY repo, issue_number
-  `);
+  `).all() as { repo: string; issue_number: number }[];
 
-  if (result.rows.length === 0) {
+  if (rows.length === 0) {
     console.log("No issues in manifest. Run manifest-bootstrap first.");
     return;
   }
 
   const byRepo: Record<string, number[]> = {};
-  for (const row of result.rows) {
+  for (const row of rows) {
     if (!byRepo[row.repo]) byRepo[row.repo] = [];
     byRepo[row.repo].push(row.issue_number);
   }
@@ -479,40 +455,39 @@ async function cmdCheckNewIssues(db: PGlite): Promise<void> {
   for (const [repo, numbers] of Object.entries(byRepo)) {
     console.log(`  ${repo}: ${numbers.join(", ")}`);
   }
-  console.log(`\n  Total: ${result.rows.length} issue(s) across ${Object.keys(byRepo).length} repo(s)`);
+  console.log(`\n  Total: ${rows.length} issue(s) across ${Object.keys(byRepo).length} repo(s)`);
 }
 
-async function cmdCheck(db: PGlite, args: string[]): Promise<void> {
+function cmdCheck(db: Database, args: string[]): void {
   const sub = args[0];
 
   if (!sub) {
-    // Run all checks in sequence
     console.log("=== Supersession Check ===\n");
-    await cmdCheckSuperseded(db);
+    cmdCheckSuperseded(db);
     console.log("\n=== Reconciliation ===\n");
-    await cmdCheckReconcile(db);
+    cmdCheckReconcile(db);
     console.log("\n=== Overlap Analysis ===\n");
-    await cmdCheckOverlap(db);
+    cmdCheckOverlap(db);
     console.log("\n=== Drift Analysis ===\n");
-    await cmdCheckDrift(db);
+    cmdCheckDrift(db);
     return;
   }
 
   switch (sub) {
     case "superseded":
-      await cmdCheckSuperseded(db);
+      cmdCheckSuperseded(db);
       break;
     case "reconcile":
-      await cmdCheckReconcile(db);
+      cmdCheckReconcile(db);
       break;
     case "overlap":
-      await cmdCheckOverlap(db);
+      cmdCheckOverlap(db);
       break;
     case "drift":
-      await cmdCheckDrift(db);
+      cmdCheckDrift(db);
       break;
     case "new-issues":
-      await cmdCheckNewIssues(db);
+      cmdCheckNewIssues(db);
       break;
     default:
       console.error(`Unknown check subcommand: ${sub}`);
@@ -521,34 +496,30 @@ async function cmdCheck(db: PGlite, args: string[]): Promise<void> {
   }
 }
 
-async function cmdQuery(db: PGlite, args: string[]): Promise<void> {
+function cmdQuery(db: Database, args: string[]): void {
   const sql = args[0];
   if (!sql) {
     console.error("Error: query requires a SQL string.\n  manifest query \"SELECT ...\"");
     process.exit(1);
   }
-  const result = await db.query(sql);
-  if (result.rows.length === 0) {
+  const rows = db.prepare(sql).all() as Record<string, unknown>[];
+  if (rows.length === 0) {
     console.log("(0 rows)");
     return;
   }
-  const cols = Object.keys(result.rows[0] as Record<string, unknown>);
+  const cols = Object.keys(rows[0]);
   const widths = cols.map((c) =>
-    Math.max(c.length, ...result.rows.map((r) => {
-      const v = (r as Record<string, unknown>)[c];
-      return String(v ?? "NULL").length;
-    }))
+    Math.max(c.length, ...rows.map((r) => String(r[c] ?? "NULL").length))
   );
   console.log(cols.map((c, i) => pad(c, widths[i])).join("  "));
   console.log(widths.map((w) => "─".repeat(w)).join("  "));
-  for (const row of result.rows) {
-    const r = row as Record<string, unknown>;
-    console.log(cols.map((c, i) => pad(String(r[c] ?? "NULL"), widths[i])).join("  "));
+  for (const row of rows) {
+    console.log(cols.map((c, i) => pad(String(row[c] ?? "NULL"), widths[i])).join("  "));
   }
-  console.log(`\n(${result.rows.length} row${result.rows.length === 1 ? "" : "s"})`);
+  console.log(`\n(${rows.length} row${rows.length === 1 ? "" : "s"})`);
 }
 
-async function cmdInProgress(db: PGlite, args: string[]): Promise<void> {
+function cmdInProgress(db: Database, args: string[]): void {
   const id = args[0];
   const branch = args[1];
   if (!id || !branch) {
@@ -556,77 +527,88 @@ async function cmdInProgress(db: PGlite, args: string[]): Promise<void> {
     process.exit(1);
   }
 
-  const existing = await db.query<{ id: string; state: string }>(
-    "SELECT id, state FROM work_items WHERE id = $1",
-    [id]
-  );
-  if (existing.rows.length === 0) {
+  const existing = db.prepare(
+    "SELECT id, state FROM work_items WHERE id = ?"
+  ).get(id) as { id: string; state: string } | undefined;
+
+  if (!existing) {
     console.error(`Error: work item '${id}' not found.`);
     process.exit(1);
   }
-  if (existing.rows[0].state === "in_progress") {
+  if (existing.state === "in_progress") {
     console.log(`Work item '${id}' is already in_progress.`);
     return;
   }
 
-  await db.query(
-    "UPDATE work_items SET state = 'in_progress', branch = $2, updated_at = now() WHERE id = $1",
-    [id, branch]
-  );
+  db.prepare(
+    "UPDATE work_items SET state = 'in_progress', branch = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?"
+  ).run(branch, id);
   console.log(`Marked '${id}' as in_progress on branch '${branch}'.`);
 }
 
-async function cmdPlan(db: PGlite): Promise<void> {
-  const plan = await buildDispatchPlan(db);
+function cmdPlan(db: Database): void {
+  const plan = buildDispatchPlan(db);
   console.log(formatPlan(plan));
 }
 
 // ── Main ─────────────────────────────────────────────────────────────
 
-async function main(): Promise<void> {
-  const args = process.argv.slice(2);
-  const command = args[0];
+function main(): void {
+  const rawArgs = process.argv.slice(2);
 
+  // Parse --data-dir flag
+  let dataDir: string | undefined;
+  const args: string[] = [];
+  for (let i = 0; i < rawArgs.length; i++) {
+    if (rawArgs[i] === "--data-dir") {
+      dataDir = rawArgs[++i];
+      if (!dataDir) {
+        console.error("Error: --data-dir requires a path argument.");
+        process.exit(1);
+      }
+    } else {
+      args.push(rawArgs[i]);
+    }
+  }
+
+  const command = args[0];
   if (!command) usage();
 
-  const db = await initManifest();
+  const db = initManifest(dataDir);
 
   try {
     switch (command) {
       case "seed":
-        await cmdSeed(db, args.slice(1));
+        cmdSeed(db, args.slice(1));
         break;
       case "frontier":
-        await cmdFrontier(db);
+        cmdFrontier(db);
         break;
       case "done":
-        await cmdDone(db, args.slice(1));
+        cmdDone(db, args.slice(1));
         break;
       case "status":
-        await cmdStatus(db);
+        cmdStatus(db);
         break;
       case "check":
-        await cmdCheck(db, args.slice(1));
+        cmdCheck(db, args.slice(1));
         break;
       case "plan":
-        await cmdPlan(db);
+        cmdPlan(db);
         break;
       case "query":
-        await cmdQuery(db, args.slice(1));
+        cmdQuery(db, args.slice(1));
         break;
       case "in-progress":
-        await cmdInProgress(db, args.slice(1));
+        cmdInProgress(db, args.slice(1));
         break;
       default:
         console.error(`Unknown command: ${command}\n`);
         usage();
     }
   } finally {
-    await db.close();
+    db.close();
   }
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+main();

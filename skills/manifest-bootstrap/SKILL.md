@@ -19,7 +19,7 @@ tools:
 
 ## Purpose
 
-Build a manifest dependency graph for a project by reading open GitHub issues, analyzing the codebase, inferring dependencies, and seeding a PGlite database. The result is a queryable graph that answers: *what work exists, what depends on what, and what can run now?*
+Build a manifest dependency graph for a project by reading open GitHub issues, analyzing the codebase, inferring dependencies, and seeding a SQLite database. The result is a queryable graph that answers: *what work exists, what depends on what, and what can run now?*
 
 Reference: `docs/MANIFEST_SYSTEM_DESIGN_V2.md` Sections 10.1-10.4
 
@@ -59,7 +59,7 @@ Read the project's `CLAUDE.md` and extract the `context-path` setting:
 grep -E '^\s*-\s*\*\*context-path\*\*' CLAUDE.md
 ```
 
-The manifest database lives at `{context-path}/manifest/pgdata/`.
+The manifest database lives at `{context-path}/manifest/manifest.db`.
 
 ### 0.2 Verify Manifest CLI
 
@@ -85,7 +85,7 @@ Run: cd manifest && npm install
 ### 0.3 Ensure Database Directory
 
 ```bash
-mkdir -p {context-path}/manifest/pgdata
+mkdir -p {context-path}/manifest
 ```
 
 ### 0.4 Test CLI
@@ -100,7 +100,7 @@ If this fails, report the error and stop. If it succeeds (even with 0 items), th
 ```
 Manifest infrastructure verified:
   CLI: manifest/manifest-cli.ts
-  Database: {context-path}/manifest/pgdata/
+  Database: {context-path}/manifest/manifest.db
   Status: {item count} existing items
 ```
 
@@ -324,7 +324,7 @@ Present the mapping for confirmation if any assignments are uncertain.
 
 ---
 
-## Phase 4: Seed Work Items into PGlite
+## Phase 4: Seed Work Items into SQLite
 
 **Goal:** Generate SQL and apply it via the manifest CLI.
 
@@ -845,10 +845,10 @@ Because all seed SQL uses `INSERT ... ON CONFLICT (id) DO NOTHING`, re-running b
 - Existing edges are not duplicated
 - File predictions use UPDATE so they will refresh
 
-To force a full rebuild, delete the PGlite data directory and re-run:
+To force a full rebuild, delete the SQLite database file and re-run:
 
 ```bash
-rm -rf {context-path}/manifest/pgdata
+rm -f {context-path}/manifest/manifest.db
 manifest-bootstrap
 ```
 

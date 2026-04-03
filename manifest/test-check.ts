@@ -1,4 +1,4 @@
-import { PGlite } from "@electric-sql/pglite";
+import Database from "better-sqlite3";
 import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,13 +15,19 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
  *   - new-issues: list manifest issue numbers
  */
 
-async function assert(condition: boolean, msg: string) {
+function assert(condition: boolean, msg: string) {
   if (!condition) throw new Error(`FAIL: ${msg}`);
-  console.log(`  ✓ ${msg}`);
+  console.log(`  \u2713 ${msg}`);
 }
 
-async function seedCheckTestData(db: PGlite) {
-  await db.exec(`
+function parseJsonArray(v: unknown): string[] {
+  if (typeof v === "string") return JSON.parse(v);
+  if (Array.isArray(v)) return v;
+  return [];
+}
+
+function seedCheckTestData(db: Database.Database) {
+  db.exec(`
     -- Phase/track structure
     INSERT INTO work_items (id, name, kind, state) VALUES
       ('phase:core', 'Phase 1: Core', 'phase', 'planned'),
@@ -39,9 +45,9 @@ async function seedCheckTestData(db: PGlite) {
       'test-org/test-repo',
       10,
       'https://github.com/test-org/test-repo/issues/10',
-      ARRAY['src/widget.ts', 'src/utils.ts'],
-      '{}',
-      '{"bootstrap_status":"active","needs_human":false}'::jsonb,
+      '["src/widget.ts", "src/utils.ts"]',
+      '[]',
+      '{"bootstrap_status":"active","needs_human":false}',
       '2026-01-01T00:00:00Z'
     );
 
@@ -57,8 +63,8 @@ async function seedCheckTestData(db: PGlite) {
       'test-org/test-repo',
       20,
       'https://github.com/test-org/test-repo/issues/20',
-      ARRAY['src/widget.ts', 'src/widget-v2.ts'],
-      '{"bootstrap_status":"active","needs_human":false}'::jsonb,
+      '["src/widget.ts", "src/widget-v2.ts"]',
+      '{"bootstrap_status":"active","needs_human":false}',
       '2026-03-01T00:00:00Z'
     );
 
@@ -74,9 +80,9 @@ async function seedCheckTestData(db: PGlite) {
       'test-org/test-repo',
       5,
       'https://github.com/test-org/test-repo/issues/5',
-      ARRAY['src/db.ts', 'src/model.ts', 'src/config.ts'],
-      ARRAY['src/db.ts', 'src/model.ts', 'src/migrations.ts'],
-      '{"bootstrap_status":"active","needs_human":false}'::jsonb
+      '["src/db.ts", "src/model.ts", "src/config.ts"]',
+      '["src/db.ts", "src/model.ts", "src/migrations.ts"]',
+      '{"bootstrap_status":"active","needs_human":false}'
     );
 
     -- Another done item with reconciliation data (for drift testing)
@@ -91,9 +97,9 @@ async function seedCheckTestData(db: PGlite) {
       'test-org/test-repo',
       6,
       'https://github.com/test-org/test-repo/issues/6',
-      ARRAY['src/auth.ts', 'src/middleware.ts'],
-      ARRAY['src/auth.ts', 'src/middleware.ts', 'src/migrations.ts', 'src/config.ts'],
-      '{"bootstrap_status":"active","needs_human":false}'::jsonb
+      '["src/auth.ts", "src/middleware.ts"]',
+      '["src/auth.ts", "src/middleware.ts", "src/migrations.ts", "src/config.ts"]',
+      '{"bootstrap_status":"active","needs_human":false}'
     );
 
     -- A frontier item with no overlap (isolated)
@@ -108,8 +114,8 @@ async function seedCheckTestData(db: PGlite) {
       'test-org/test-repo',
       30,
       'https://github.com/test-org/test-repo/issues/30',
-      ARRAY['docs/README.md'],
-      '{"bootstrap_status":"active","needs_human":false}'::jsonb
+      '["docs/README.md"]',
+      '{"bootstrap_status":"active","needs_human":false}'
     );
 
     -- Edges
@@ -123,13 +129,14 @@ async function seedCheckTestData(db: PGlite) {
   `);
 }
 
-async function run() {
+function run() {
   console.log("Manifest check subcommand tests\n");
 
-  const db = await PGlite.create("memory://");
-  await applySchema(db);
-  await seedCheckTestData(db);
-  console.log("  ✓ Test data seeded\n");
+  const db = new Database(":memory:");
+  db.pragma("foreign_keys = ON");
+  applySchema(db);
+  seedCheckTestData(db);
+  console.log("  \u2713 Test data seeded\n");
 
   // ── Test 1: Supersession detection ──────────────────────────────
   console.log("1. Supersession detection (SQL query)");
@@ -138,27 +145,28 @@ async function run() {
     resolve(__dirname, "queries", "superseded.sql"),
     "utf-8"
   );
-  const superseded = await db.query<{
+  const superseded = db.prepare(supersededSql).all() as {
     older_id: string;
     newer_id: string;
-    shared_files: string[];
-  }>(supersededSql);
+    shared_files: string;
+  }[];
 
-  await assert(superseded.rows.length === 1, "Exactly 1 supersession pair detected");
-  await assert(
-    superseded.rows[0].older_id === "test#10",
+  assert(superseded.length === 1, "Exactly 1 supersession pair detected");
+  assert(
+    superseded[0].older_id === "test#10",
     "Older item is test#10 (in_progress)"
   );
-  await assert(
-    superseded.rows[0].newer_id === "test#20",
+  assert(
+    superseded[0].newer_id === "test#20",
     "Newer item is test#20 (planned, overlapping files)"
   );
-  await assert(
-    superseded.rows[0].shared_files.includes("src/widget.ts"),
+  const supersededFiles = parseJsonArray(superseded[0].shared_files);
+  assert(
+    supersededFiles.includes("src/widget.ts"),
     "Shared file src/widget.ts detected"
   );
-  await assert(
-    superseded.rows[0].shared_files.length === 1,
+  assert(
+    supersededFiles.length === 1,
     "Only 1 shared file (src/widget.ts)"
   );
 
@@ -169,42 +177,47 @@ async function run() {
     resolve(__dirname, "queries", "reconcile.sql"),
     "utf-8"
   );
-  const reconcile = await db.query<{
+  const reconcile = db.prepare(reconcileSql).all() as {
     id: string;
-    hits: string[];
-    misses: string[];
-    false_positives: string[];
-  }>(reconcileSql);
+    hits: string;
+    misses: string;
+    false_positives: string;
+  }[];
 
-  await assert(reconcile.rows.length === 2, "2 items eligible for reconciliation");
+  assert(reconcile.length === 2, "2 items eligible for reconciliation");
 
-  const item5 = reconcile.rows.find((r) => r.id === "test#5");
-  await assert(item5 !== undefined, "test#5 found in reconciliation");
-  await assert(
-    item5!.hits.length === 2,
+  const item5 = reconcile.find((r) => r.id === "test#5");
+  assert(item5 !== undefined, "test#5 found in reconciliation");
+  const item5hits = parseJsonArray(item5!.hits);
+  const item5misses = parseJsonArray(item5!.misses);
+  const item5fp = parseJsonArray(item5!.false_positives);
+  assert(
+    item5hits.length === 2,
     "test#5 has 2 hits (src/db.ts, src/model.ts)"
   );
-  await assert(
-    item5!.misses.includes("src/migrations.ts"),
+  assert(
+    item5misses.includes("src/migrations.ts"),
     "test#5 missed src/migrations.ts"
   );
-  await assert(
-    item5!.false_positives.includes("src/config.ts"),
+  assert(
+    item5fp.includes("src/config.ts"),
     "test#5 false positive: src/config.ts"
   );
 
-  const item6 = reconcile.rows.find((r) => r.id === "test#6");
-  await assert(item6 !== undefined, "test#6 found in reconciliation");
-  await assert(
-    item6!.hits.length === 2,
+  const item6 = reconcile.find((r) => r.id === "test#6");
+  assert(item6 !== undefined, "test#6 found in reconciliation");
+  const item6hits = parseJsonArray(item6!.hits);
+  const item6misses = parseJsonArray(item6!.misses);
+  assert(
+    item6hits.length === 2,
     "test#6 has 2 hits (src/auth.ts, src/middleware.ts)"
   );
-  await assert(
-    item6!.misses.includes("src/migrations.ts"),
+  assert(
+    item6misses.includes("src/migrations.ts"),
     "test#6 missed src/migrations.ts"
   );
-  await assert(
-    item6!.misses.includes("src/config.ts"),
+  assert(
+    item6misses.includes("src/config.ts"),
     "test#6 missed src/config.ts"
   );
 
@@ -215,22 +228,19 @@ async function run() {
     resolve(__dirname, "queries", "overlap.sql"),
     "utf-8"
   );
-  const overlap = await db.query<{
+  const overlap = db.prepare(overlapSql).all() as {
     node_a: string;
     node_b: string;
-    shared_files: string[];
-  }>(overlapSql);
+    shared_files: string;
+  }[];
 
-  // test#20 (planned, frontier) and test#30 (planned, frontier) have no overlap
-  // test#20 shares src/widget.ts with test#10, but test#10 is in_progress not planned
-  // So the frontier overlap check only considers planned items
-  await assert(
-    overlap.rows.length === 0,
+  assert(
+    overlap.length === 0,
     "No overlap among frontier items (test#20 and test#30 have disjoint files)"
   );
 
   // Add another frontier item that overlaps with test#20
-  await db.exec(`
+  db.exec(`
     INSERT INTO work_items (
       id, name, kind, state, predicted_files, meta
     ) VALUES (
@@ -238,74 +248,67 @@ async function run() {
       'Widget tests',
       'issue',
       'planned',
-      ARRAY['src/widget.ts', 'tests/widget.test.ts'],
-      '{"needs_human":false}'::jsonb
+      '["src/widget.ts", "tests/widget.test.ts"]',
+      '{"needs_human":false}'
     )
   `);
 
-  const overlap2 = await db.query<{
+  const overlap2 = db.prepare(overlapSql).all() as {
     node_a: string;
     node_b: string;
-    shared_files: string[];
-  }>(overlapSql);
+    shared_files: string;
+  }[];
 
-  await assert(overlap2.rows.length === 1, "1 overlap pair after adding test#21");
-  await assert(
-    overlap2.rows[0].shared_files.includes("src/widget.ts"),
+  assert(overlap2.length === 1, "1 overlap pair after adding test#21");
+  const overlap2Files = parseJsonArray(overlap2[0].shared_files);
+  assert(
+    overlap2Files.includes("src/widget.ts"),
     "Overlap is on src/widget.ts"
   );
 
   // ── Test 4: Drift detection ────────────────────────────────────
   console.log("\n4. Drift detection");
 
-  // First, simulate reconciliation being stored in meta (as the CLI reconcile command does)
-  await db.query(
-    `UPDATE work_items SET meta = jsonb_set(meta, '{reconciliation}', $1::jsonb) WHERE id = $2`,
-    [
-      JSON.stringify({
-        hits: ["src/db.ts", "src/model.ts"],
-        misses: ["src/migrations.ts"],
-        false_positives: ["src/config.ts"],
-        accuracy: 0.5,
-        checked_at: new Date().toISOString(),
-      }),
-      "test#5",
-    ]
+  // Simulate reconciliation being stored in meta
+  db.prepare(
+    `UPDATE work_items SET meta = json_set(meta, '$.reconciliation', json(?)) WHERE id = ?`
+  ).run(
+    JSON.stringify({
+      hits: ["src/db.ts", "src/model.ts"],
+      misses: ["src/migrations.ts"],
+      false_positives: ["src/config.ts"],
+      accuracy: 0.5,
+      checked_at: new Date().toISOString(),
+    }),
+    "test#5"
   );
-  await db.query(
-    `UPDATE work_items SET meta = jsonb_set(meta, '{reconciliation}', $1::jsonb) WHERE id = $2`,
-    [
-      JSON.stringify({
-        hits: ["src/auth.ts", "src/middleware.ts"],
-        misses: ["src/migrations.ts", "src/config.ts"],
-        false_positives: [],
-        accuracy: 0.5,
-        checked_at: new Date().toISOString(),
-      }),
-      "test#6",
-    ]
+  db.prepare(
+    `UPDATE work_items SET meta = json_set(meta, '$.reconciliation', json(?)) WHERE id = ?`
+  ).run(
+    JSON.stringify({
+      hits: ["src/auth.ts", "src/middleware.ts"],
+      misses: ["src/migrations.ts", "src/config.ts"],
+      false_positives: [],
+      accuracy: 0.5,
+      checked_at: new Date().toISOString(),
+    }),
+    "test#6"
   );
 
   // Now query for drift (files missed in 2+ items)
-  const driftResult = await db.query<{
-    id: string;
-    misses: unknown;
-  }>(`
-    SELECT id, meta->'reconciliation'->'misses' AS misses
+  const driftResult = db.prepare(`
+    SELECT id, json_extract(meta, '$.reconciliation.misses') AS misses
     FROM work_items
-    WHERE meta->'reconciliation'->'misses' IS NOT NULL
-      AND jsonb_array_length(meta->'reconciliation'->'misses') > 0
-  `);
+    WHERE json_extract(meta, '$.reconciliation.misses') IS NOT NULL
+      AND json_array_length(json_extract(meta, '$.reconciliation.misses')) > 0
+  `).all() as { id: string; misses: string }[];
 
-  await assert(driftResult.rows.length === 2, "2 items have reconciliation misses");
+  assert(driftResult.length === 2, "2 items have reconciliation misses");
 
   // Compute drift frequency
   const fileMissCounts: Record<string, string[]> = {};
-  for (const row of driftResult.rows) {
-    const misses: string[] =
-      typeof row.misses === "string"
-        ? JSON.parse(row.misses)
-        : (row.misses as string[]);
+  for (const row of driftResult) {
+    const misses = parseJsonArray(row.misses);
     for (const file of misses) {
       if (!fileMissCounts[file]) fileMissCounts[file] = [];
       fileMissCounts[file].push(row.id);
@@ -316,12 +319,12 @@ async function run() {
     ([, ids]) => ids.length >= 2
   );
 
-  await assert(driftFiles.length === 1, "1 drift file detected (src/migrations.ts)");
-  await assert(
+  assert(driftFiles.length === 1, "1 drift file detected (src/migrations.ts)");
+  assert(
     driftFiles[0][0] === "src/migrations.ts",
     "Drift file is src/migrations.ts"
   );
-  await assert(
+  assert(
     driftFiles[0][1].length === 2,
     "src/migrations.ts missed in 2 items"
   );
@@ -329,28 +332,25 @@ async function run() {
   // ── Test 5: New issues listing ─────────────────────────────────
   console.log("\n5. New issues listing");
 
-  const newIssues = await db.query<{
-    repo: string;
-    issue_number: number;
-  }>(`
+  const newIssues = db.prepare(`
     SELECT repo, issue_number
     FROM work_items
     WHERE issue_number IS NOT NULL AND repo IS NOT NULL
     ORDER BY repo, issue_number
-  `);
+  `).all() as { repo: string; issue_number: number }[];
 
-  await assert(newIssues.rows.length === 5, "5 issues with issue_number in manifest");
-  const numbers = newIssues.rows.map((r) => r.issue_number);
-  await assert(numbers.includes(5), "Issue #5 present");
-  await assert(numbers.includes(6), "Issue #6 present");
-  await assert(numbers.includes(10), "Issue #10 present");
-  await assert(numbers.includes(20), "Issue #20 present");
-  await assert(numbers.includes(30), "Issue #30 present");
+  assert(newIssues.length === 5, "5 issues with issue_number in manifest");
+  const numbers = newIssues.map((r) => r.issue_number);
+  assert(numbers.includes(5), "Issue #5 present");
+  assert(numbers.includes(6), "Issue #6 present");
+  assert(numbers.includes(10), "Issue #10 present");
+  assert(numbers.includes(20), "Issue #20 present");
+  assert(numbers.includes(30), "Issue #30 present");
 
   // ── Test 6: Supersession with scope_hint match ─────────────────
   console.log("\n6. Supersession via scope_hint (no file overlap)");
 
-  await db.exec(`
+  db.exec(`
     INSERT INTO work_items (
       id, name, kind, state, scope_hint,
       predicted_files, meta, updated_at
@@ -360,8 +360,8 @@ async function run() {
       'issue',
       'in_progress',
       'auth-system',
-      ARRAY['src/old-auth.ts'],
-      '{"needs_human":false}'::jsonb,
+      '["src/old-auth.ts"]',
+      '{"needs_human":false}',
       '2026-01-15T00:00:00Z'
     ), (
       'test#50',
@@ -369,33 +369,36 @@ async function run() {
       'issue',
       'planned',
       'auth-system',
-      ARRAY['src/new-auth.ts'],
-      '{"needs_human":false}'::jsonb,
+      '["src/new-auth.ts"]',
+      '{"needs_human":false}',
       '2026-03-15T00:00:00Z'
     )
   `);
 
-  const superseded2 = await db.query<{
+  const superseded2 = db.prepare(supersededSql).all() as {
     older_id: string;
     newer_id: string;
-    shared_files: string[];
-  }>(supersededSql);
+    shared_files: string;
+  }[];
 
-  const scopeMatch = superseded2.rows.find(
+  const scopeMatch = superseded2.find(
     (r) => r.older_id === "test#40" && r.newer_id === "test#50"
   );
-  await assert(scopeMatch !== undefined, "Scope-based supersession detected (test#40 -> test#50)");
-  await assert(
-    scopeMatch!.shared_files.length === 0,
+  assert(scopeMatch !== undefined, "Scope-based supersession detected (test#40 -> test#50)");
+  const scopeFiles = parseJsonArray(scopeMatch!.shared_files);
+  assert(
+    scopeFiles.length === 0,
     "No shared files (supersession is scope-based)"
   );
 
   // ── Done ────────────────────────────────────────────────────────
-  await db.close();
+  db.close();
   console.log("\nAll tests passed.");
 }
 
-run().catch((err) => {
+try {
+  run();
+} catch (err: any) {
   console.error(err);
   process.exit(1);
-});
+}

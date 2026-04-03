@@ -59,7 +59,7 @@ Warning: manifest dependencies not installed.
 Run: cd manifest && npm install
 ```
 
-### 0.3 Verify PGlite database
+### 0.3 Verify SQLite database
 
 ```bash
 node --import tsx manifest/manifest-cli.ts status

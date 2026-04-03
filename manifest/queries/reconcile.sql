@@ -10,28 +10,43 @@ SELECT
   w.name,
   w.predicted_files,
   w.actual_files,
-  ARRAY(
-    SELECT f FROM (
-      SELECT unnest(w.predicted_files) AS f
-      INTERSECT
-      SELECT unnest(w.actual_files) AS f
-    ) h ORDER BY f
+  COALESCE(
+    (
+      SELECT json_group_array(f)
+      FROM (
+        SELECT DISTINCT pf.value AS f
+        FROM json_each(w.predicted_files) pf
+        WHERE pf.value IN (SELECT af.value FROM json_each(w.actual_files) af)
+        ORDER BY f
+      )
+    ),
+    '[]'
   ) AS hits,
-  ARRAY(
-    SELECT f FROM (
-      SELECT unnest(w.actual_files) AS f
-      EXCEPT
-      SELECT unnest(w.predicted_files) AS f
-    ) m ORDER BY f
+  COALESCE(
+    (
+      SELECT json_group_array(f)
+      FROM (
+        SELECT DISTINCT af.value AS f
+        FROM json_each(w.actual_files) af
+        WHERE af.value NOT IN (SELECT pf.value FROM json_each(w.predicted_files) pf)
+        ORDER BY f
+      )
+    ),
+    '[]'
   ) AS misses,
-  ARRAY(
-    SELECT f FROM (
-      SELECT unnest(w.predicted_files) AS f
-      EXCEPT
-      SELECT unnest(w.actual_files) AS f
-    ) fp ORDER BY f
+  COALESCE(
+    (
+      SELECT json_group_array(f)
+      FROM (
+        SELECT DISTINCT pf.value AS f
+        FROM json_each(w.predicted_files) pf
+        WHERE pf.value NOT IN (SELECT af.value FROM json_each(w.actual_files) af)
+        ORDER BY f
+      )
+    ),
+    '[]'
   ) AS false_positives
 FROM work_items w
 WHERE w.state = 'done'
-  AND w.predicted_files <> '{}'
-  AND w.actual_files <> '{}';
+  AND w.predicted_files <> '[]'
+  AND w.actual_files <> '[]';

@@ -1,21 +1,21 @@
-import { PGlite } from "@electric-sql/pglite";
+import Database from "better-sqlite3";
 import { applySchema } from "./init.ts";
 
 /**
  * Smoke tests for manifest CLI queries.
  *
  * Instead of spawning the CLI as a subprocess, we test the core SQL queries
- * directly against an in-memory PGlite instance with the example seed data
+ * directly against an in-memory SQLite instance with the example seed data
  * from V2 design doc Section 15.
  */
 
-async function assert(condition: boolean, msg: string) {
+function assert(condition: boolean, msg: string) {
   if (!condition) throw new Error(`FAIL: ${msg}`);
-  console.log(`  ✓ ${msg}`);
+  console.log(`  \u2713 ${msg}`);
 }
 
-async function seedTestData(db: PGlite) {
-  await db.exec(`
+function seedTestData(db: Database.Database) {
+  db.exec(`
     INSERT INTO work_items (id, name, kind, state) VALUES
       ('phase:test_infra', 'Phase 1: Test Infrastructure', 'phase', 'planned'),
       ('track:phase1:api', 'API Layer', 'track', 'planned');
@@ -31,8 +31,8 @@ async function seedTestData(db: PGlite) {
         'test-repo',
         1,
         'https://github.com/test/repo/issues/1',
-        ARRAY['src/model.ts'],
-        '{"bootstrap_status":"active","needs_human":false}'::jsonb
+        '["src/model.ts"]',
+        '{"bootstrap_status":"active","needs_human":false}'
       ),
       (
         'test#2',
@@ -42,8 +42,8 @@ async function seedTestData(db: PGlite) {
         'test-repo',
         2,
         'https://github.com/test/repo/issues/2',
-        ARRAY['src/api.ts', 'src/model.ts'],
-        '{"bootstrap_status":"active","needs_human":false}'::jsonb
+        '["src/api.ts", "src/model.ts"]',
+        '{"bootstrap_status":"active","needs_human":false}'
       ),
       (
         'test#3',
@@ -53,8 +53,8 @@ async function seedTestData(db: PGlite) {
         'test-repo',
         3,
         'https://github.com/test/repo/issues/3',
-        ARRAY['tests/api.test.ts'],
-        '{"bootstrap_status":"active","needs_human":false}'::jsonb
+        '["tests/api.test.ts"]',
+        '{"bootstrap_status":"active","needs_human":false}'
       ),
       (
         'test#4',
@@ -64,8 +64,8 @@ async function seedTestData(db: PGlite) {
         'test-repo',
         4,
         'https://github.com/test/repo/issues/4',
-        '{}',
-        '{"needs_human":true}'::jsonb
+        '[]',
+        '{"needs_human":true}'
       );
 
     INSERT INTO edges (from_id, rel, to_id, confidence) VALUES
@@ -78,23 +78,24 @@ async function seedTestData(db: PGlite) {
   `);
 }
 
-async function run() {
+function run() {
   console.log("Manifest CLI query smoke tests\n");
 
-  const db = await PGlite.create("memory://");
-  await applySchema(db);
-  await seedTestData(db);
-  console.log("  ✓ Test data seeded\n");
+  const db = new Database(":memory:");
+  db.pragma("foreign_keys = ON");
+  applySchema(db);
+  seedTestData(db);
+  console.log("  \u2713 Test data seeded\n");
 
   // ── Test 1: Frontier query ───────────────────────────────────────
   console.log("1. Frontier query");
 
-  const frontier = await db.query<{ id: string; name: string }>(`
+  const frontier = db.prepare(`
     SELECT w.id, w.name
     FROM work_items w
     WHERE w.kind IN ('issue', 'capability')
       AND w.state = 'planned'
-      AND COALESCE((w.meta->>'needs_human')::boolean, false) = false
+      AND COALESCE(json_extract(w.meta, '$.needs_human'), 0) = 0
       AND NOT EXISTS (
         SELECT 1
         FROM edges e
@@ -104,32 +105,28 @@ async function run() {
           AND dep.state != 'done'
       )
     ORDER BY w.id
-  `);
+  `).all() as { id: string; name: string }[];
 
-  const frontierIds = frontier.rows.map((r) => r.id);
-  // test#1 is done, test#2 depends on test#1 (done) so it IS dispatchable
-  // test#3 depends on test#2 (planned) so it is NOT dispatchable
-  // test#4 needs_human=true so it is NOT dispatchable
-  await assert(frontierIds.includes("test#2"), "test#2 is on frontier (dep test#1 is done)");
-  await assert(!frontierIds.includes("test#1"), "test#1 excluded (already done)");
-  await assert(!frontierIds.includes("test#3"), "test#3 excluded (dep test#2 not done)");
-  await assert(!frontierIds.includes("test#4"), "test#4 excluded (needs_human=true)");
-  await assert(frontierIds.length === 1, "Exactly 1 frontier item");
+  const frontierIds = frontier.map((r) => r.id);
+  assert(frontierIds.includes("test#2"), "test#2 is on frontier (dep test#1 is done)");
+  assert(!frontierIds.includes("test#1"), "test#1 excluded (already done)");
+  assert(!frontierIds.includes("test#3"), "test#3 excluded (dep test#2 not done)");
+  assert(!frontierIds.includes("test#4"), "test#4 excluded (needs_human=true)");
+  assert(frontierIds.length === 1, "Exactly 1 frontier item");
 
   // ── Test 2: Mark done and recompute frontier ─────────────────────
   console.log("\n2. Mark done + frontier recompute");
 
-  await db.query(
-    "UPDATE work_items SET state = 'done', updated_at = now() WHERE id = $1",
-    ["test#2"]
-  );
+  db.prepare(
+    "UPDATE work_items SET state = 'done', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?"
+  ).run("test#2");
 
-  const frontier2 = await db.query<{ id: string }>(`
+  const frontier2 = db.prepare(`
     SELECT w.id
     FROM work_items w
     WHERE w.kind IN ('issue', 'capability')
       AND w.state = 'planned'
-      AND COALESCE((w.meta->>'needs_human')::boolean, false) = false
+      AND COALESCE(json_extract(w.meta, '$.needs_human'), 0) = 0
       AND NOT EXISTS (
         SELECT 1
         FROM edges e
@@ -139,20 +136,16 @@ async function run() {
           AND dep.state != 'done'
       )
     ORDER BY w.id
-  `);
+  `).all() as { id: string }[];
 
-  const frontier2Ids = frontier2.rows.map((r) => r.id);
-  await assert(frontier2Ids.includes("test#3"), "test#3 now on frontier after test#2 done");
-  await assert(!frontier2Ids.includes("test#2"), "test#2 no longer on frontier (now done)");
+  const frontier2Ids = frontier2.map((r) => r.id);
+  assert(frontier2Ids.includes("test#3"), "test#3 now on frontier after test#2 done");
+  assert(!frontier2Ids.includes("test#2"), "test#2 no longer on frontier (now done)");
 
   // ── Test 3: Hierarchical status rollup ───────────────────────────
   console.log("\n3. Status rollup");
 
-  const rollup = await db.query<{
-    name: string;
-    total_items: string;
-    done_items: string;
-  }>(`
+  const rollup = db.prepare(`
     WITH RECURSIVE tree AS (
       SELECT
         parent.id AS root_id,
@@ -173,50 +166,48 @@ async function run() {
     )
     SELECT
       root.name,
-      COUNT(*) FILTER (WHERE leaf.kind IN ('issue', 'capability'))::text AS total_items,
-      COUNT(*) FILTER (
-        WHERE leaf.kind IN ('issue', 'capability') AND leaf.state = 'done'
-      )::text AS done_items
+      COUNT(CASE WHEN leaf.kind IN ('issue', 'capability') THEN 1 END) AS total_items,
+      COUNT(CASE WHEN leaf.kind IN ('issue', 'capability') AND leaf.state = 'done' THEN 1 END) AS done_items
     FROM tree
     JOIN work_items root ON root.id = tree.root_id
     JOIN work_items leaf ON leaf.id = tree.child_id
     GROUP BY root.id, root.name
     ORDER BY root.name
-  `);
+  `).all() as { name: string; total_items: number; done_items: number }[];
 
   // Track has 3 direct issues (test#1, test#2, test#3); test#4 not part of track
-  const track = rollup.rows.find((r) => r.name === "API Layer");
-  await assert(track !== undefined, "API Layer track found in rollup");
-  await assert(track!.total_items === "3", "Track has 3 total issue items");
-  await assert(track!.done_items === "2", "Track has 2 done items (test#1, test#2)");
+  const track = rollup.find((r) => r.name === "API Layer");
+  assert(track !== undefined, "API Layer track found in rollup");
+  assert(track!.total_items === 3, "Track has 3 total issue items");
+  assert(track!.done_items === 2, "Track has 2 done items (test#1, test#2)");
 
   // Phase rolls up through track, so it should see the same leaf items
-  const phase = rollup.rows.find((r) => r.name === "Phase 1: Test Infrastructure");
-  await assert(phase !== undefined, "Phase found in rollup");
-  await assert(phase!.total_items === "3", "Phase has 3 total items (via track)");
-  await assert(phase!.done_items === "2", "Phase has 2 done items (via track)");
+  const phase = rollup.find((r) => r.name === "Phase 1: Test Infrastructure");
+  assert(phase !== undefined, "Phase found in rollup");
+  assert(phase!.total_items === 3, "Phase has 3 total items (via track)");
+  assert(phase!.done_items === 2, "Phase has 2 done items (via track)");
 
   // ── Test 4: Item not found handling ──────────────────────────────
   console.log("\n4. Edge cases");
 
-  const missing = await db.query<{ id: string }>(
-    "SELECT id FROM work_items WHERE id = $1",
-    ["nonexistent"]
-  );
-  await assert(missing.rows.length === 0, "Nonexistent item returns empty result");
+  const missing = db.prepare(
+    "SELECT id FROM work_items WHERE id = ?"
+  ).all("nonexistent") as { id: string }[];
+  assert(missing.length === 0, "Nonexistent item returns empty result");
 
-  const alreadyDone = await db.query<{ state: string }>(
-    "SELECT state FROM work_items WHERE id = $1",
-    ["test#1"]
-  );
-  await assert(alreadyDone.rows[0].state === "done", "test#1 state is 'done'");
+  const alreadyDone = db.prepare(
+    "SELECT state FROM work_items WHERE id = ?"
+  ).get("test#1") as { state: string };
+  assert(alreadyDone.state === "done", "test#1 state is 'done'");
 
   // ── Done ─────────────────────────────────────────────────────────
-  await db.close();
+  db.close();
   console.log("\nAll tests passed.");
 }
 
-run().catch((err) => {
+try {
+  run();
+} catch (err: any) {
   console.error(err);
   process.exit(1);
-});
+}

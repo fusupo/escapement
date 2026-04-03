@@ -6,11 +6,11 @@
  * along with phase and track hierarchy entities.
  *
  * Usage:
- *   node --import tsx manifest/seed.ts          # seed real PGlite
+ *   node --import tsx manifest/seed.ts          # seed real SQLite DB
  *   import { seed } from "./seed.ts"            # programmatic use
  */
 
-import type { PGlite } from "@electric-sql/pglite";
+import type { Database } from "better-sqlite3";
 import { initManifest } from "./init.ts";
 
 // ---------------------------------------------------------------------------
@@ -231,56 +231,58 @@ const hierarchyEdges: Edge[] = [
 // ---------------------------------------------------------------------------
 
 /**
- * Insert all manifest work items and edges into the given PGlite instance.
+ * Insert all manifest work items and edges into the given SQLite instance.
  * Uses INSERT ... ON CONFLICT DO NOTHING for idempotency.
  */
-export async function seed(db: PGlite): Promise<{
+export function seed(db: Database): {
   itemsInserted: number;
   edgesInserted: number;
-}> {
+} {
   const allItems: WorkItem[] = [phase, ...tracks, ...issues];
   const allEdges: Edge[] = [...dependencyEdges, ...hierarchyEdges];
 
   let itemsInserted = 0;
   let edgesInserted = 0;
 
+  const insertItem = db.prepare(
+    `INSERT INTO work_items (id, name, kind, state, repo, issue_number, issue_url, predicted_files, meta)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (id) DO NOTHING`
+  );
+
+  const insertEdge = db.prepare(
+    `INSERT INTO edges (from_id, rel, to_id, confidence)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT (from_id, rel, to_id) DO NOTHING`
+  );
+
   // Insert work items
   for (const item of allItems) {
-    const result = await db.query(
-      `INSERT INTO work_items (id, name, kind, state, repo, issue_number, issue_url, predicted_files, meta)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       ON CONFLICT (id) DO NOTHING`,
-      [
-        item.id,
-        item.name,
-        item.kind,
-        item.state,
-        item.repo ?? null,
-        item.issue_number ?? null,
-        item.issue_url ?? null,
-        item.predicted_files ?? [],
-        item.meta ? JSON.stringify(item.meta) : "{}",
-      ]
+    const result = insertItem.run(
+      item.id,
+      item.name,
+      item.kind,
+      item.state,
+      item.repo ?? null,
+      item.issue_number ?? null,
+      item.issue_url ?? null,
+      JSON.stringify(item.predicted_files ?? []),
+      item.meta ? JSON.stringify(item.meta) : "{}",
     );
-    if (result.affectedRows && result.affectedRows > 0) {
+    if (result.changes > 0) {
       itemsInserted++;
     }
   }
 
   // Insert edges
   for (const edge of allEdges) {
-    const result = await db.query(
-      `INSERT INTO edges (from_id, rel, to_id, confidence)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (from_id, rel, to_id) DO NOTHING`,
-      [
-        edge.from_id,
-        edge.rel,
-        edge.to_id,
-        edge.confidence ?? "certain",
-      ]
+    const result = insertEdge.run(
+      edge.from_id,
+      edge.rel,
+      edge.to_id,
+      edge.confidence ?? "certain",
     );
-    if (result.affectedRows && result.affectedRows > 0) {
+    if (result.changes > 0) {
       edgesInserted++;
     }
   }
@@ -297,10 +299,10 @@ const isMain =
   process.argv[1]?.endsWith("/seed.js");
 
 if (isMain) {
-  const db = await initManifest();
-  const result = await seed(db);
+  const db = initManifest();
+  const result = seed(db);
   console.log(
     `Manifest seeded: ${result.itemsInserted} work items, ${result.edgesInserted} edges`
   );
-  await db.close();
+  db.close();
 }

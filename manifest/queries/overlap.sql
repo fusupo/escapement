@@ -10,8 +10,9 @@ WITH frontier AS (
   FROM work_items w
   WHERE w.kind IN ('issue', 'capability')
     AND w.state = 'planned'
-    AND w.predicted_files <> '{}'
-    AND COALESCE((w.meta->>'needs_human')::boolean, false) = false
+    AND w.predicted_files <> '[]'
+    AND w.predicted_files IS NOT NULL
+    AND COALESCE(json_extract(w.meta, '$.needs_human'), 0) = 0
     AND NOT EXISTS (
       SELECT 1
       FROM edges e
@@ -24,15 +25,18 @@ WITH frontier AS (
 SELECT
   a.id AS node_a,
   b.id AS node_b,
-  ARRAY(
-    SELECT shared_file
+  (
+    SELECT json_group_array(af.value)
     FROM (
-      SELECT unnest(a.predicted_files) AS shared_file
-      INTERSECT
-      SELECT unnest(b.predicted_files) AS shared_file
-    ) s
-    ORDER BY shared_file
+      SELECT DISTINCT af.value
+      FROM json_each(a.predicted_files) af
+      JOIN json_each(b.predicted_files) bf ON af.value = bf.value
+      ORDER BY af.value
+    ) af
   ) AS shared_files
 FROM frontier a
 JOIN frontier b ON a.id < b.id
-WHERE a.predicted_files && b.predicted_files;
+WHERE EXISTS (
+  SELECT 1 FROM json_each(a.predicted_files) af
+  JOIN json_each(b.predicted_files) bf ON af.value = bf.value
+);

@@ -24,10 +24,8 @@ WITH RECURSIVE tree AS (
 )
 SELECT
   root.name,
-  COUNT(*) FILTER (WHERE leaf.kind IN ('issue', 'capability')) AS total_items,
-  COUNT(*) FILTER (
-    WHERE leaf.kind IN ('issue', 'capability') AND leaf.state = 'done'
-  ) AS done_items
+  COUNT(CASE WHEN leaf.kind IN ('issue', 'capability') THEN 1 END) AS total_items,
+  COUNT(CASE WHEN leaf.kind IN ('issue', 'capability') AND leaf.state = 'done' THEN 1 END) AS done_items
 FROM tree
 JOIN work_items root ON root.id = tree.root_id
 JOIN work_items leaf ON leaf.id = tree.child_id
