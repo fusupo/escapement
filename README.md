@@ -101,7 +101,7 @@ Operator involvement is typically focused on decision-making and judgment rather
 
 After merge, the scratchpad is archived.
 
-Before Claude Code compacts the session, the transcript is saved via the PreCompact hook.
+Before Claude Code compacts the session, the PreCompact hook saves the conversation since the last session log; `archive-work` saves the rest when it archives.
 This preserves planning, execution, and review context as durable artifacts.
 
 The session is then considered complete.
@@ -156,9 +156,9 @@ Skills are invoked automatically by Claude Code when relevant, or you can refere
 
 ## Hooks
 
-Escapement includes a **PreCompact hook** that captures your raw session transcript before Claude Code's automatic compaction. The hook copies the JSONL transcript to `SESSION_LOG_{N}.jsonl` in the **project root** — a minimal, reliable preservation step.
+Escapement includes a **PreCompact hook** that captures your raw session transcript before Claude Code compacts it (auto or manual). The hook writes only the conversation since the previous log to `SESSION_LOG_{N}.jsonl` in the **project root**, so a long session spanning many issues doesn't repeat itself in every log. See [Session Archiving](docs/SESSION-ARCHIVING.md#what-a-session-log-covers) for exactly what each log covers.
 
-The `archive-work` skill later converts these `.jsonl` files to readable markdown (using `scripts/convert-session-log.py`) and moves them to the archive directory.
+The `archive-work` skill later saves the session's tail since the last log, converts the `.jsonl` files to readable markdown (using `scripts/convert-session-log.py`), and moves them to the archive directory.
 
 **Requirements:** `jq` must be installed for the hook to function.
 
@@ -210,10 +210,11 @@ escapement/
 │   └── manifest-dispatch/    # Dispatch parallel work from manifest plan
 ├── hooks/
 │   ├── hooks.json            # Hook configuration
-│   └── archive-session-log.sh # PreCompact hook (JSONL copy)
+│   └── archive-session-log.sh # PreCompact hook (JSONL slice)
 ├── scripts/
 │   ├── convert-session-log.py # JSONL→markdown session log converter
-│   └── migrate-archives.py    # Migrate in-repo archives to context-path
+│   ├── migrate-archives.py    # Migrate in-repo archives to context-path
+│   └── slice-session-log.sh   # Transcript slicing with a per-session cursor
 ├── agents/                   # Specialized subagents
 │   └── scratchpad-planner.md # Codebase analysis for setup-work
 ├── docs/                     # Extended documentation
@@ -390,9 +391,13 @@ fusupo
 
 ## Version
 
-**Current:** 3.6.0
+**Current:** 3.6.1
 
 **Changelog:**
+- 3.6.1 (2026-10-19): Session logs no longer repeat the whole session (#55)
+  - **Sliced session logs**: The PreCompact hook writes only the conversation since the previous log, tracked by a per-session cursor (`scripts/slice-session-log.sh`). A session's first log still starts at the beginning
+  - **Session tail at archive time**: `archive-work` v2.4.0 saves the conversation since the last log, asking first if it ran on another branch
+  - **Commit guard**: `commit-changes` never stages `SESSION_LOG_*.jsonl` either
 - 3.6.0 (2026-02-26): Archive migration and chronological ordering (#31)
   - **Migration script** (#31): `scripts/migrate-archives.py` copies in-repo archives (`docs/dev/cc-archive/`) to context-path structure and backfills INDEX.md
   - **Chronological ordering**: INDEX.md now uses oldest-first ordering (both migration script and `archive-work` skill)

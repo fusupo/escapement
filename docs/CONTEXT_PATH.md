@@ -76,7 +76,7 @@ Key conventions:
 
 ### 3. Hook (archive-session-log.sh)
 
-The hook always writes `SESSION_LOG_{N}.md` to the **project root**, regardless of context-path configuration. This keeps session logs alongside the active scratchpad during work. The `archive-work` skill is responsible for moving session logs to the context directory at archive time.
+The hook always writes `SESSION_LOG_{N}.jsonl` to the **project root**, regardless of context-path configuration. This keeps session logs alongside the active scratchpad during work. The `archive-work` skill is responsible for moving session logs to the context directory at archive time. Each log holds only the conversation since the previous log (see [Session Archiving](SESSION-ARCHIVING.md#what-a-session-log-covers)).
 
 ### 4. Modified Skill (archive-work)
 
