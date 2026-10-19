@@ -4,6 +4,7 @@ description: Archive completed scratchpads and session logs to project history. 
 tools:
   - Read
   - Write
+  - Edit
   - Bash:mkdir *
   - Bash:mv *
   - Bash:cp *
@@ -220,6 +221,123 @@ This produces a markdown file with:
    The context directory is NOT a git repo managed by this skill — the operator handles
    that separately.
 
+### Phase 4.5: Project Lore Retro
+
+Before confirming the archive, perform a retro pass on `PROJECT_LORE.md` — the cumulative, cross-branch record of non-obvious project context. The archive moment is the highest-signal time for this: the work is done, but the mental model is still loaded.
+
+**Lore file location (cumulative, NOT under `{branch}/`):**
+- Context mode: `{context-path}/PROJECT_LORE.md`
+- In-repo mode: `PROJECT_LORE.md` at project root
+
+**What the lore file captures** (each entry: one line, tagged, with a *why*):
+- `[invariant]` — load-bearing constraints that must hold
+- `[gotcha]` — surprising behaviors in tools/libs/system
+- `[glossary]` — project-specific vocabulary
+- `[coupling]` — non-obvious "change X, check Y" relationships
+- `[do-not-touch]` — looks refactorable, has hidden constraints
+
+**Inclusion test:** *would a future session waste time, repeat a mistake, or make a wrong choice without this?* If no, skip.
+
+**Out of scope:** what code does (readable from source), what changed (git history), current task state (scratchpad), retrospective narrative ("this was tricky"), full decision records (if still load-bearing, it's an invariant).
+
+**Format bias:** high-signal, grep-able one-liners over narrative. Context is expensive.
+
+#### Steps
+
+1. **Identify scope of work:**
+   ```bash
+   MERGE_BASE=$(git merge-base HEAD origin/main 2>/dev/null || git merge-base HEAD main)
+   CHANGED_FILES=$(git diff --name-only "$MERGE_BASE" HEAD)
+   ```
+
+2. **Reconcile (edit/remove stale entries):**
+   If `PROJECT_LORE.md` exists at the resolved path:
+   - Read it
+   - Identify entries that reference files or domains in `$CHANGED_FILES`
+   - Surface those entries to the user as "potentially affected by this work"
+   - For each flagged entry, ask the user whether to keep / edit / remove:
+     ```
+     AskUserQuestion:
+       question: "This lore entry may be stale after this work. Action?"
+       header: "Reconcile"
+       options:
+         - "Keep as-is"
+         - "Edit (I'll provide replacement text)"
+         - "Remove"
+     ```
+   - Apply user choices. Skip this step if no entries are flagged.
+
+3. **Capture new entries:**
+   Ask the user whether the completed work surfaced lore worth capturing:
+   ```
+   AskUserQuestion:
+     question: "Any new project lore from this work?"
+     header: "Capture"
+     options:
+       - "Yes, walk me through categories"
+       - "No, skip"
+   ```
+   If yes, for each category prompt the user for entries, applying the inclusion test. When in doubt, **don't add** — noise is worse than omission.
+
+4. **Write `PROJECT_LORE.md`:**
+   Maintain this structure (initialize if newly creating):
+   ```markdown
+   # Project Lore
+
+   Non-obvious context for future sessions. Each entry: one-line rule, *why*.
+   Inclusion test: would a future session waste time, repeat a mistake, or
+   make a wrong choice without this?
+
+   ## Invariants
+   - rule — *why: reason*
+
+   ## Gotchas
+   - rule — *why: reason*
+
+   ## Glossary
+   - term — *why: definition/context*
+
+   ## Coupling
+   - rule — *why: reason*
+
+   ## Do-not-touch
+   - rule — *why: reason*
+   ```
+
+5. **First-run nudge (CLAUDE.md reference):**
+   If `PROJECT_LORE.md` was **newly created** in this retro, check whether the project's `CLAUDE.md` already references it:
+   ```bash
+   grep -q "PROJECT_LORE" CLAUDE.md
+   ```
+   If no match, offer to add a reference so the file auto-loads in future sessions:
+   ```
+   AskUserQuestion:
+     question: "Add @{lore-path}/PROJECT_LORE.md reference to CLAUDE.md so it auto-loads?"
+     header: "Auto-load"
+     options:
+       - "Yes, add reference"
+       - "No, I'll handle it manually"
+   ```
+   If yes, append to CLAUDE.md under an appropriate section (e.g., after "Escapement Settings" or in a "Project Context" section):
+   ```markdown
+   ## Project Context
+
+   @{relative-path-to-lore-file}
+   ```
+   - Context mode: `@../myproject-ctx/PROJECT_LORE.md` (or whatever the resolved path is)
+   - In-repo mode: `@PROJECT_LORE.md`
+
+   This is a **one-time nudge**, not enforcement — the user retains control.
+
+#### Skip condition
+
+If all of the following are true, skip the retro entirely:
+- No scratchpad tasks completed
+- No code changes (empty `$CHANGED_FILES`)
+- No existing `PROJECT_LORE.md` to reconcile
+
+In that case, there is nothing to reconcile and unlikely genuine lore to capture.
+
 ### Phase 5: Confirm with User
 
 ```
@@ -343,6 +461,10 @@ INDEX.md updated:
    - {context-path}/INDEX.md
    - Added row: {date} | {branch} | #{issue_number} | {status}
 
+Project lore (if changed):
+   - {context-path}/PROJECT_LORE.md
+   - {N} entries added / {M} reconciled
+
 Code repo cleanup:
    - Removed SCRATCHPAD_{issue_number}.md (git rm)
    - Removed SESSION_LOG_*.md from project root
@@ -372,11 +494,16 @@ Cleaned up:
    - Removed scratchpad from project root (tracked via git mv)
    - Removed session logs from project root
 
+Project lore (if changed):
+   - PROJECT_LORE.md
+   - {N} entries added / {M} reconciled
+
 {If committed}
 Committed: {commit hash}
    - Added: archive directory with scratchpad, session logs, README
    - Removed: SCRATCHPAD_{issue_number}.md from project root
    - Removed: SESSION_LOG_*.md from project root
+   - Modified: PROJECT_LORE.md (if changed)
 ```
 
 ## Archive Options
@@ -494,10 +621,11 @@ No PR found for this work.
 
 ---
 
-**Version:** 2.2.1
-**Last Updated:** 2026-02-26
+**Version:** 2.3.0
+**Last Updated:** 2026-04-17
 **Maintained By:** Escapement
 **Changelog:**
+- v2.3.0: Added Phase 4.5 Project Lore Retro — reconcile + capture non-obvious context (invariants, gotchas, glossary, coupling, do-not-touch) at archive time
 - v2.2.1: Extract JSONL→markdown conversion to reusable script (scripts/convert-session-log.py)
 - v2.2.0: Maintain INDEX.md manifest at context-path root on archive (#25)
 - v2.1.0: Added JSONL→markdown conversion (Phase 3.5) for simplified PreCompact hook (#27)
