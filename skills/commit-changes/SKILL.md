@@ -58,7 +58,7 @@ Execute these in parallel for efficiency:
 
 3. **Exclude Workflow Artifacts:**
    - **NEVER stage or commit** `SCRATCHPAD_*.md` files (working implementation plans)
-   - **NEVER stage or commit** `SESSION_LOG_*.md` files (session transcripts)
+   - **NEVER stage or commit** `SESSION_LOG_*` files (session transcripts, `.jsonl` or `.md`)
    - If these appear in `git status`, ignore them — they are ephemeral workflow files
 
 4. **Validate Commit-Worthiness:**
@@ -192,7 +192,7 @@ When unstaged changes exist across multiple areas:
 ## Quality Checks
 
 Before committing, verify:
-- [ ] No `SCRATCHPAD_*.md` or `SESSION_LOG_*.md` files staged
+- [ ] No `SCRATCHPAD_*.md` or `SESSION_LOG_*` files staged
 - [ ] No `console.log` or debug statements (unless intentional)
 - [ ] No TODO comments that should be addressed first
 - [ ] No secrets, API keys, or sensitive data
@@ -265,11 +265,11 @@ This skill would then use 🌐 for api changes, 🎨 for frontend changes, etc.
 - Commit secrets or credentials
 - Skip the body when context is needed
 - Add Claude attribution to commit messages
-- Commit SCRATCHPAD_*.md or SESSION_LOG_*.md files
+- Commit SCRATCHPAD_*.md or SESSION_LOG_* files
 
 ---
 
-**Version:** 1.0.0
-**Last Updated:** 2025-12-29
+**Version:** 1.0.1
+**Last Updated:** 2026-10-19
 **Maintained By:** Escapement
 **Converted From:** commands/commit.md
