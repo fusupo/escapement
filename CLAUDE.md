@@ -316,3 +316,7 @@ The `description` field should include natural language trigger patterns so Clau
 ## Escapement Settings
 
 - **context-path**: ../escapement-ctx
+
+## Project Context
+
+@../escapement-ctx/PROJECT_LORE.md
