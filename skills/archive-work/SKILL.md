@@ -11,6 +11,7 @@ tools:
   - Bash:realpath *
   - Bash:git *
   - Bash:python3 *
+  - Bash:bash *
   - Bash:rm *
   - Glob
   - Grep
@@ -59,6 +60,56 @@ This skill activates when the user says things like:
 - Fall back to `docs/dev/cc-archive/` (existing behavior)
 - Set `ARCHIVE_MODE=in-repo`
 
+### Phase 1.5: Capture Session Tail
+
+The PreCompact hook only writes session logs at compaction, so the conversation since the last compaction (or the last archive) has no log yet. Save it now so it is archived with this work, not with whichever issue the next compaction happens in. Run this **before** Phase 2 so the new log is found with the others.
+
+1. **Slice the current session's transcript** without moving its cursor yet:
+   ```bash
+   SLICER="${CLAUDE_PLUGIN_ROOT}/scripts/slice-session-log.sh"
+   TRANSCRIPT=$(bash "$SLICER" find "${CLAUDE_CODE_SESSION_ID:-}") &&
+     bash "$SLICER" slice "$TRANSCRIPT" . --no-advance
+   ```
+   - `find` fails (no `CLAUDE_CODE_SESSION_ID`, or no transcript): warn `Session tail not captured: {error}` and go on to Phase 2.
+   - `EMPTY`: nothing new since the last log. Go on to Phase 2.
+   - Otherwise it prints `FILE=… START=… END=… LINES=…`. Keep `FILE` and `END`.
+
+2. **Check whose conversation it is.** Transcript entries record the git branch they happened on:
+   ```bash
+   python3 -I - "$FILE" <<'EOF'
+   import collections, json, sys
+   branches, times = collections.Counter(), []
+   for line in open(sys.argv[1], encoding="utf-8"):
+       try:
+           entry = json.loads(line)
+       except json.JSONDecodeError:
+           continue
+       if entry.get("gitBranch"):
+           branches[entry["gitBranch"]] += 1
+       if entry.get("timestamp"):
+           times.append(entry["timestamp"])
+   print(dict(branches), times[0] if times else "-", times[-1] if times else "-")
+   EOF
+   ```
+
+3. **Include or leave it:**
+   - **Every branch is the current branch** (`git branch --show-current`): include it without asking. Run `bash "$SLICER" commit "$TRANSCRIPT" "$END"` and report `Captured session tail: {LINES} lines -> {FILE}`.
+   - **Otherwise** (e.g. archiving from `develop` after a merge, or a session that moved on to other work), ask:
+     ```
+     AskUserQuestion:
+       question: "The session since the last log ({LINES} lines, {size}, {first} to {last}) ran on branches {branch: count, ...}. Include it in this archive?"
+       header: "Session tail"
+       options:
+         - label: "Include in this archive"
+           description: "Archive it with this work"
+         - label: "Leave for the next log"
+           description: "Don't archive it now; the next session log picks it up"
+     ```
+     - **Include:** run `bash "$SLICER" commit "$TRANSCRIPT" "$END"`
+     - **Leave:** `rm "$FILE"`. The cursor stays put, so nothing is lost.
+
+The rest of this archive-work run lands in the session's next log.
+
 ### Phase 2: Detect Artifacts (Parallel)
 
 **Execute these searches in parallel** for faster detection:
@@ -70,7 +121,8 @@ This skill activates when the user says things like:
 2. **Find Session Logs:**
    - `Glob: SESSION_LOG_*.jsonl` in project root (current format — raw JSONL transcripts)
    - `Glob: SESSION_LOG_*.md` in project root (legacy format — pre-converted markdown)
-   - These are created by the PreCompact hook before auto-compaction
+   - These are created by the PreCompact hook at each compaction, and by Phase 1.5 for the session tail
+   - Each covers only the conversation since the previous log, not the whole session
    - Associate with scratchpad (same issue context)
 
 3. **Find Other Related Files:**
@@ -137,6 +189,8 @@ This produces a markdown file with:
 - Tool use in collapsible `<details>` blocks
 - Thinking blocks and system messages stripped
 - Long content truncated to 100 lines
+
+Because each log covers only its own stretch of the session, the metadata Timestamp is when that stretch began (usually the previous compaction), not when the session started.
 
 **The resulting `.md` file** is ready to be moved to the archive directory in Phase 4 (alongside any legacy `.md` session logs).
 
@@ -621,10 +675,11 @@ No PR found for this work.
 
 ---
 
-**Version:** 2.3.0
-**Last Updated:** 2026-04-17
+**Version:** 2.4.0
+**Last Updated:** 2026-10-19
 **Maintained By:** Escapement
 **Changelog:**
+- v2.4.0: Added Phase 1.5 Capture Session Tail — save the conversation since the last session log, with a branch check before including another branch's work (#55)
 - v2.3.0: Added Phase 4.5 Project Lore Retro — reconcile + capture non-obvious context (invariants, gotchas, glossary, coupling, do-not-touch) at archive time
 - v2.2.1: Extract JSONL→markdown conversion to reusable script (scripts/convert-session-log.py)
 - v2.2.0: Maintain INDEX.md manifest at context-path root on archive (#25)
