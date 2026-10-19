@@ -39,7 +39,8 @@ escapement/
 │   ├── hooks.json       # Hook configuration
 │   └── archive-session-log.sh  # PreCompact hook script
 ├── scripts/             # Reusable utility scripts for skills
-│   └── convert-session-log.py  # JSONL→markdown session log converter
+│   ├── convert-session-log.py  # JSONL→markdown session log converter
+│   └── slice-session-log.sh    # Writes the transcript part no earlier session log covers
 ├── agents/              # Future: specialized subagents
 ├── docs/                # Extended documentation
 │   ├── WORKFLOW.md      # Workflow explanation
@@ -80,11 +81,11 @@ escapement/
 
 ### Hooks
 
-**PreCompact hook** archives session transcripts before auto-compaction:
+**PreCompact hook** archives session transcripts before compaction (auto and manual):
 - Configured in `hooks/hooks.json`
 - Uses `${CLAUDE_PLUGIN_ROOT}` for portable paths
-- **Context-path aware**: writes to `{context-path}/{branch}/` if configured, otherwise project root
-- Creates `SESSION_LOG_{N}.md` files
+- Always writes to the project root; `archive-work` moves logs to the context path
+- Creates `SESSION_LOG_{N}.jsonl` files, each holding only the conversation since the previous log (via `scripts/slice-session-log.sh` and a per-session cursor)
 - Requires `jq` to be installed
 
 ### Agents
