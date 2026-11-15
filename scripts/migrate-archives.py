@@ -31,9 +31,11 @@ TITLE_RE = re.compile(r"^# (.+)$", re.MULTILINE)
 GITHUB_URL_RE = re.compile(r"\*\*GitHub URL:\*\*\s*(https://github\.com/\S+)")
 ISSUE_NUMBER_FROM_URL_RE = re.compile(r"/issues/(\d+)")
 SCRATCHPAD_TITLE_RE = re.compile(r"^# (.+?) - #\d+$", re.MULTILINE)
-CONTEXT_PATH_RE = re.compile(
-    r"^\s*-\s*\*\*context-path\*\*:\s*(\S+)", re.MULTILINE
-)
+SETTINGS_HEADING_RE = re.compile(r"^##[ \t]+Escapement Settings[ \t]*$")
+HEADING_RE = re.compile(r"^##?[ \t]")
+FENCE_OPEN_RE = re.compile(r"^[ \t]*(`{3,}|~{3,})")
+FENCE_CLOSE_RE = re.compile(r"^[ \t]*(`+|~+)[ \t]*$")
+CONTEXT_PATH_RE = re.compile(r"^[ \t]*[-*][ \t]+\*\*context-path\*\*:[ \t]*(.*)$")
 
 INDEX_HEADER = """# Archive Index
 
@@ -50,19 +52,71 @@ STATUS_NORMALIZE = {
 }
 
 
-def detect_context_path(project_root):
-    """Read context-path from project's CLAUDE.md.
+def parse_context_path(text, warn=lambda line: None):
+    """Extract the context-path value from CLAUDE.md text.
 
-    Uses the last match to avoid hitting examples inside code blocks.
+    Same rules as scripts/get-context-path.sh (keep them in sync; the shared
+    fixtures in scripts/fixtures/context-path/ are checked by
+    scripts/test-migrate-archives.py): only the first "## Escapement
+    Settings" section counts, up to the next "#" or "##" heading; fenced code
+    blocks are ignored; the value is the rest of the line with trailing
+    whitespace trimmed and one pair of surrounding quotes or backticks
+    removed. Unfenced settings outside the section are ignored and passed to
+    `warn` by 1-based line number.
+
+    Returns None when the setting is absent or empty.
     """
+    fence = ""
+    in_section = False
+    seen_section = False
+    value = None
+    for lineno, line in enumerate(text.split("\n"), start=1):
+        line = line.removesuffix("\r")
+        if fence:
+            close = FENCE_CLOSE_RE.match(line)
+            if close and close.group(1)[0] == fence[0] and len(close.group(1)) >= len(fence):
+                fence = ""
+            continue
+        opening = FENCE_OPEN_RE.match(line)
+        if opening:
+            fence = opening.group(1)
+            continue
+        if HEADING_RE.match(line):
+            in_section = not seen_section and bool(SETTINGS_HEADING_RE.match(line))
+            seen_section = seen_section or in_section
+            continue
+        setting = CONTEXT_PATH_RE.match(line)
+        if not setting:
+            continue
+        if not in_section:
+            warn(lineno)
+        elif value is None:
+            value = strip_quotes(setting.group(1).rstrip(" \t"))
+    return value or None
+
+
+def strip_quotes(s):
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in "\"'`":
+        return s[1:-1]
+    return s
+
+
+def detect_context_path(project_root):
+    """Read context-path from the project's CLAUDE.md, resolved against the project root."""
     claude_md = project_root / "CLAUDE.md"
     if not claude_md.exists():
         return None
-    text = claude_md.read_text()
-    matches = CONTEXT_PATH_RE.findall(text)
-    if matches:
-        return (project_root / matches[-1]).resolve()
-    return None
+
+    def warn(lineno):
+        print(
+            f'warning: {claude_md}:{lineno}: context-path outside "## Escapement Settings" is ignored',
+            file=sys.stderr,
+        )
+
+    value = parse_context_path(claude_md.read_text(), warn)
+    if value is None:
+        return None
+    return (project_root / value).resolve()
 
 
 def derive_branch_name(dirname):
