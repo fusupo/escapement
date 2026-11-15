@@ -41,7 +41,13 @@ This skill activates when the user says things like:
 
 ### Phase 1: Detect Context Path
 
-**Read project's CLAUDE.md** and check for Escapement Settings:
+**Read the context-path setting** with the shared parser:
+
+```bash
+CONTEXT_PATH=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/get-context-path.sh" CLAUDE.md)
+```
+
+It reads only the `## Escapement Settings` section of CLAUDE.md and ignores fenced code blocks, so documentation examples such as this one never match:
 
 ```markdown
 ## Escapement Settings
@@ -49,7 +55,9 @@ This skill activates when the user says things like:
 - **context-path**: ../myproject-ctx
 ```
 
-**If context-path is set:**
+Empty output means context-path is not set. Don't grep or sed CLAUDE.md for the setting yourself: the first match is often an example (#57).
+
+**If context-path is set** (non-empty output):
 - Resolve the path relative to project root
 - Determine current branch name
 - Target directory: `{context-path}/{branch}/archive/`
@@ -202,7 +210,7 @@ Because each log covers only its own stretch of the session, the metadata Timest
 
    **Context mode:**
    ```bash
-   CONTEXT_PATH=$(sed -n 's/^[[:space:]]*-[[:space:]]*\*\*context-path\*\*:[[:space:]]*\([^[:space:]]*\).*/\1/p' CLAUDE.md | head -1)
+   CONTEXT_PATH=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/get-context-path.sh" CLAUDE.md)
    BRANCH=$(git branch --show-current)
    ARCHIVE_DIR="$CONTEXT_PATH/$BRANCH/archive"
    mkdir -p "$ARCHIVE_DIR"
@@ -675,10 +683,11 @@ No PR found for this work.
 
 ---
 
-**Version:** 2.4.0
-**Last Updated:** 2026-10-19
+**Version:** 2.4.1
+**Last Updated:** 2026-11-15
 **Maintained By:** Escapement
 **Changelog:**
+- v2.4.1: Read context-path with scripts/get-context-path.sh, which ignores examples in fenced blocks and outside `## Escapement Settings` (#57)
 - v2.4.0: Added Phase 1.5 Capture Session Tail — save the conversation since the last session log, with a branch check before including another branch's work (#55)
 - v2.3.0: Added Phase 4.5 Project Lore Retro — reconcile + capture non-obvious context (invariants, gotchas, glossary, coupling, do-not-touch) at archive time
 - v2.2.1: Extract JSONL→markdown conversion to reusable script (scripts/convert-session-log.py)
