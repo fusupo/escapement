@@ -4,6 +4,7 @@ description: Sync the manifest after work is completed. Marks work items done, r
 tools:
   - mcp__github__*
   - Bash:node *
+  - Bash:bash *
   - Bash:git *
   - Read
   - Write
@@ -53,11 +54,13 @@ manifest sync --pr 42
 
 ### 0.1 Detect Context Path
 
-Read the project's `CLAUDE.md` and extract the `context-path` setting:
+Read the `context-path` setting with the shared parser:
 
 ```bash
-grep -E '^\s*-\s*\*\*context-path\*\*' CLAUDE.md
+CONTEXT_PATH=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/get-context-path.sh" CLAUDE.md)
 ```
+
+It reads only the `## Escapement Settings` section of `CLAUDE.md` and ignores fenced code blocks, so documentation examples never match. Empty output means context-path is not configured. Don't grep CLAUDE.md for the setting yourself (#57).
 
 The manifest database lives at `{context-path}/manifest/manifest.db`.
 
@@ -536,6 +539,8 @@ If `manifest-cli.ts query` fails:
 
 ---
 
-**Version:** 1.0.0
-**Last Updated:** 2026-03-31
+**Version:** 1.0.1
+**Last Updated:** 2026-11-15
 **Maintained By:** Escapement
+**Changelog:**
+- v1.0.1: Read context-path with scripts/get-context-path.sh instead of grep, which also matched documentation examples (#57)

@@ -4,6 +4,7 @@ description: Dispatch parallel work from a manifest plan. Creates worktrees, bra
 tools:
   - Bash:git *
   - Bash:node *
+  - Bash:bash *
   - Bash:mkdir *
   - Read
   - Write
@@ -39,11 +40,13 @@ Verify the environment is ready for dispatch.
 
 ### 0.1 Detect context-path
 
-Read the project's `CLAUDE.md` and extract the Escapement Settings `context-path` value.
+Read the `context-path` setting with the shared parser:
 
 ```bash
-grep -A1 'context-path' CLAUDE.md
+CONTEXT_PATH=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/get-context-path.sh" CLAUDE.md)
 ```
+
+It reads only the `## Escapement Settings` section of `CLAUDE.md` and ignores fenced code blocks, so documentation examples never match. Empty output means context-path is not configured. Don't grep CLAUDE.md for the setting yourself (#57).
 
 ### 0.2 Verify manifest CLI
 
@@ -519,6 +522,8 @@ You can manually start work:
 
 ---
 
-**Version:** 1.0.0
-**Last Updated:** 2026-03-31
+**Version:** 1.0.1
+**Last Updated:** 2026-11-15
 **Maintained By:** Escapement
+**Changelog:**
+- v1.0.1: Read context-path with scripts/get-context-path.sh instead of grep, which also matched documentation examples (#57)
