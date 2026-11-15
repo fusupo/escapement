@@ -21,7 +21,7 @@ A single config line in the project's `CLAUDE.md` tells Escapement to write all 
 - **context-path**: ../myproject-ctx
 ```
 
-When set, all skills that write artifacts (archive-work, session logs via hook) use this path instead of in-repo locations. When unset, existing behavior is preserved.
+When set, the skills that write artifacts (archive-work, stash-artifact, the manifest skills) use this path instead of in-repo locations. Session logs from the PreCompact hook still start in the project root, and archive-work moves them. When unset, existing behavior is preserved.
 
 ## What Changes
 
@@ -38,6 +38,32 @@ Projects opt in by adding an `Escapement Settings` section:
 The path is relative to the project root. Typical values:
 - `../myproject-ctx` (sibling directory, most common)
 - `~/dev-context/myproject` (absolute path to shared context location)
+
+#### How the setting is read
+
+Everything that needs the setting reads it with the same rules:
+- `scripts/get-context-path.sh` for skills
+- `parseContextPath` in `manifest/init.ts`
+- `parse_context_path` in `scripts/migrate-archives.py`
+
+The rules are:
+
+- Only the first `## Escapement Settings` section counts. It runs until the next `#` or `##` heading, so `###` subheadings stay inside it.
+- Lines inside fenced code blocks (```` ``` ```` or `~~~`) are ignored everywhere. This is what lets a CLAUDE.md show the setting as an example, as this document does, without the example being picked up.
+- The setting line is `- **context-path**: <value>`, and `*` bullets also work. The value is the rest of the line with trailing whitespace trimmed and one pair of surrounding quotes or backticks removed, so paths with spaces work.
+- A `context-path` line outside the section is ignored, and a warning goes to stderr.
+- If there is no setting, the parser prints nothing, and in-repo mode applies.
+
+Skills run the parser like this:
+
+```bash
+CONTEXT_PATH=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/get-context-path.sh" CLAUDE.md)
+```
+
+The shared fixtures in `scripts/fixtures/context-path/` describe the expected behavior, and all three implementations are tested against them:
+- `scripts/test-get-context-path.sh`
+- `manifest/test-init.ts`
+- `scripts/test-migrate-archives.py`
 
 ### 2. Context Directory Structure
 
@@ -81,7 +107,7 @@ The hook always writes `SESSION_LOG_{N}.jsonl` to the **project root**, regardle
 ### 4. Modified Skill (archive-work)
 
 The archive-work skill gains context-path awareness:
-1. Read `CLAUDE.md` for `context-path` setting
+1. Read the `context-path` setting with `scripts/get-context-path.sh` (see [How the setting is read](#how-the-setting-is-read))
 2. If set, archive to `{context-path}/{branch}/archive/` instead of `docs/dev/cc-archive/`
 3. Scratchpad is copied to context directory, then removed from code repo (`git rm`)
 4. Session logs are moved from project root to the archive directory
@@ -123,7 +149,7 @@ A lightweight skill for saving ad hoc scripts and notes to the context directory
 Triggers: "stash this script", "save this to context", "keep this outside the repo"
 
 Behavior:
-1. Read context-path from CLAUDE.md
+1. Read context-path with `scripts/get-context-path.sh`
 2. Determine current branch
 3. Copy/write the artifact to `{context-path}/{branch}/scripts/` or `{context-path}/{branch}/notes/`
 4. Report location
@@ -140,7 +166,8 @@ Behavior:
 ## Backward Compatibility
 
 - No `context-path` in CLAUDE.md -> everything works exactly as before
-- Context path set -> only archive-work and the hook change behavior
+- Context path set -> only archive-work, stash-artifact and the manifest skills change behavior
+- A `context-path` line that is not under `## Escapement Settings` is now ignored, with a warning (#57). Earlier versions accepted it anywhere in CLAUDE.md, including inside code examples
 - Existing archives in `docs/dev/cc-archive/` are not migrated automatically
 
 ## Obsidian Compatibility

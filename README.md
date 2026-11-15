@@ -213,6 +213,7 @@ escapement/
 │   └── archive-session-log.sh # PreCompact hook (JSONL slice)
 ├── scripts/
 │   ├── convert-session-log.py # JSONL→markdown session log converter
+│   ├── get-context-path.sh    # Shared context-path parser for skills
 │   ├── migrate-archives.py    # Migrate in-repo archives to context-path
 │   └── slice-session-log.sh   # Transcript slicing with a per-session cursor
 ├── agents/                   # Specialized subagents
@@ -269,6 +270,8 @@ The **context-path** feature redirects these artifacts to a sibling directory ou
 
 - **context-path**: ../myproject-ctx
 ```
+
+The setting is read only from the first `## Escapement Settings` section, and fenced code blocks are ignored, so examples like the one above never match. See [How the setting is read](docs/CONTEXT_PATH.md#how-the-setting-is-read).
 
 When set:
 - **`archive-work`** archives scratchpads and session logs to `{context-path}/{branch}/archive/` instead of `docs/dev/cc-archive/`
