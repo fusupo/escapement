@@ -59,3 +59,37 @@ export function makeRepo(opts: { branch?: string; origin?: string; claudeMd?: st
   sh("git", ["commit", "-q", "-m", "init"], root);
   return root;
 }
+
+/** A fresh in-memory database at the latest schema. */
+export async function memDb() {
+  const { default: Database } = await import("better-sqlite3");
+  const { migrate } = await import("../migrations.ts");
+  const db = new Database(":memory:");
+  db.pragma("foreign_keys = ON");
+  migrate(db);
+  return db;
+}
+
+/** Insert a run row directly, bypassing `factory start`. */
+export function seedRun(
+  db: import("better-sqlite3").Database,
+  runId: string,
+  fields: Record<string, unknown> = {},
+): void {
+  const row: Record<string, unknown> = {
+    run_id: runId,
+    work_item: "w",
+    repo: "o/r",
+    worktree_path: "/wt",
+    branch: "b",
+    target_ref: "main",
+    artifact_dir: "/artifacts",
+    state: "planned",
+    started_at: new Date().toISOString(),
+    ...fields,
+  };
+  const cols = Object.keys(row);
+  db.prepare(`INSERT INTO factory_runs (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`).run(
+    ...cols.map((c) => row[c]),
+  );
+}
