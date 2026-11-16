@@ -10,29 +10,33 @@ const SETTINGS_HEADING_RE = /^##[ \t]+Escapement Settings[ \t]*$/;
 const HEADING_RE = /^##?[ \t]/;
 const FENCE_OPEN_RE = /^[ \t]*(`{3,}|~{3,})/;
 const FENCE_CLOSE_RE = /^[ \t]*(`+|~+)[ \t]*$/;
-const SETTING_RE = /^[ \t]*[-*][ \t]+\*\*context-path\*\*:[ \t]*(.*)$/;
+const SETTING_RE = /^[ \t]*[-*][ \t]+\*\*([A-Za-z0-9][A-Za-z0-9_-]*)\*\*:[ \t]*(.*)$/;
 
 /**
- * Extract the context-path value from CLAUDE.md content.
+ * Read every setting in the "## Escapement Settings" section of CLAUDE.md
+ * content, as a map from key to raw value. Keys are
+ * case-sensitive, as in get-context-path.sh.
  *
- * Same rules as scripts/get-context-path.sh (keep them in sync; the shared
- * fixtures in scripts/fixtures/context-path.md are checked by test-init.ts):
- * only the first "## Escapement Settings" section counts, up to the next
- * "#" or "##" heading; fenced code blocks are ignored; the value is the rest
- * of the line with trailing whitespace trimmed and one pair of surrounding
- * quotes or backticks removed. Unfenced settings outside the section are
- * ignored and reported through `warn` with their 1-based line number.
+ * Same section rules as scripts/get-context-path.sh (keep them in sync; the
+ * shared fixtures in scripts/fixtures/context-path.md are checked by
+ * test-init.ts): only the first "## Escapement Settings" section counts, up
+ * to the next "#" or "##" heading; fenced code blocks are ignored; a setting
+ * is a list item "- **key**: value", whose value is the rest of the line with
+ * trailing whitespace trimmed and one pair of surrounding quotes or backticks
+ * removed. The first occurrence of a key wins, even when its value is empty.
  *
- * Returns null when the setting is absent or empty.
+ * An unfenced context-path line outside the section is ignored and reported
+ * through `warn` with its 1-based line number. Other bold list items outside
+ * the section are ordinary documentation and are skipped silently.
  */
-export function parseContextPath(
+export function parseEscapementSettings(
   content: string,
   warn: (line: number) => void = () => {},
-): string | null {
+): Map<string, string> {
   let fence = "";
   let inSection = false;
   let seenSection = false;
-  let value: string | null = null;
+  const settings = new Map<string, string>();
 
   const lines = content.split("\n");
   if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
@@ -59,14 +63,26 @@ export function parseContextPath(
 
     const setting = line.match(SETTING_RE);
     if (!setting) return;
+    const key = setting[1];
     if (!inSection) {
-      warn(i + 1);
+      if (key === "context-path") warn(i + 1);
       return;
     }
-    if (value === null) value = stripQuotes(setting[1].replace(/[ \t]+$/, ""));
+    if (!settings.has(key)) settings.set(key, stripQuotes(setting[2].replace(/[ \t]+$/, "")));
   });
 
-  return value ? value : null;
+  return settings;
+}
+
+/**
+ * Extract the context-path value from CLAUDE.md content, using the rules of
+ * parseEscapementSettings. Returns null when the setting is absent or empty.
+ */
+export function parseContextPath(
+  content: string,
+  warn: (line: number) => void = () => {},
+): string | null {
+  return parseEscapementSettings(content, warn).get("context-path") || null;
 }
 
 function stripQuotes(s: string): string {
