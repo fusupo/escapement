@@ -18,6 +18,6 @@ The reviewer's instructions are runtime-neutral data in this plugin, so every ho
 
 In Claude Code:
 
-- Use Read, Grep and Glob on the snapshot directory (`source.path` in the bundle).
+- Use Read for the bundle and every file it names. Use Read, Grep and Glob on the snapshot directory (`source.path` in the bundle).
 - Use Write only for the verdict file (`verdict.write_to`).
 - Use Bash only for commands that start with the bundle's `runner.exec` prefix.

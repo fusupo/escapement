@@ -17,7 +17,7 @@ You are given the path to `bundle.json`, written by `factory review-input`. Its 
 | `diff` | `git diff merge_base_sha..head_sha`, the whole change |
 | `source.path`, `source.digest` | A read-only snapshot of the source at `head_sha`, and its digest |
 | `report` | The draft report: per-evidence results, change classification, tier and its reasons, flags |
-| `logs`, `results` | Full command logs and structured test results |
+| `logs`, `results` | Full command logs and structured test results. A log can be empty when the command wrote only to its results file |
 | `required` | Exactly what your verdict must cover (below) |
 | `verdict.schema`, `verdict.write_to` | The verdict's JSON Schema, and where to write it |
 | `runner.exec` | The prefix for any command you need to run |
@@ -37,6 +37,8 @@ You are given the path to `bundle.json`, written by `factory review-input`. Its 
 ### Evidence: `required.evidence`
 
 Each entry has the evidence `id`, its `criterion`, its `type`, the runner's `executed` result, its `spec` (selector, command or instructions) and the `judgment` it needs.
+
+You judge the evidence, not the code. If the code meets the criterion but the evidence wouldn't catch it breaking, the evidence still doesn't support the criterion.
 
 - **`supports_criterion`** (test and command evidence): does this evidence, as it ran, demonstrate the criterion?
   - `yes`: it exercises the behavior the criterion describes and asserts the outcome. It would fail if the change were reverted or the behavior broke.
@@ -62,9 +64,9 @@ Each `location` (`file:line` at `head_sha`) is an existing test that was changed
 
 ### Findings
 
-Anything else worth recording, each with `severity`, `detail` and an optional `location`:
+Anything the judgments above don't already record, each with `severity`, `detail` and an optional `location`. Don't repeat a judgment as a finding: a `no` or `partial`, a `concern` or a `justified: false` already fails the attempt.
 
-- `blocking`: the change would ship a defect: a bug, a security problem, data loss, a criterion that isn't met, or behavior the issue didn't ask for.
+- `blocking`: the change would ship a defect: a bug, a security problem, data loss, code that doesn't meet a criterion, or behavior the issue didn't ask for.
 - `advisory`: worth fixing but not a reason to reject.
 
 The attempt fails on any `supports_criterion` of `no` or `partial`, any `procedure_adequate` of `no`, any `concern`, any `justified: false`, or any `blocking` finding. Don't soften a judgment to let it pass.
