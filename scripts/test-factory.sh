@@ -21,17 +21,24 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 export ESCAPEMENT_MANIFEST_DIR="$tmp/data"
 
-# A project with no context-path, so artifacts go in .escapement/.
+# A project with no context-path, so artifacts go in .escapement/, and a
+# short command-timeout so exec's default timeout comes from settings.
 project="$tmp/project"
 mkdir -p "$project"
 (
   cd "$project" &&
     git init -q -b 5-thing &&
     echo test > README.md &&
+    printf '## Escapement Settings\n\n- **command-timeout**: 2s\n' > CLAUDE.md &&
     git add -A &&
     git -c user.name=t -c user.email=t@example.invalid commit -q -m init
 )
-echo '{"criteria":[]}' > "$project/../contract.json"
+cat > "$project/../contract.json" <<'JSON'
+{"version": 1, "run_id": "#5-r1", "risk_tier_proposed": "standard",
+ "criteria": [{"id": "AC-1", "text": "It works",
+   "evidence": [{"id": "AC-1.e1", "type": "test", "kind": "new_behavior", "selector": "t.ts::works"}]}]}
+JSON
+echo '{"version": 1, "run_id": "#5-r1", "criteria": []}' > "$project/../bad-contract.json"
 other="$tmp/other"
 mkdir -p "$other"
 
@@ -48,6 +55,11 @@ if [[ "$(jq -r '.ok and .result.run_id == "#5-r1" and .result.state == "planned"
 art="$(jq -r .result.artifact_dir <<<"$out")"
 if [[ "$art" == "$project/.escapement/runs/5-thing/#5-r1" && -d "$art" ]]; then ok; else bad "artifact-dir-in-repo" "$art"; fi
 if [[ -z "$(git -C "$project" status --porcelain)" ]]; then ok; else bad "tree-stays-clean" "$(git -C "$project" status --porcelain)"; fi
+
+# an invalid contract is rejected with every problem listed
+out="$(f --json approve '#5-r1' --contract ../bad-contract.json)"
+status=$?
+if [[ $status -eq 1 && "$(jq -r '.error.code == "bad_contract" and (.error.message | contains("risk_tier_proposed") and contains("/criteria"))' <<<"$out")" == true ]]; then ok; else bad "approve-bad-contract" "status=$status out=$out"; fi
 
 # approve with a contract path relative to the cwd
 out="$(f --json approve '#5-r1' --contract ../contract.json --run-budget 1h)"
@@ -71,6 +83,12 @@ if [[ "$out" == "--json" ]]; then ok; else bad "json-after-separator" "$out"; fi
 # timeout: the runner kills the command and exits 124
 f --json exec --timeout 1s '#5-r1' -- sleep 10 >/dev/null
 if [[ $? -eq 124 ]]; then ok; else bad "exec-timeout-124"; fi
+
+# without --timeout, exec uses the project's command-timeout setting (2s)
+start=$SECONDS
+f --json exec '#5-r1' -- sleep 10 >/dev/null
+status=$?
+if [[ $status -eq 124 && $((SECONDS - start)) -lt 8 ]]; then ok; else bad "exec-timeout-from-settings" "status=$status"; fi
 
 # status from another directory, with --project-root for start elsewhere
 out="$(CWD="$other" f --json status)"

@@ -11,7 +11,7 @@ import { resumeRun, runStateForOutcome } from "./factory/resume.ts";
 import { getRun, getAttempt, transitionRun, transitionAttempt } from "./factory/state.ts";
 import { tryAcquire, listLocks, worktreeLock } from "./factory/locks.ts";
 import { currentOwner, type Owner } from "./factory/owner.ts";
-import { assert, throws, tempDir, cleanup, makeRepo, sh } from "./factory/testkit.ts";
+import { assert, throws, tempDir, cleanup, makeRepo, sh, contractFor } from "./factory/testkit.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const tsx = resolve(__dirname, "node_modules/tsx/dist/esm/index.mjs");
@@ -29,8 +29,6 @@ async function run() {
   db.pragma("journal_mode = WAL");
   migrate(db);
   const me = currentOwner("test");
-  const contract = join(work, "contract.json");
-  writeFileSync(contract, "{}");
 
   let n = 0;
   /** A fresh repo with an approved run in `validating`, plus its HEAD. */
@@ -38,7 +36,7 @@ async function run() {
     n++;
     const root = realpathSync(makeRepo({ branch: `${n}-x` }));
     const r = startRun(db, { workItem: `#${n}`, ctx: projectContext(root), artifactDir: join(work, "art") });
-    approveRun(db, r.run_id, { contractFile: contract, budgetMs: HOUR });
+    approveRun(db, r.run_id, { contractFile: contractFor(r.run_id), budgetMs: HOUR });
     transitionRun(db, r.run_id, "implementing");
     transitionRun(db, r.run_id, "validating");
     const head = sh("git", ["rev-parse", "HEAD"], root);

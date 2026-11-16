@@ -7,13 +7,11 @@ import { defaultTargetRef, resolveArtifactDir, type ProjectContext, type Artifac
 import { tx, getRun, transitionRun, recordEvent, type RunRow, type AttemptRow } from "./state.ts";
 import { listLocks, worktreeLock, BUILD_LOCK } from "./locks.ts";
 import type { Owner } from "./owner.ts";
+import { parseContract } from "./schemas.ts";
 
 /** What an approval lets skills do without asking (§3.6). */
 export const AUTHORIZES = ["commit", "push_branch", "open_pr", "run_validation"] as const;
 export const EXCLUDES = ["merge", "force_push", "contract_change", "push_other_branches"] as const;
-
-/** Design defaults until #60 reads them from `## Escapement Settings`. */
-export const DEFAULTS = { commandTimeout: "15m", lockTimeout: "30m", runBudget: "2h" } as const;
 
 export type AuthorizationRow = {
   run_id: string;
@@ -127,6 +125,8 @@ const APPROVABLE = ["planned", "approved", "implementing"] as const;
 /**
  * Record the approved contract and issue an active authorization (§3.6).
  *
+ * - The contract must be valid (schemas/factory/contract.schema.json), be
+ *   for this run, and name the run's issue if it names one (`bad_contract`).
  * - Copies the contract to `{artifact_dir}/contract.json` and stores its digest.
  * - The first approval sets `deadline_at = approved_at + budget`. Later
  *   approvals never move it (budgets are not reset).
@@ -145,12 +145,19 @@ export function approveRun(
   } catch {
     throw new FactoryError("no_contract", `cannot read contract file: ${path}`);
   }
+  const contract = parseContract(content.toString("utf-8"), path);
   const digest = contractDigest(content);
 
   const result = tx(db, () => {
     const run = getRun(db, runId);
     if (!(APPROVABLE as readonly string[]).includes(run.state)) {
       throw new FactoryError("wrong_state", `run ${runId} is ${run.state}; only ${APPROVABLE.join(", ")} runs can be approved`);
+    }
+    if (contract.run_id !== run.run_id) {
+      throw new FactoryError("bad_contract", `${path} is for run "${contract.run_id}", not ${run.run_id}`);
+    }
+    if (contract.issue != null && run.issue_number !== null && contract.issue !== run.issue_number) {
+      throw new FactoryError("bad_contract", `${path} is for issue ${contract.issue}, but ${run.run_id} is issue ${run.issue_number}`);
     }
     const active = activeAuthorization(db, runId);
     if (active?.contract_digest === digest) {

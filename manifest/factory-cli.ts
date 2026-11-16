@@ -1,7 +1,9 @@
 import type { Database } from "better-sqlite3";
 import { initManifest } from "./init.ts";
 import { projectContext } from "./factory/context.ts";
-import { startRun, approveRun, revokeRun, runStatus, listRuns, DEFAULTS } from "./factory/runs.ts";
+import { startRun, approveRun, revokeRun, runStatus, listRuns } from "./factory/runs.ts";
+import { getRun } from "./factory/state.ts";
+import { loadSettings, SETTING_DEFAULTS, type FactorySettings } from "./factory/settings.ts";
 import { execCommand, execExitCode } from "./factory/exec.ts";
 import { resumeRun } from "./factory/resume.ts";
 import { currentOwner } from "./factory/owner.ts";
@@ -42,12 +44,16 @@ Options:
   --target-ref <ref>    start: branch the work targets (default develop or main)
   --work-type <type>    start: e.g. feature, bug
   --contract <file>     approve: the contract to approve
-  --run-budget <dur>    approve: run deadline after first approval (default ${DEFAULTS.runBudget})
-  --timeout <dur>       exec: command timeout (default ${DEFAULTS.commandTimeout})
-  --lock-timeout <dur>  exec, resume: how long to wait for locks (default ${DEFAULTS.lockTimeout})
+  --run-budget <dur>    approve: run deadline after first approval
+                        (default: run-budget setting, else ${SETTING_DEFAULTS["run-budget"]})
+  --timeout <dur>       exec: command timeout
+                        (default: command-timeout setting, else ${SETTING_DEFAULTS["command-timeout"]})
+  --lock-timeout <dur>  exec, resume: how long to wait for locks
+                        (default: lock-timeout setting, else ${SETTING_DEFAULTS["lock-timeout"]})
   --all                 status: include closed runs
 
-Durations: 30s, 15m, 2h, 1d.`;
+Durations: 30s, 15m, 2h, 1d. Settings are read from the run's worktree
+CLAUDE.md, "## Escapement Settings" (docs/FACTORY_CLI.md).`;
 
 const VALUE_FLAGS = new Set([
   "--data-dir",
@@ -98,8 +104,21 @@ function str(p: Parsed, name: string): string | undefined {
   return typeof v === "string" ? v : undefined;
 }
 
-function duration(p: Parsed, name: string, fallback: string): number {
-  return parseDuration(str(p, name) ?? fallback);
+/**
+ * A duration flag, or else the run's setting. Settings are read from the
+ * run's worktree only when a flag is missing, so an invalid CLAUDE.md
+ * doesn't stop a command whose limits are all given.
+ */
+function duration(
+  db: Database,
+  p: Parsed,
+  name: string,
+  runId: string,
+  setting: (s: FactorySettings) => number,
+): number {
+  const flag = str(p, name);
+  if (flag !== undefined) return parseDuration(flag);
+  return setting(loadSettings(getRun(db, runId).worktree_path).settings);
 }
 
 function need(value: string | undefined, what: string): string {
@@ -131,9 +150,11 @@ async function dispatch(db: Database, command: string, p: Parsed, json: boolean)
       };
     }
     case "approve": {
-      const r = approveRun(db, need(arg, "run_id"), {
-        contractFile: need(str(p, "--contract"), "--contract <file>"),
-        budgetMs: duration(p, "--run-budget", DEFAULTS.runBudget),
+      const runId = need(arg, "run_id");
+      const contractFile = need(str(p, "--contract"), "--contract <file>");
+      const r = approveRun(db, runId, {
+        contractFile,
+        budgetMs: duration(db, p, "--run-budget", runId, (s) => s.runBudgetMs),
         owner,
       });
       const what = !r.changed ? "already approved with this contract" : r.superseded ? "re-approved (previous contract superseded)" : "approved";
@@ -144,10 +165,11 @@ async function dispatch(db: Database, command: string, p: Parsed, json: boolean)
     }
     case "exec": {
       if (p.rest.length === 0) throw new FactoryError("usage", "exec needs a command: factory exec <run_id> -- <cmd> [args...]");
-      const r = await execCommand(db, need(arg, "run_id"), p.rest, {
+      const runId = need(arg, "run_id");
+      const r = await execCommand(db, runId, p.rest, {
         owner,
-        timeoutMs: duration(p, "--timeout", DEFAULTS.commandTimeout),
-        lockWaitMs: duration(p, "--lock-timeout", DEFAULTS.lockTimeout),
+        timeoutMs: duration(db, p, "--timeout", runId, (s) => s.commandTimeoutMs),
+        lockWaitMs: duration(db, p, "--lock-timeout", runId, (s) => s.lockTimeoutMs),
         echo: !json,
       });
       const why = r.reason ? ` (${r.reason})` : "";
@@ -180,9 +202,10 @@ async function dispatch(db: Database, command: string, p: Parsed, json: boolean)
       return { result: { runs }, text };
     }
     case "resume": {
-      const r = await resumeRun(db, need(arg, "run_id"), {
+      const runId = need(arg, "run_id");
+      const r = await resumeRun(db, runId, {
         owner,
-        lockWaitMs: duration(p, "--lock-timeout", DEFAULTS.lockTimeout),
+        lockWaitMs: duration(db, p, "--lock-timeout", runId, (s) => s.lockTimeoutMs),
       });
       const lines = [
         `${r.run.run_id}: ${r.run.state}${r.deadline_passed ? " (deadline passed: reconciled only)" : ""}`,

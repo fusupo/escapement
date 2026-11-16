@@ -93,3 +93,23 @@ export function seedRun(
     ...cols.map((c) => row[c]),
   );
 }
+
+/** A minimal valid contract for `runId`, with optional overrides. */
+export function contractJson(runId: string, extra: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    version: 1,
+    run_id: runId,
+    risk_tier_proposed: "standard",
+    criteria: [
+      { id: "AC-1", text: "It works", evidence: [{ id: "AC-1.e1", type: "test", kind: "new_behavior", selector: "test.ts::works" }] },
+    ],
+    ...extra,
+  });
+}
+
+/** Write contractJson(runId) to a fresh temporary file and return its path. */
+export function contractFor(runId: string, extra: Record<string, unknown> = {}): string {
+  const file = join(tempDir("factory-contract-"), "contract.json");
+  writeFileSync(file, contractJson(runId, extra));
+  return file;
+}
