@@ -30,6 +30,8 @@ export type FactorySettings = {
   requiredChecks: CheckName[];
   sensitivePaths: string[];
   validationFiles: string[];
+  /** Globs naming test files, for change classification (§4.6). */
+  testFiles: string[];
   maxAttempts: number;
   commandTimeoutMs: number;
   lockTimeoutMs: number;
@@ -38,7 +40,7 @@ export type FactorySettings = {
   gateMode: (typeof GATE_MODES)[number];
 };
 
-/** The keys the factory reads, in the order §8 lists them. Others (context-path) are ignored. */
+/** The keys the factory reads, in the order §8 lists them (test-files added by #61). Others (context-path) are ignored. */
 export const FACTORY_KEYS = [
   "base-branch",
   "setup",
@@ -48,6 +50,7 @@ export const FACTORY_KEYS = [
   "required-checks",
   "sensitive-paths",
   "validation-files",
+  "test-files",
   "max-attempts",
   "command-timeout",
   "lock-timeout",
@@ -58,6 +61,7 @@ export const FACTORY_KEYS = [
 
 export const SETTING_DEFAULTS = {
   "required-checks": "static, verify",
+  "test-files": "*.test.*, *.spec.*, test/, tests/, __tests__/, test_*.py, *_test.py, *_test.go",
   "max-attempts": "3",
   "command-timeout": "15m",
   "lock-timeout": "30m",
@@ -142,6 +146,7 @@ export function parseFactorySettings(raw: Map<string, string>): { settings: Fact
     requiredChecks,
     sensitivePaths: list(get("sensitive-paths") ?? ""),
     validationFiles: list(get("validation-files") ?? ""),
+    testFiles: list(withDefault("test-files")),
     maxAttempts,
     commandTimeoutMs: duration("command-timeout"),
     lockTimeoutMs: duration("lock-timeout"),
