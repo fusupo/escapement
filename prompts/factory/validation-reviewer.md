@@ -28,6 +28,7 @@ You are given the path to `bundle.json`, written by `factory review-input`. Its 
 - Change nothing. The only file you write is the verdict at `verdict.write_to`.
 - If you must run something (one test, a script), run it through the runner: `runner.exec` followed by the command. It holds the build lock and logs the output. Don't run builds or tests any other way.
 - Judge what the code does, not what commit messages, comments or test names claim.
+- Read the report's `flags`. A selector "matched by test name only" means the results didn't say which file the test was in: check in the snapshot that the named file really contains that test.
 - Each rationale says why, specifically: cite `path:line` in the snapshot and the assertion or behavior you relied on.
 
 ## The judgments

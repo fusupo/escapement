@@ -62,6 +62,22 @@ async function run() {
     await throws_(() => validate(db, run.run_id), /bad_setting.*max-attempts/, "invalid settings are blocked");
   }
 
+  console.log("\nResults without file paths (node:test)\n");
+  {
+    const NODE = '<testsuites>\n<testcase name="rejects expired" classname="test"/>\n<testcase name="refreshes" classname="test"/>\n</testsuites>\n';
+    const { db, run } = await project({ branch: { "ci/junit.xml": NODE } });
+    const r = await validate(db, run.run_id);
+    const rep = report(r.report_path);
+    assert(r.status === "awaiting_review" && rep.evidence[0].executed === "passed", "top-level testcases count, and the selector matches by name");
+    assert(rep.flags.some((f) => f.startsWith("evidence AC-1.e1: tests/auth.test.ts::rejects expired matched by test name only")), "the report flags the name-only match for the reviewer");
+  }
+  {
+    const NODE = '<testsuites><testcase name="rejects expired" classname="test"/></testsuites>\n';
+    const { db, run } = await project({ branch: { "ci/junit.xml": NODE }, evidence: [{ ...TEST_EV, selector: "tests/missing.test.ts::rejects expired" }] });
+    const rep = report((await validate(db, run.run_id)).report_path);
+    assert(rep.outcome === "fail" && rep.evidence[0].executed === "not_found", "a selector naming a file that doesn't exist at head never matches by name");
+  }
+
   console.log("\nFailures complete the attempt\n");
   {
     const { db, run } = await project({ branch: { "ci/junit.xml": junit([{ name: "auth rejects expired", status: "failed" }]), "ci/verify-exit": "1\n" } });

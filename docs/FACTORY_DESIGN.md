@@ -305,7 +305,7 @@ Deterministic phases stop at the first failure. The reviewer consumes captured o
 - Missing results after a zero exit, or results reporting **zero executed tests**, make the phase `error` — never `pass`.
 - Each results file is recorded with its digest, invocation ID, and command, binding evidence to the attempt that produced it.
 
-*As built (#61):* the binding is the report's `invocations` list. JUnit XML is parsed with `fast-xml-parser`. A selector `path::name` matches a case in that file whose name, or the end of its full name, is `name` (`*` is a wildcard; a bare path selects the whole file). Running an evidence item that `verify` doesn't cover separately needs a command for one test, and contracts name no commands (§5.2), so in the first release such an item is `not_found`; this returns with the fix loop. "Forbidden-file edits" has no setting yet and isn't checked. Drift is reported as flags.
+*As built (#61):* the binding is the report's `invocations` list. JUnit XML is parsed with `fast-xml-parser`. A selector `path::name` matches a case in that file whose name, or the end of its full name, is `name` (`*` is a wildcard; a bare path selects the whole file). Running an evidence item that `verify` doesn't cover separately needs a command for one test, and contracts name no commands (§5.2), so in the first release such an item is `not_found`; this returns with the fix loop. "Forbidden-file edits" has no setting yet and isn't checked. Drift is reported as flags. *(#62:)* when results carry no file paths (node:test's reporter), a selector whose file exists at `head_sha` may match by test name alone, and the report flags it for the reviewer.
 
 ### 4.5 Actual-diff tier recomputation
 

@@ -12,7 +12,7 @@ import { runProcess, type ProcessResult } from "./process.ts";
 import { readSettings, type FactorySettings, type LoadedSettings } from "./settings.ts";
 import { parseContract, schemaErrors, type Contract, type Evidence } from "./schemas.ts";
 import { assessTier, type TierAssessment } from "./tiers.ts";
-import { captureIdentity, treeStatus, describeDirty, identityHolds, lockfileDigest, changedFiles, type Identity } from "./revision.ts";
+import { captureIdentity, treeStatus, describeDirty, identityHolds, lockfileDigest, changedFiles, existsAt, type Identity } from "./revision.ts";
 import { classifyChanges, settingsAt, type Classification } from "./classify.ts";
 import { parseFactorySettings } from "./settings.ts";
 import { readResults, resultFiles, resolveSelector, executedCount, parseSelector, type TestCase } from "./junit.ts";
@@ -473,7 +473,7 @@ async function runPhases(
 
   // ── phase 2: evidence ──
   if (staticOutcome === "pass") {
-    const ev = await evidencePhase(at, { settings, evidence, results, findings });
+    const ev = await evidencePhase(at, { settings, evidence, results, findings, flags, headSha: identity.head_sha });
     phases.push(ev.phase);
     if (ev.errorReason) errorReason = ev.errorReason;
   }
@@ -562,9 +562,16 @@ async function runPhases(
 /** Phase 2 (§4.4): one structured verify run, command evidence, manual evidence pending. */
 async function evidencePhase(
   at: Attempt,
-  ctx: { settings: FactorySettings; evidence: Evidence[]; results: Map<string, EvidenceResult>; findings: Finding[] },
+  ctx: {
+    settings: FactorySettings;
+    evidence: Evidence[];
+    results: Map<string, EvidenceResult>;
+    findings: Finding[];
+    flags: string[];
+    headSha: string;
+  },
 ): Promise<{ phase: Phase; errorReason: string | null }> {
-  const { settings, evidence, results, findings } = ctx;
+  const { settings, evidence, results, findings, flags } = ctx;
   const worktree = at.run.worktree_path;
   const start = Date.now();
   // Mutated by the closures below, so kept in an object TypeScript won't narrow.
@@ -589,7 +596,12 @@ async function evidencePhase(
       for (const t of tests) results.set(t.id, { ...results.get(t.id)!, executed: "error", log: v.log });
     } else {
       for (const t of tests) {
-        const r = resolveSelector(t.selector, v.cases);
+        // Name-only matching (results without file paths) only for a file that exists at head.
+        const nameOnly = existsAt(worktree, ctx.headSha, parseSelector(t.selector).path);
+        const r = resolveSelector(t.selector, v.cases, { nameOnly });
+        if (r.by_name_only) {
+          flags.push(`evidence ${t.id}: ${t.selector} matched by test name only (${r.cases.length} case${r.cases.length > 1 ? "s" : ""}); the results carry no file paths`);
+        }
         const res: EvidenceResult = { id: t.id, executed: r.executed, supports_criterion: null, log: v.log };
         if (r.message) res.excerpt = excerpt(r.message);
         results.set(t.id, res);
