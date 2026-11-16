@@ -2,7 +2,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { git } from "./context.ts";
+import { git, currentBranch, defaultTargetRef, mainRepoRoot, repoName } from "./context.ts";
+import { readSettings } from "./settings.ts";
 import { FactoryError, blocked } from "./util.ts";
 
 /**
@@ -25,6 +26,11 @@ import { FactoryError, blocked } from "./util.ts";
  * only these three keys are read). The identity belongs to the user, not a
  * project, so it never comes from a project file. Like an ssh key, the file
  * is refused (`agent_env_permissions`) when group or others can read it.
+ *
+ * Skills outside a run use the same identity: `factory agent` gives plain
+ * commit-changes its commit author, and `factory push` (pushAsAgent) pushes
+ * a plain branch with the agent token. Skills reach GitHub otherwise only
+ * through the GitHub MCP tools, which act as the agent too.
  *
  * The runner calls the `gh` CLI (found on PATH) and never a skill or an agent.
  */
@@ -195,4 +201,35 @@ export function pushBranch(opts: { worktree: string; remote: Remote; repo: strin
     const why = redact(((err as { stderr?: string }).stderr ?? "").trim(), opts.token);
     throw new FactoryError("push_failed", `git push of ${opts.branch} failed${why ? `: ${why}` : ""}`);
   }
+}
+
+export type PushResult = { branch: string; sha: string; repo: string; remote: string };
+
+/**
+ * `factory push`: push the worktree's current branch as the agent, with no
+ * run (§4.8). Plain skills (create-pr outside an authorized run) push this
+ * way instead of `git push`, which would carry the operator's credentials.
+ * The rules are the authorized push's: HEAD goes to the branch of the same
+ * name and nothing else, never forced. A detached HEAD and the project's
+ * base branch (the base-branch setting, else develop or main), `main` and
+ * `master` are refused (`push_base_branch`): work reaches those through a
+ * PR. Without the agent token it is `no_agent_token` and nothing is pushed;
+ * the caller decides whether to fall back to the operator.
+ */
+export function pushAsAgent(opts: { worktree: string; env?: NodeJS.ProcessEnv }): PushResult {
+  const branch = currentBranch(opts.worktree);
+  const base = (readSettings(opts.worktree).settings.baseBranch ?? defaultTargetRef(opts.worktree)).replace(/^origin\//, "");
+  if (new Set([base, "main", "master"]).has(branch)) {
+    throw blocked("push_base_branch", `${branch} is a base branch; factory push pushes feature branches only (work reaches ${branch} through a PR)`);
+  }
+  const token = agentToken(opts.env);
+  const repo = repoName(mainRepoRoot(opts.worktree));
+  const remote = remoteOf(opts.worktree, repo);
+  pushBranch({ worktree: opts.worktree, remote, repo, branch, token });
+  return {
+    branch,
+    sha: git(["rev-parse", "HEAD"], opts.worktree),
+    repo,
+    remote: remote.host ? `https://${remote.host}/${repo}.git` : remote.url,
+  };
 }
