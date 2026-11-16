@@ -8,6 +8,7 @@ tools:
   - Bash:cp *
   - Bash:realpath *
   - Bash:git *
+  - Bash:bash *
   - Glob
   - Grep
   - AskUserQuestion
@@ -41,9 +42,9 @@ This skill activates when the user says things like:
 
 1. **Read CLAUDE.md** for `context-path` setting:
    ```bash
-   # Portable across GNU and BSD (macOS)
-   sed -n 's/^[[:space:]]*-[[:space:]]*\*\*context-path\*\*:[[:space:]]*\([^[:space:]]*\).*/\1/p' CLAUDE.md | head -1
+   CONTEXT_PATH=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/get-context-path.sh" CLAUDE.md)
    ```
+   The parser reads only the `## Escapement Settings` section and ignores fenced code blocks, so documentation examples never match. Empty output means context-path is not configured. Don't grep or sed CLAUDE.md for the setting yourself (#57).
 
 2. **If context-path NOT configured:**
    ```
@@ -63,7 +64,9 @@ This skill activates when the user says things like:
    - Create the directory
    - **Suggest** (but don't auto-edit) adding to CLAUDE.md:
      ```
-     Add this to your CLAUDE.md under Escapement Settings:
+     Add this to your CLAUDE.md. If it already has an
+     "## Escapement Settings" section, add only the context-path line there;
+     the setting is read from the first such section only:
 
      ## Escapement Settings
 
@@ -117,7 +120,7 @@ The artifact can come from several places:
 
 1. **Create target directory:**
    ```bash
-   CONTEXT_PATH=$(sed -n 's/^[[:space:]]*-[[:space:]]*\*\*context-path\*\*:[[:space:]]*\([^[:space:]]*\).*/\1/p' CLAUDE.md | head -1)
+   CONTEXT_PATH=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/get-context-path.sh" CLAUDE.md)
    BRANCH=$(git branch --show-current)
    TYPE="scripts"  # or notes, artifacts
    TARGET_DIR="$CONTEXT_PATH/$BRANCH/$TYPE"
@@ -255,8 +258,9 @@ File already exists: {path}
 
 ---
 
-**Version:** 1.0.0
-**Last Updated:** 2026-02-13
+**Version:** 1.0.1
+**Last Updated:** 2026-11-15
 **Maintained By:** Escapement
 **Changelog:**
+- v1.0.1: Read context-path with scripts/get-context-path.sh, which ignores examples in fenced blocks and outside `## Escapement Settings` (#57)
 - v1.0.0: Initial skill for context-path artifact stashing

@@ -213,6 +213,7 @@ escapement/
 │   └── archive-session-log.sh # PreCompact hook (JSONL slice)
 ├── scripts/
 │   ├── convert-session-log.py # JSONL→markdown session log converter
+│   ├── get-context-path.sh    # Shared context-path parser for skills
 │   ├── migrate-archives.py    # Migrate in-repo archives to context-path
 │   └── slice-session-log.sh   # Transcript slicing with a per-session cursor
 ├── agents/                   # Specialized subagents
@@ -269,6 +270,8 @@ The **context-path** feature redirects these artifacts to a sibling directory ou
 
 - **context-path**: ../myproject-ctx
 ```
+
+The setting is read only from the first `## Escapement Settings` section, and fenced code blocks are ignored, so examples like the one above never match. See [How the setting is read](docs/CONTEXT_PATH.md#how-the-setting-is-read).
 
 When set:
 - **`archive-work`** archives scratchpads and session logs to `{context-path}/{branch}/archive/` instead of `docs/dev/cc-archive/`
@@ -391,9 +394,12 @@ fusupo
 
 ## Version
 
-**Current:** 3.6.1
+**Current:** 3.6.2
 
 **Changelog:**
+- 3.6.2 (2026-11-15): context-path is no longer read from documentation examples (#57)
+  - **Shared parser**: `scripts/get-context-path.sh` reads the setting only from the first `## Escapement Settings` section and skips fenced code blocks. `archive-work`, `stash-artifact` and the manifest skills use it, and `manifest/init.ts` and `scripts/migrate-archives.py` follow the same rules
+  - **Behavior change**: a `context-path` line outside `## Escapement Settings` is now ignored, with a warning
 - 3.6.1 (2026-10-19): Session logs no longer repeat the whole session (#55)
   - **Sliced session logs**: The PreCompact hook writes only the conversation since the previous log, tracked by a per-session cursor (`scripts/slice-session-log.sh`). A session's first log still starts at the beginning
   - **Session tail at archive time**: `archive-work` v2.4.0 saves the conversation since the last log, asking first if it ran on another branch

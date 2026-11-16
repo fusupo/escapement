@@ -40,6 +40,7 @@ escapement/
 │   └── archive-session-log.sh  # PreCompact hook script
 ├── scripts/             # Reusable utility scripts for skills
 │   ├── convert-session-log.py  # JSONL→markdown session log converter
+│   ├── get-context-path.sh     # Shared context-path parser (section- and fence-aware)
 │   └── slice-session-log.sh    # Writes the transcript part no earlier session log covers
 ├── agents/              # Future: specialized subagents
 ├── docs/                # Extended documentation
@@ -150,7 +151,7 @@ Projects can redirect development artifacts (session logs, archives) to an exter
 - **context-path**: ../myproject-ctx
 ```
 
-When set, `archive-work`, `stash-artifact`, and the PreCompact hook write to this directory instead of the code repo. See `docs/CONTEXT_PATH.md` for full design details.
+When set, `archive-work`, `stash-artifact` and the manifest skills write to this directory instead of the code repo. The PreCompact hook still writes to the project root, and `archive-work` moves its logs. Only the first `## Escapement Settings` section is read, and fenced blocks such as the example above are ignored. Skills read the setting with `scripts/get-context-path.sh` and never grep for it. See `docs/CONTEXT_PATH.md` for full design details.
 
 ### Scratchpad Files
 

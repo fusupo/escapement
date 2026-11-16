@@ -5,12 +5,15 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "test": "node --import tsx manifest/test-schema.ts",
-    "seed": "node --import tsx manifest/seed.ts",
-    "test:seed": "node --import tsx manifest/test-seed.ts",
-    "manifest": "node --import tsx manifest/manifest-cli.ts",
-    "test:queries": "node --import tsx manifest/test-queries.ts",
-    "test:plan": "node --import tsx manifest/test-plan.ts"
+    "test": "node --import tsx test-schema.ts",
+    "seed": "node --import tsx seed.ts",
+    "test:seed": "node --import tsx test-seed.ts",
+    "manifest": "node --import tsx manifest-cli.ts",
+    "test:queries": "node --import tsx test-queries.ts",
+    "test:plan": "node --import tsx test-plan.ts",
+    "test:init": "node --import tsx test-init.ts",
+    "test:cli": "node --import tsx test-cli.ts",
+    "test:check": "node --import tsx test-check.ts"
   },
   "dependencies": {
     "better-sqlite3": "^11.0.0"
