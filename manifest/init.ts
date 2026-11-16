@@ -2,11 +2,9 @@ import Database from "better-sqlite3";
 import type { Database as DatabaseType } from "better-sqlite3";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { migrate } from "./migrations.ts";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const SETTINGS_HEADING_RE = /^##[ \t]+Escapement Settings[ \t]*$/;
 const HEADING_RE = /^##?[ \t]/;
@@ -81,39 +79,115 @@ function stripQuotes(s: string): string {
 }
 
 /**
- * Read context-path from the CLAUDE.md in the repo root (parent of
- * manifest/) and resolve it against that root.
+ * The project whose manifest the CLI operates on.
+ *
+ * - An explicit `projectRoot` is used as given (resolved against `cwd`); it
+ *   must exist.
+ * - Otherwise, inside a git repository, the main worktree's root, so every
+ *   linked worktree of a project shares one manifest.
+ * - Otherwise `cwd`.
  */
-function resolveContextPath(): string | null {
-  const repoRoot = resolve(__dirname, "..");
-  const claudeMd = resolve(repoRoot, "CLAUDE.md");
-  if (!existsSync(claudeMd)) return null;
+export function resolveProjectRoot(opts: { projectRoot?: string; cwd?: string } = {}): string {
+  const cwd = opts.cwd ?? process.cwd();
+  if (opts.projectRoot) {
+    const root = resolve(cwd, opts.projectRoot);
+    // A mistyped root would otherwise silently get a new, empty manifest.
+    if (!existsSync(root)) throw new Error(`manifest: project root does not exist: ${root}`);
+    return root;
+  }
+  return gitMainWorktree(cwd) ?? cwd;
+}
 
-  const raw = parseContextPath(readFileSync(claudeMd, "utf-8"), (line) =>
-    console.error(
-      `manifest: warning: ${claudeMd}:${line}: context-path outside "## Escapement Settings" is ignored`,
-    ),
-  );
-  return raw === null ? null : resolve(repoRoot, raw);
+function git(cwd: string, args: string[]): string | null {
+  try {
+    return execFileSync("git", ["-C", cwd, ...args], {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return null;
+  }
 }
 
 /**
- * Get or create a SQLite database instance at the given path.
- * If no dataDir is provided, derives the path from CLAUDE.md context-path,
- * falling back to {repo-root}/../escapement-ctx/manifest/manifest.db.
+ * Root of the main worktree of the repository containing `cwd`, or null when
+ * `cwd` is not in a git work tree. `git worktree list` always lists the main
+ * worktree first. For a bare repository, which has no main work tree, the
+ * current linked worktree's root is used instead.
  */
-export function getDb(dataDir?: string): DatabaseType {
-  let dbPath: string;
-  if (dataDir) {
-    dbPath = resolve(dataDir, "manifest.db");
-  } else {
-    const contextPath = resolveContextPath();
-    const base = contextPath ?? resolve(__dirname, "..", "..", "escapement-ctx");
-    dbPath = resolve(base, "manifest", "manifest.db");
+function gitMainWorktree(cwd: string): string | null {
+  const toplevel = git(cwd, ["rev-parse", "--show-toplevel"]);
+  if (!toplevel) return null;
+  const list = git(cwd, ["worktree", "list", "--porcelain"]);
+  if (!list) return toplevel;
+  const [first] = list.split("\n\n");
+  const lines = first.split("\n");
+  if (lines.includes("bare") || !lines[0].startsWith("worktree ")) return toplevel;
+  return lines[0].slice("worktree ".length);
+}
+
+export type DbLocation = {
+  dbPath: string;
+  /** Project root the path was resolved from; null when dataDir was given. */
+  root: string | null;
+  /** True when the project sets no context-path and the DB lives in the repo. */
+  inRepo: boolean;
+};
+
+/**
+ * Where the manifest database lives.
+ *
+ * `dataDir` overrides everything: `{dataDir}/manifest.db`. Otherwise the
+ * project root comes from resolveProjectRoot, its CLAUDE.md context-path
+ * (Escapement Settings section only) is resolved against that root, and the
+ * DB is `{context-path}/manifest/manifest.db`. Without a context-path it is
+ * `{root}/manifest/manifest.db`. The plugin's own CLAUDE.md is never read.
+ */
+export function resolveDbPath(
+  opts: {
+    dataDir?: string;
+    projectRoot?: string;
+    cwd?: string;
+    warn?: (message: string) => void;
+  } = {},
+): DbLocation {
+  const cwd = opts.cwd ?? process.cwd();
+  if (opts.dataDir) {
+    return { dbPath: resolve(cwd, opts.dataDir, "manifest.db"), root: null, inRepo: false };
   }
 
-  // Ensure parent directory exists
+  const warn = opts.warn ?? ((m: string) => console.error(m));
+  const root = resolveProjectRoot({ projectRoot: opts.projectRoot, cwd });
+  const claudeMd = resolve(root, "CLAUDE.md");
+  const raw = existsSync(claudeMd)
+    ? parseContextPath(readFileSync(claudeMd, "utf-8"), (line) =>
+        warn(
+          `manifest: warning: ${claudeMd}:${line}: context-path outside "## Escapement Settings" is ignored`,
+        ),
+      )
+    : null;
+
+  if (raw === null) {
+    return { dbPath: resolve(root, "manifest", "manifest.db"), root, inRepo: true };
+  }
+  return { dbPath: resolve(root, raw, "manifest", "manifest.db"), root, inRepo: false };
+}
+
+export type ManifestOptions = { dataDir?: string; projectRoot?: string };
+
+/**
+ * Get or create a SQLite database instance at the location given by
+ * resolveDbPath.
+ */
+export function getDb(opts: ManifestOptions = {}): DatabaseType {
+  const { dbPath, inRepo } = resolveDbPath(opts);
+
   const parentDir = dirname(dbPath);
+  if (!existsSync(dbPath) && inRepo) {
+    console.error(
+      `manifest: no context-path in Escapement Settings; creating the manifest inside the repo at ${dbPath}`,
+    );
+  }
   if (!existsSync(parentDir)) {
     mkdirSync(parentDir, { recursive: true });
   }
@@ -139,8 +213,8 @@ export function applySchema(db: DatabaseType): void {
  * Initialize the manifest database: create/open the SQLite instance
  * and run any pending schema migrations.
  */
-export function initManifest(dataDir?: string): DatabaseType {
-  const db = getDb(dataDir);
+export function initManifest(opts: ManifestOptions = {}): DatabaseType {
+  const db = getDb(opts);
   try {
     migrate(db);
   } catch (err) {

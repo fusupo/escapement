@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { initManifest } from "./init.ts";
+import { initManifest, type ManifestOptions } from "./init.ts";
 import { buildDispatchPlan, formatPlan } from "./plan.ts";
 import type { Database } from "better-sqlite3";
 
@@ -10,7 +10,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // ── Helpers ──────────────────────────────────────────────────────────
 
 function usage(): never {
-  console.log(`Usage: manifest [--data-dir <path>] <command> [args]
+  console.log(`Usage: manifest [--project-root <path>] [--data-dir <path>] <command> [args]
 
 Commands:
   seed <file.sql>   Load a SQL seed file into the manifest database
@@ -30,7 +30,14 @@ Check subcommands:
   in-progress <id> <branch>  Mark a work item as in_progress and record its branch
 
 Options:
-  --data-dir <path>  Override the manifest data directory`);
+  --project-root <path>  Project whose manifest to use (default: the main
+                         worktree of the git repo containing the cwd, else
+                         the cwd). Its CLAUDE.md context-path, under
+                         "## Escapement Settings", locates the database at
+                         {context-path}/manifest/manifest.db, or
+                         {root}/manifest/manifest.db when unset.
+  --data-dir <path>      Use {path}/manifest.db directly (overrides
+                         --project-root)`);
   process.exit(1);
 }
 
@@ -556,25 +563,34 @@ function cmdPlan(db: Database): void {
 function main(): void {
   const rawArgs = process.argv.slice(2);
 
-  // Parse --data-dir flag
-  let dataDir: string | undefined;
+  // Parse --data-dir and --project-root flags
+  const opts: ManifestOptions = {};
   const args: string[] = [];
   for (let i = 0; i < rawArgs.length; i++) {
-    if (rawArgs[i] === "--data-dir") {
-      dataDir = rawArgs[++i];
-      if (!dataDir) {
-        console.error("Error: --data-dir requires a path argument.");
+    const flag = rawArgs[i];
+    if (flag === "--data-dir" || flag === "--project-root") {
+      const value = rawArgs[++i];
+      if (!value) {
+        console.error(`Error: ${flag} requires a path argument.`);
         process.exit(1);
       }
+      if (flag === "--data-dir") opts.dataDir = value;
+      else opts.projectRoot = value;
     } else {
-      args.push(rawArgs[i]);
+      args.push(flag);
     }
   }
 
   const command = args[0];
   if (!command) usage();
 
-  const db = initManifest(dataDir);
+  let db: Database;
+  try {
+    db = initManifest(opts);
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
 
   try {
     switch (command) {
