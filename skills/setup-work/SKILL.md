@@ -6,6 +6,7 @@ tools:
   - mcp__github__*
   - mcp__linear__*
   - Bash:git *
+  - Bash:bash *
   - Read
   - Write
   - Glob
@@ -23,6 +24,10 @@ Transform a GitHub issue into a fully-prepared development environment with:
 - Structured implementation plan (scratchpad)
 - Feature branch ready for work
 - Situational codebase awareness
+
+**Factory path (optional, docs/FACTORY_DESIGN.md §3).** When the project is set up for the Escapement factory, setup-work also checks readiness, gathers light context, proposes a risk tier and drafts a validation contract, and plan approval can authorize a factory run. Steps marked **[factory]** run only on this path. When the project isn't set up for it (Phase 0.5), skip every **[factory]** step: setup-work then behaves exactly as it always has. Plain approval never creates a run.
+
+The factory runner is `bash "${CLAUDE_PLUGIN_ROOT}/scripts/factory.sh"`, written `factory` below (reference: `docs/FACTORY_CLI.md`). Run it from the project root. Always pass `--json` and route on the JSON, never on the text.
 
 ## Context Prerequisites
 
@@ -66,7 +71,21 @@ Get a high-level view of the repository structure to identify affected areas.
    **STOP here** - don't proceed with setup.
 
 3. **If no scratchpad:**
-   - Proceed to Phase 1 (normal setup flow)
+   - Proceed to Phase 0.5
+
+### Phase 0.5: Detect the Factory Path
+
+```bash
+FACTORY="${CLAUDE_PLUGIN_ROOT}/scripts/factory.sh"
+bash "$FACTORY" --check && bash "$FACTORY" --json check
+```
+
+`check` without `--contract` checks only the project's `## Escapement Settings`.
+
+- **`--check` fails** (runner dependencies not installed), or **`.result.status` is `needs_human`**: `FACTORY=off`. Skip every **[factory]** step. If the settings name at least one required check command but `check` still asked questions, say so in one line of the final output (`Factory run not offered: {questions}`), so the operator knows why. Otherwise stay silent: most projects aren't set up for the factory.
+- **`.result.status` is `ready`**: `FACTORY=on`. Keep `.result.required_checks` for the scratchpad.
+
+Never read the settings by grepping CLAUDE.md; `check` applies the section and fence rules.
 
 ### Phase 1: Gather Context (Parallel)
 
@@ -102,11 +121,29 @@ Get a high-level view of the repository structure to identify affected areas.
    - What's the priority based on labels?
    - Are there linked PRs already?
 
+5. **[factory] Light context (§3.2):**
+   - `CONTEXT_PATH=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/get-context-path.sh" CLAUDE.md)`. The lore file is `{context-path}/PROJECT_LORE.md`, or `PROJECT_LORE.md` in the project root when context-path is empty.
+   - **Lore:** pick the entries that bear on the areas this issue touches. Quote them verbatim; don't paraphrase.
+   - **Related archives:** in `{context-path}/INDEX.md`, find the issues this one depends on or relates to, and read the Key Decisions and Lessons Learned in their archive `README.md`.
+   - **Manifest work item**, if the project has one. Only the `owner/repo` from the git remote and the numeric issue number go into the SQL:
+     ```bash
+     bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" query "SELECT id, archive_path FROM work_items WHERE repo = '{owner/repo}' AND issue_number = {number}"
+     bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" query "SELECT d.id, d.state, d.archive_path FROM edges e JOIN work_items d ON d.id = e.to_id WHERE e.rel = 'depends_on' AND e.from_id = '{id}'"
+     ```
+     Keep the work item's `id` as `{manifest_id}` (none when there's no row). Read the archives of its dependencies too. A dependency that isn't `done` is a readiness question (Phase 2).
+
 ### Phase 2: Analyze & Plan
 
 **Goal:** Understand the issue deeply before writing any code.
 
 **Analysis Steps:**
+
+0. **[factory] Readiness check (§3.1), before planning:**
+   - Are acceptance criteria present, or derivable from the description?
+   - Is anything about intent, scope or dependencies unresolved, such as a dependency that isn't done?
+   - Could each criterion be given evidence: a test, a command, or a manual check a human can carry out? A criterion that can't is a readiness failure.
+
+   Write each problem as a readiness question, `{"about": "intent" | "scope" | "dependency" | "criterion", "question": "…", "ref": "AC-2"}` (`schemas/factory/readiness.schema.json`). If a question would change the plan, ask it now with `AskUserQuestion`, as in Phase 3.5, and record the answer under Decisions Made before planning. The rest go to Clarifications Needed.
 
 1. **Requirements Review:**
    - Parse issue body for requirements/acceptance criteria
@@ -131,7 +168,13 @@ Get a high-level view of the repository structure to identify affected areas.
           {mention specific modules/components if issue indicates}
 
           Repository: {owner/repo}
-          Project context: See CLAUDE.md for module structure and conventions"
+          Project context: See CLAUDE.md for module structure and conventions
+
+          [factory only] Validation contract: also propose the risk tier
+          with reasons, the predicted files, and evidence for every
+          acceptance criterion (see the agent's Validation Contract
+          section). Lore entries: {quoted entries}. Related archives:
+          {decisions and lessons}. Decisions so far: {answers}."
    ```
 
    The scratchpad-planner agent will:
@@ -164,7 +207,7 @@ Get a high-level view of the repository structure to identify affected areas.
 
 **Template Structure:**
 
-```markdown
+````markdown
 # {Issue Title} - #{issue_number}
 
 ## Issue Details
@@ -187,6 +230,42 @@ Get a high-level view of the repository structure to identify affected areas.
 - [ ] {criterion 1}
 - [ ] {criterion 2}
 - [ ] {criterion 3}
+
+## Readiness
+{[factory] only; leave the section out when FACTORY=off}
+- **Status:** {ready | needs_human}
+- **Proposed tier:** {standard | sensitive}: {reasons}
+- **Required checks:** {name: command, from factory check}
+- **Open questions:** {each readiness question, or "none"}
+- **Context:** {lore entries quoted verbatim; related archives and what they decided}
+
+## Validation Contract
+{[factory] only. Approved together with the plan; run_id is filled in when the run starts.}
+
+| Criterion | Evidence | Type | Kind | Demonstrated by |
+|---|---|---|---|---|
+| AC-1 {criterion text} | AC-1.e1 | test | new_behavior | `tests/auth/refresh.test.ts::rejects expired token` |
+
+```json
+{
+  "version": 1,
+  "run_id": "pending",
+  "issue": {issue_number},
+  "manifest_id": {"{manifest_id}" or null},
+  "risk_tier_proposed": "standard",
+  "risk_reasons": [],
+  "criteria": [
+    {
+      "id": "AC-1",
+      "text": "{criterion text}",
+      "evidence": [
+        { "id": "AC-1.e1", "type": "test", "kind": "new_behavior", "selector": "tests/auth/refresh.test.ts::rejects expired token" }
+      ]
+    }
+  ],
+  "predicted_files": ["src/auth/refresh.ts", "tests/auth/refresh.test.ts"]
+}
+```
 
 ## Branch Strategy
 - **Base branch:** main (or develop-ts/develop if exists)
@@ -263,7 +342,7 @@ Get a high-level view of the repository structure to identify affected areas.
 **Generated:** {timestamp}
 **By:** Issue Setup Skill
 **Source:** {github_issue_url}
-```
+````
 
 **Scratchpad Quality Guidelines:**
 
@@ -272,6 +351,27 @@ Get a high-level view of the repository structure to identify affected areas.
 - **Testable:** Acceptance criteria should be verifiable
 - **Realistic:** Don't over-engineer or under-scope
 - **Contextual:** Reference project-specific conventions
+
+### Phase 3.2: Check the Contract [factory]
+
+The contract (`schemas/factory/contract.schema.json`, design §5) says what the work must demonstrate, never how the project's checks run:
+- One criterion per acceptance criterion, IDs `AC-1`, `AC-2`, …; evidence IDs `AC-1.e1`, `AC-1.e2`, ….
+- **Evidence types:** `test` (`selector`: `path::test name`, or a bare path for every test in the file, read from the structured results of the project's `verify`), `command` (`run` plus `expect.exit_code`, optionally `stdout_matches` / `stdout_not_matches`), or `manual` (`instructions` a human can follow and check).
+- **Kind:** `new_behavior` when the evidence should fail without this change (the plan says so); `regression` when it is expected to pass already.
+- **Tier:** `sensitive` when the work touches the project's `sensitive-paths`, changes execution policy (test or lint config, CI, scripts, `validation-files`), or by judgment: migrations, auth, money, public API, architecture. Give reasons. Otherwise `standard`.
+- Never add `setup`, `static` or `verify` commands: those come only from settings.
+
+Check the draft from outside the tree:
+
+```bash
+DRAFT_DIR=$(mktemp -d)
+# write the scratchpad's contract JSON block to "$DRAFT_DIR/contract.json"
+bash "$FACTORY" --json check --contract "$DRAFT_DIR/contract.json"
+```
+
+- `.result` is a readiness document. Add your own readiness questions from Phase 2 to its `questions` (same shape), and make `status` `needs_human` if there are any.
+- Fill the scratchpad's `## Readiness`: status, the tier from `.result.tier` (the runner never lowers a proposed tier), required checks, and the open questions.
+- Each open question also goes to Clarifications Needed, for Phase 3.5.
 
 ### Phase 3.5: Interactive Q&A (Resolve Clarifications)
 
@@ -329,6 +429,14 @@ Get a high-level view of the repository structure to identify affected areas.
       - Implementation tasks (add/remove/modify based on decisions)
       - Technical approach
       - Assumptions (convert to confirmed decisions)
+      - **[factory]** The Validation Contract: criteria, evidence, tier, predicted files
+
+   d) **[factory] Re-check and mirror readiness.** Rewrite `$DRAFT_DIR/contract.json` from the scratchpad and run Phase 3.2's `check` again, until it is `ready` or the operator leaves questions open. Then mirror the final readiness into the manifest, whatever the status, so a stale `needs_human` is cleared too:
+      ```bash
+      # $DRAFT_DIR/readiness.json: {"version": 1, "status": …, "questions": […]}
+      bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" readiness {owner/repo} {issue_number} "$DRAFT_DIR/readiness.json"
+      ```
+      It does nothing when the issue has no manifest work item. Update `## Readiness` with the final status.
 
 4. **Confirm Resolution:**
    Display summary of decisions made:
@@ -380,8 +488,8 @@ Proceeding to branch creation...
 ```
 
 **Skip Conditions:**
-- No items in "Clarifications Needed" → Skip directly to Phase 3.6
-- User explicitly requests to skip → Note unresolved questions, proceed with assumptions
+- No items in "Clarifications Needed" → Skip directly to Phase 3.6 (**[factory]** after step 3d: mirror the readiness)
+- User explicitly requests to skip → Note unresolved questions, proceed with assumptions. **[factory]** Readiness stays `needs_human`; mirror it (step 3d)
 
 ### Phase 3.6: Plan Approval
 

@@ -232,6 +232,22 @@ Each task should explain:
 - How it fits into the larger picture
 - What risks or challenges to watch for
 
+### Validation Contract (factory path only)
+
+When setup-work asks for a validation contract (the project is set up for the Escapement factory), also return the material for the scratchpad's `## Validation Contract` (`schemas/factory/contract.schema.json`, docs/FACTORY_DESIGN.md §5). The contract says what the work must demonstrate, not how the project's checks run.
+
+- **Evidence for every acceptance criterion.** For each one, say what would show it is met:
+  - `test`: a selector `path::test name` (or a bare path for a whole file). Name the test the plan will add or the existing test that covers it, and check that the file and naming fit the project's test layout.
+  - `command`: a command and its expected exit code, optionally a pattern its output must or must not match. Use it only for things a test can't show, such as a CLI's behavior.
+  - `manual`: concrete instructions a human can follow and check, when nothing automated can show it. Vague instructions are a readiness failure.
+- **Kind.** `new_behavior` when the evidence should fail without the change: say in the plan that it would. `regression` when it should already pass.
+- **A criterion you can't give evidence is a readiness question**, not something to paper over with a weak test. Say so.
+- **Predicted files**, repository-relative.
+- **Proposed risk tier.** `sensitive` when the predicted files match the project's `sensitive-paths` or `validation-files` (in CLAUDE.md `## Escapement Settings`), or the work touches migrations, auth, money, a public API or the architecture. Otherwise `standard`. Give the reasons.
+- Never propose `setup`, `static` or `verify` commands. Those come only from the project's settings.
+
+Use the lore entries and related archives setup-work passes you. A plan that conflicts with a lore entry needs a reason.
+
 ### Phase 6: Resumability and Iteration
 
 **Support Multi-Session Analysis**
@@ -292,6 +308,7 @@ Present to user when:
 
 ---
 
-**Version:** 1.0.0
+**Version:** 1.1.0
 **Created:** 2026-01-01
+**Changed:** 2026-11-16 (1.1.0: validation contract material for setup-work's factory path, #63)
 **Purpose:** Replace generic Explore agent with specialized planning expertise
