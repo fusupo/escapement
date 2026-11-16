@@ -114,7 +114,7 @@ Operator involvement is typically focused on decision-making and judgment rather
 Escapement keeps its automated work visibly separate from yours: on GitHub, it acts as an AI agent account.
 
 - **Issues, PRs, comments and reviews** go through the GitHub MCP tools, so connect the GitHub MCP server with the agent account's credentials. Skills never use the `gh` CLI, which is logged in as you.
-- **Pushes** go through `factory push`, with the agent's token.
+- **Pushes** go through `factory push`, with the agent's token, which is only ever sent to github.com. In a project hosted elsewhere, pushes stay yours.
 - **Commits** carry the agent's name and email (`factory agent`).
 
 Configure the agent identity once, in `~/.config/escapement/agent.env` (`chmod 600`), or export the variables:

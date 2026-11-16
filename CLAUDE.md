@@ -197,9 +197,9 @@ Escapement's GitHub work is visibly the AI agent's, never the operator's (#80, `
 
 - **Skills use the GitHub MCP tools for everything on GitHub** (issues, PRs, comments, reviews, reads), with the server's current tool names (`issue_read`, `issue_write`, `pull_request_read`, `create_pull_request`, `pull_request_review_write`, …). Skills never call `gh` and never list `Bash:gh` in their tools. `manifest/test-skills-github.ts` enforces this.
 - **The only remaining `gh` use is the runner** (`manifest/factory/`), always with the agent token as `GH_TOKEN`: the authorized path's PR and `factory agent`'s account lookup. It is a subprocess for hosts with no MCP client, so it can't use the MCP tools.
-- **Pushes:** skills push with `factory push` (the current branch, with the agent token, never forced, never the base branch, `main` or `master`), not `git push`. Under an authorized run, `factory pr` pushes.
+- **Pushes:** skills push with `factory push` (the current branch, with the agent token, never forced, never the base branch, origin's default branch, `main` or `master`), not `git push`. Under an authorized run, `factory pr` pushes. The agent token is only ever sent to github.com: any other origin host is refused with `not_github`.
 - **Commits:** `commit-changes` commits with the `factory agent` identity, on the plain path too.
-- **Without an agent identity** (`no_agent_token`), plain `commit-changes` and `create-pr` fall back to the operator's git identity and `git push`, and say so in one line. A configured identity that fails (`agent_env_permissions`, a failed lookup or push) is reported, never retried as the operator. The authorized path never falls back.
+- **Without an agent identity** (`no_agent_token`), or off github.com for a push (`not_github`), plain `commit-changes` and `create-pr` fall back to the operator's git identity and `git push`, and say so in one line. A configured identity that fails (`agent_env_permissions`, a failed lookup or push) is reported, never retried as the operator. The authorized path never falls back.
 
 ### Commit Message Format
 
