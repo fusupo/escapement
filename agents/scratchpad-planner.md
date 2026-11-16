@@ -243,7 +243,7 @@ When setup-work asks for a validation contract (the project is set up for the Es
 - **Kind.** `new_behavior` when the evidence should fail without the change: say in the plan that it would. `regression` when it should already pass.
 - **A criterion you can't give evidence is a readiness question**, not something to paper over with a weak test. Say so.
 - **Predicted files**, repository-relative.
-- **Proposed risk tier.** `sensitive` when the predicted files match the project's `sensitive-paths` or `validation-files` (in CLAUDE.md `## Escapement Settings`), or the work touches migrations, auth, money, a public API or the architecture. Otherwise `standard`. Give the reasons.
+- **Proposed risk tier.** `sensitive` when the predicted files match the project's `sensitive-paths` or `validation-files` (read them in CLAUDE.md `## Escapement Settings`; `factory check` then computes path matches authoritatively), or the work touches migrations, auth, money, a public API or the architecture. Otherwise `standard`. Give judgment reasons only; `factory check` adds a reason for each matching path itself.
 - Never propose `setup`, `static` or `verify` commands. Those come only from the project's settings.
 
 Use the lore entries and related archives setup-work passes you. A plan that conflicts with a lore entry needs a reason.

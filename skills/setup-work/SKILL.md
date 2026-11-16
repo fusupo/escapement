@@ -7,6 +7,10 @@ tools:
   - mcp__linear__*
   - Bash:git *
   - Bash:bash *
+  - Bash:mktemp *
+  - Bash:sha256sum *
+  - Bash:test *
+  - Bash:ls *
   - Read
   - Write
   - Glob
@@ -27,7 +31,9 @@ Transform a GitHub issue into a fully-prepared development environment with:
 
 **Factory path (optional, docs/FACTORY_DESIGN.md §3).** When the project is set up for the Escapement factory, setup-work also checks readiness, gathers light context, proposes a risk tier and drafts a validation contract, and plan approval can authorize a factory run. Steps marked **[factory]** run only on this path. When the project isn't set up for it (Phase 0.5), skip every **[factory]** step: setup-work then behaves exactly as it always has. Plain approval never creates a run.
 
-The factory runner is `bash "${CLAUDE_PLUGIN_ROOT}/scripts/factory.sh"`, written `factory` below (reference: `docs/FACTORY_CLI.md`). Run it from the project root. Always pass `--json` and route on the JSON, never on the text.
+The factory runner is `bash "${CLAUDE_PLUGIN_ROOT}/scripts/factory.sh"`, written `factory` below (reference: `docs/FACTORY_CLI.md`). Run it from the project root. Always pass `--json` and route on the JSON, never on the text. (`manifest.sh` has no JSON mode; read its text.)
+
+Each Bash call starts a fresh shell, so variables such as `$FACTORY`, `$MANIFEST_DB`, `$DRAFT_DIR` and `{target_ref}` don't carry over between calls. Note their literal values when you first get them, and write those values into later commands.
 
 ## Context Prerequisites
 
@@ -49,10 +55,9 @@ Get a high-level view of the repository structure to identify affected areas.
 
 **Before proceeding with setup, check if work already initialized:**
 
-1. **Detect existing scratchpad:**
+1. **Detect existing scratchpad** for this issue only (another issue's scratchpad doesn't count):
    ```bash
-   # Look for SCRATCHPAD_{issue_number}.md
-   ls SCRATCHPAD_*.md 2>/dev/null
+   ls SCRATCHPAD_{issue_number}.md 2>/dev/null
    ```
 
 2. **If scratchpad exists:**
@@ -82,10 +87,10 @@ bash "$FACTORY" --check && bash "$FACTORY" --json check
 
 `check` without `--contract` checks only the project's `## Escapement Settings`.
 
-- **`--check` fails** (runner dependencies not installed), or **`.result.status` is `needs_human`**: `FACTORY=off`. Skip every **[factory]** step. If the settings name at least one required check command but `check` still asked questions, say so in one line of the final output (`Factory run not offered: {questions}`), so the operator knows why. Otherwise stay silent: most projects aren't set up for the factory.
-- **`.result.status` is `ready`**: `FACTORY=on`. Keep `.result.required_checks` for the scratchpad.
+- **`--check` fails** (runner dependencies not installed), or **`.result.status` is `needs_human`**: `FACTORY=off`. Skip every **[factory]** step. If `.result.required_checks` has at least one non-null `command` but `check` still asked questions, the project is partly set up: say so in one line of the final output (`Factory run not offered: {questions}`), so the operator knows why. Otherwise stay silent: most projects aren't set up for the factory.
+- **`.result.status` is `ready`**: `FACTORY=on`. Keep `.result.required_checks` for the scratchpad, and `.result.target_ref`, the branch the run will target, as `{target_ref}` (Phase 4).
 
-Never read the settings by grepping CLAUDE.md; `check` applies the section and fence rules.
+Decide availability only from `check`, never by reading CLAUDE.md yourself: `check` applies the section and fence rules.
 
 ### Phase 1: Gather Context (Parallel)
 
@@ -124,7 +129,7 @@ Never read the settings by grepping CLAUDE.md; `check` applies the section and f
 5. **[factory] Light context (§3.2):**
    - `CONTEXT_PATH=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/get-context-path.sh" CLAUDE.md)`. The lore file is `{context-path}/PROJECT_LORE.md`, or `PROJECT_LORE.md` in the project root when context-path is empty.
    - **Lore:** pick the entries that bear on the areas this issue touches. Quote them verbatim; don't paraphrase.
-   - **Related archives:** in `{context-path}/INDEX.md`, find the issues this one depends on or relates to, and read the Key Decisions and Lessons Learned in their archive `README.md`.
+   - **Related archives:** in `{context-path}/INDEX.md`, find the issues this one depends on or relates to. Each row names a branch; its archive is `{context-path}/{branch}/archive/README.md` (a manifest work item's `archive_path` points there too). Read its Key Decisions and Lessons Learned. This needs the issue's dependencies, so do it after the issue is fetched.
    - **Manifest work item**, if there is one. Opening the manifest creates it, so first check that it exists, and skip the manifest entirely (here and in Phase 3.5) when it doesn't:
      ```bash
      MANIFEST_DB=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" db-path)   # never opens or creates it
@@ -158,11 +163,12 @@ Never read the settings by grepping CLAUDE.md; `check` applies the section and f
 
 2. **Codebase Investigation (Delegate to Scratchpad-Planner Agent):**
 
-   For thorough codebase analysis, use the **scratchpad-planner agent**:
+   For thorough codebase analysis, use the **scratchpad-planner agent** (an agent, not a skill):
 
    ```
-   Skill: scratchpad-planner
-   args: "issue #{number}: {issue title}
+   Agent:
+     subagent_type: escapement:scratchpad-planner
+     prompt: "issue #{number}: {issue title}
 
           Summary: {brief issue summary}
 
@@ -340,7 +346,7 @@ Never read the settings by grepping CLAUDE.md; `check` applies the section and f
 
 ## Work Log
 
-{This section fills in during execution via /start-work}
+{This section fills in during execution via do-work}
 {Each work session adds dated entries}
 
 ---
@@ -363,7 +369,7 @@ The contract (`schemas/factory/contract.schema.json`, design §5) says what the 
 - One criterion per acceptance criterion, IDs `AC-1`, `AC-2`, …; evidence IDs `AC-1.e1`, `AC-1.e2`, ….
 - **Evidence types:** `test` (`selector`: `path::test name`, or a bare path for every test in the file, read from the structured results of the project's `verify`), `command` (`run` plus `expect.exit_code`, optionally `stdout_matches` / `stdout_not_matches`), or `manual` (`instructions` a human can follow and check).
 - **Kind:** `new_behavior` when the evidence should fail without this change (the plan says so); `regression` when it is expected to pass already.
-- **Tier:** `sensitive` when the work touches the project's `sensitive-paths`, changes execution policy (test or lint config, CI, scripts, `validation-files`), or by judgment: migrations, auth, money, public API, architecture. Give reasons. Otherwise `standard`.
+- **Tier:** `sensitive` when the work touches the project's `sensitive-paths`, changes execution policy (test or lint config, CI, scripts, `validation-files`), or by judgment: migrations, auth, money, public API, architecture. Otherwise `standard`. In `risk_reasons`, give only judgment reasons (such as "changes which tokens are accepted"): `check` adds a reason for every predicted file matching `sensitive-paths` or `validation-files` itself.
 - Never add `setup`, `static` or `verify` commands: those come only from settings.
 
 Check the draft from outside the tree:
@@ -375,7 +381,7 @@ bash "$FACTORY" --json check --contract "$DRAFT_DIR/contract.json"
 ```
 
 - `.result` is a readiness document. Add your own readiness questions from Phase 2 to its `questions` (same shape), and make `status` `needs_human` if there are any.
-- Fill the scratchpad's `## Readiness`: status, the tier from `.result.tier` (the runner never lowers a proposed tier), required checks, and the open questions.
+- Fill the scratchpad's `## Readiness`: status, the tier and reasons from `.result.tier` (the runner never lowers a proposed tier), required checks, and the open questions.
 - Each open question also goes to Clarifications Needed, for Phase 3.5.
 
 ### Phase 3.5: Interactive Q&A (Resolve Clarifications)
@@ -436,7 +442,7 @@ bash "$FACTORY" --json check --contract "$DRAFT_DIR/contract.json"
       - Assumptions (convert to confirmed decisions)
       - **[factory]** The Validation Contract: criteria, evidence, tier, predicted files
 
-   d) **[factory] Re-check and mirror readiness.** Rewrite `$DRAFT_DIR/contract.json` from the scratchpad and run Phase 3.2's `check` again, until it is `ready` or the operator leaves questions open. Then mirror the final readiness into the manifest, whatever the status, so a stale `needs_human` is cleared too:
+   d) **[factory] Re-check and mirror readiness.** If the answers changed the contract, rewrite `$DRAFT_DIR/contract.json` from the scratchpad and run Phase 3.2's `check` again, until it is `ready` or the operator leaves questions open. Then, changed or not, mirror the final readiness into the manifest, whatever the status, so a stale `needs_human` is cleared too:
       ```bash
       # $DRAFT_DIR/readiness.json: {"version": 1, "status": …, "questions": […]}
       bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" readiness {owner/repo} {issue_number} "$DRAFT_DIR/readiness.json"
@@ -535,7 +541,7 @@ This mirrors Claude's EnterPlanMode/ExitPlanMode approval pattern — the user r
    Offer **Approve + authorize run** only when `FACTORY=on` and the final readiness is `ready`. A `needs_human` plan can still get plain **Approve**.
 
 3. **Handle Response:**
-   - **Approve + authorize run:** Proceed to Phase 4, then Phase 4.5
+   - **Approve + authorize run:** Note the choice in the Work Log, then proceed to Phase 4 and Phase 4.5
    - **Approve:** Proceed to Phase 4 only. No run is created, and the Validation Contract stays a draft in the scratchpad
    - **Revise plan:** Resume scratchpad-planner agent with user feedback, then return to Phase 3.6
    - **Let me review:** Wait for user to read SCRATCHPAD, then re-ask approval
@@ -558,6 +564,8 @@ This mirrors Claude's EnterPlanMode/ExitPlanMode approval pattern — the user r
    git branch -r | grep -E 'origin/(develop-ts|develop|main)'
    ```
 
+   **[factory]** On the factory path, don't detect: the base branch is `{target_ref}` from Phase 0.5, the branch the run will target (the project's `base-branch` setting, else `develop` when `origin/develop` exists, else `main`). Branch and run then agree.
+
 2. **Create feature branch:**
    ```bash
    # Generate branch name from issue
@@ -567,6 +575,7 @@ This mirrors Claude's EnterPlanMode/ExitPlanMode approval pattern — the user r
    git branch {issue-number}-{slugified-title} origin/{base-branch}
    # Don't checkout yet - let operator decide when to switch
    ```
+   **[factory]** Add `--no-track`, so the branch doesn't track `origin/{base-branch}`: the run is authorized to push its branch, and a branch tracking the base could push to it. Use the local `{base-branch}` if `origin/{base-branch}` doesn't exist.
 
 3. **Confirm creation:**
    ```bash
@@ -591,9 +600,9 @@ Only after **Approve + authorize run**. The approved plan and contract become a 
 
 3. **Start the run:**
    ```bash
-   bash "$FACTORY" --json start '#{issue_number}' --target-ref {base-branch} [--manifest-id {manifest_id}]
+   bash "$FACTORY" --json start '{owner/repo}#{issue_number}' --target-ref {target_ref} [--manifest-id {manifest_id}]
    ```
-   Keep `.result.run_id` and `.result.artifact_dir`. On `run_exists`, this worktree already has an open run: show `factory status` and stop.
+   Name the work item with its repository: run IDs share one per-user database across projects, and `owner/repo#42` gives `owner-repo#42-r1`. Keep `.result.run_id` and `.result.artifact_dir`, and single-quote the run ID in every later command (it contains `#`). On `run_exists`, this worktree already has an open run: show `factory status` and stop.
 
 4. **Write the contract into the run.** Set `run_id` to the new run ID in the scratchpad's contract block, and write the same JSON to `{artifact_dir}/contract.draft.json`. Change nothing else: what the operator approved is what gets authorized.
 
@@ -718,8 +727,8 @@ If can't access repository:
 ## Integration with Other Skills
 
 **Flows to:**
-- `/start-work {issue_number}` - Begin execution from scratchpad
-- `/commit` - Make atomic commits as checklist progresses
+- `do-work` - Begin execution from scratchpad
+- `commit-changes` - Make atomic commits as checklist progresses
 
 **Receives context from:**
 - Project CLAUDE.md - Architecture and conventions

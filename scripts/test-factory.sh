@@ -270,7 +270,7 @@ mkdir -p "$sproject"
 )
 sf() { (cd "$sproject" && bash "$wrapper" "$@"); }
 out="$(sf --json check)"
-if [[ "$(jq -r '.result.status' <<<"$out")" == ready ]]; then ok; else bad "setup-factory-available" "$out"; fi
+if [[ "$(jq -r '.result.status == "ready" and .result.target_ref == "main"' <<<"$out")" == true ]]; then ok; else bad "setup-factory-available" "$out"; fi
 
 # a criterion without evidence: readiness is needs_human, naming it
 cat > "$tmp/draft-bad.json" <<'JSON'
@@ -288,12 +288,12 @@ sroot="$(cd "$sproject" && pwd -P)"
 if [[ "$(jq -r '.result.status' <<<"$out")" == ready && "$(sf --json status --all | jq --arg w "$sroot" '[.result.runs[] | select(.worktree_path == $w)] | length')" == 0 ]]; then ok; else bad "setup-draft-ready-no-run" "$out"; fi
 
 # Approve + authorize run: check out, exclude, start, write, check, approve
-(cd "$sproject" && git checkout -q -b 11-thing && echo plan > SCRATCHPAD_11.md && echo '{}' > SESSION_LOG_1.jsonl)
+(cd "$sproject" && git branch -q --no-track 11-thing main && git checkout -q 11-thing && echo plan > SCRATCHPAD_11.md && echo '{}' > SESSION_LOG_1.jsonl)
 sf --json exclude 'SCRATCHPAD_*' 'SESSION_LOG_*' AGENT_CONSTRAINTS.md >/dev/null
-out="$(sf --json start '#11' --target-ref main)"
+out="$(sf --json start 'acme/s#11' --target-ref main)"
 run_id="$(jq -r .result.run_id <<<"$out")"
 art="$(jq -r .result.artifact_dir <<<"$out")"
-if [[ "$run_id" == "#11-r1" && -d "$art" ]]; then ok; else bad "setup-start" "$out"; fi
+if [[ "$run_id" == "acme-s#11-r1" && "$(jq -r .result.issue_number <<<"$out")" == 11 && -d "$art" ]]; then ok; else bad "setup-start" "$out"; fi
 jq --arg r "$run_id" '.run_id = $r' "$tmp/draft.json" > "$art/contract.draft.json"
 out="$(sf --json check --contract "$art/contract.draft.json")"
 if [[ "$(jq -r '.result.status' <<<"$out")" == ready ]]; then ok; else bad "setup-check-in-run" "$out"; fi
