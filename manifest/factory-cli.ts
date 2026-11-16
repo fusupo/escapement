@@ -261,8 +261,9 @@ function dispatchNoDb(command: string, p: Parsed): Outcome {
           text = null;
         }
       }
-      const ctx = projectContext(str(p, "--project-root"));
-      const r = checkReadiness({ contractText: text, source: file, projectDir: ctx.worktreePath });
+      // Readiness needs the worktree, not a branch: a detached HEAD (a fresh
+      // `git worktree add --detach`) is a valid place to check settings (#65).
+      const r = checkReadiness({ contractText: text, source: file, projectDir: resolveWorktree(str(p, "--project-root")) });
       const lines = [
         r.status,
         ...r.questions.map((q) => `  - [${q.about}${q.ref ? ` ${q.ref}` : ""}] ${q.question}`),

@@ -291,7 +291,7 @@ The commands in `verdict.record` and `runner.exec` carry `--data-dir` naming the
 
 ### check
 
-`check` is the mechanical half of the readiness check (§3.1), for a planner to run before `start` or `approve`. It reads the contract and the settings of `--project-root` (default: the current worktree) and reports `needs_human` with a question for each gap:
+`check` is the mechanical half of the readiness check (§3.1), for a planner to run before `start` or `approve`. It reads the contract and the settings of `--project-root` (default: the current worktree; a detached HEAD is fine, since no branch is needed) and reports `needs_human` with a question for each gap:
 
 - the contract is invalid (each problem), has no criteria, or has a criterion without evidence;
 - a required check has no command configured;
@@ -378,7 +378,7 @@ ESCAPEMENT_AGENT_EMAIL=agent@example.com      # optional
    - the current report, the latest complete attempt's highest revision, exists (`no_report`), is `pass` or `pending_manual` when creating (`not_validated`), and is for the approved contract (`stale_report`);
    - HEAD equals the report's `head_sha` and the tree is clean (`head_moved`: validate again).
 2. **Lookup.** `gh pr list --head {branch} --state open`, keeping PRs from the run's repository (a fork's PR with the same branch name is ignored). Two open PRs: `pr_conflict`. A recorded number that isn't the open PR: `pr_conflict`. A recorded PR that is no longer open: `pr_not_open`.
-3. **Create or update.** With no open PR, creating needs `--title` (`usage`) and the deadline not passed (otherwise the run escalates: `run_deadline`). The runner pushes HEAD to `refs/heads/{branch}` and nothing else, never forced, then runs `gh pr create --base {target_ref} --head {branch}` or `gh pr edit {number}`. On a GitHub remote the push goes over https as the agent, whatever protocol `origin` uses; a local remote is pushed as configured. Project `pre-push` hooks still run.
+3. **Create or update.** With no open PR, creating needs `--title` (`usage`) and the deadline not passed (otherwise the run escalates: `run_deadline`). The runner pushes HEAD to `refs/heads/{branch}` and nothing else, never forced, then runs `gh pr create --base {target_ref} --head {branch}`, or updates the PR with `gh api -X PATCH repos/{repo}/pulls/{number}` (not `gh pr edit`, which also queries classic Projects and fails where they are deprecated). On a GitHub remote the push goes over https as the agent, whatever protocol `origin` uses; a local remote is pushed as configured. Project `pre-push` hooks still run.
 4. **Record.** The PR number goes on the run, with a `state_change` event (entity `pr`), and a `validated` run moves to `pr_open`.
 
 **The description** is the host's narrative (`--body-file`; on update without it, the PR's current description) plus the runner's report section, between `<!-- escapement:factory-report:begin -->` and `<!-- escapement:factory-report:end -->`. Updates replace only the section. It shows the outcome, the run and attempt (and report revision), the actual and proposed tier with reasons, what was validated (the branch, not the merge result), the contract digest, a table of every criterion's evidence with its result and judgment, manual checks (pending or recorded), findings and flags. Text from reports is escaped, so it can't break the table or forge a marker. The final description is kept at `{artifact_dir}/pr/body.md`.

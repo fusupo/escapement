@@ -491,6 +491,11 @@ mkdir -p "$sproject"
 sf() { (cd "$sproject" && bash "$wrapper" "$@"); }
 out="$(sf --json check)"
 if [[ "$(jq -r '.result.status == "ready" and .result.target_ref == "main"' <<<"$out")" == true ]]; then ok; else bad "setup-factory-available" "$out"; fi
+# a detached HEAD (git worktree add --detach) is still a place to check settings
+(cd "$sproject" && git checkout -q --detach)
+out="$(sf --json check)"
+if [[ "$(jq -r '.result.status == "ready" and .result.target_ref == "main"' <<<"$out")" == true ]]; then ok; else bad "setup-check-detached-head" "$out"; fi
+(cd "$sproject" && git checkout -q main)
 
 # a criterion without evidence: readiness is needs_human, naming it
 cat > "$tmp/draft-bad.json" <<'JSON'
