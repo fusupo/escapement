@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { initManifest } from "./init.ts";
+import { initManifest, resolveDbPath, type ManifestOptions } from "./init.ts";
 import { buildDispatchPlan, formatPlan } from "./plan.ts";
 import type { Database } from "better-sqlite3";
 
@@ -28,9 +28,14 @@ Check subcommands:
   plan              Generate dispatch plan with parallel groups and overlaps
   query <sql>       Execute inline SQL and print results
   in-progress <id> <branch>  Mark a work item as in_progress and record its branch
+  db-path           Print the database path (does not open or create it)
 
 Options:
-  --data-dir <path>  Override the manifest data directory`);
+  --data-dir <path>  Use {path}/manifest.db instead of the shared manifest
+
+One manifest is shared by every project. It lives at
+$ESCAPEMENT_MANIFEST_DIR/manifest.db when that is set, otherwise at
+\${XDG_DATA_HOME:-~/.local/share}/escapement/manifest.db.`);
   process.exit(1);
 }
 
@@ -557,12 +562,12 @@ function main(): void {
   const rawArgs = process.argv.slice(2);
 
   // Parse --data-dir flag
-  let dataDir: string | undefined;
+  const opts: ManifestOptions = {};
   const args: string[] = [];
   for (let i = 0; i < rawArgs.length; i++) {
     if (rawArgs[i] === "--data-dir") {
-      dataDir = rawArgs[++i];
-      if (!dataDir) {
+      opts.dataDir = rawArgs[++i];
+      if (!opts.dataDir) {
         console.error("Error: --data-dir requires a path argument.");
         process.exit(1);
       }
@@ -574,7 +579,19 @@ function main(): void {
   const command = args[0];
   if (!command) usage();
 
-  const db = initManifest(dataDir);
+  // Answered without opening (or creating) the database.
+  if (command === "db-path") {
+    console.log(resolveDbPath(opts));
+    return;
+  }
+
+  let db: Database;
+  try {
+    db = initManifest(opts);
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
 
   try {
     switch (command) {

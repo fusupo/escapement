@@ -62,7 +62,7 @@ CONTEXT_PATH=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/get-context-path.sh" CLAUDE.m
 
 It reads only the `## Escapement Settings` section of `CLAUDE.md` and ignores fenced code blocks, so documentation examples never match. Empty output means context-path is not configured. Don't grep CLAUDE.md for the setting yourself (#57).
 
-The manifest database lives at `{context-path}/manifest/manifest.db`.
+There is one manifest database per user, shared by every project: work items record their repo, and dependencies can cross repos. `bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" db-path` prints its location (`~/.local/share/escapement/manifest.db` by default). Don't pass `--data-dir` (#58).
 
 ### 0.2 Verify Manifest CLI
 
@@ -73,12 +73,12 @@ Confirm the manifest CLI and database exist:
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" --check
 
 # Check database exists
-ls {context-path}/manifest/manifest.db
+ls "$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" db-path)"
 ```
 
 If database does not exist:
 ```
-No manifest database found at {context-path}/manifest/manifest.db.
+No manifest database found at {db-path}.
 Run manifest-bootstrap first to initialize the manifest.
 ```
 **Stop.**
@@ -539,9 +539,10 @@ If `manifest-cli.ts query` fails:
 
 ---
 
-**Version:** 1.0.2
+**Version:** 1.0.3
 **Last Updated:** 2026-11-15
 **Maintained By:** Escapement
 **Changelog:**
+- v1.0.3: The manifest database is one per-user file shared by all projects, found with `manifest.sh db-path` instead of under context-path (#58)
 - v1.0.2: Run the manifest CLI through scripts/manifest.sh from the plugin root, so it works from any project directory (#67)
 - v1.0.1: Read context-path with scripts/get-context-path.sh instead of grep, which also matched documentation examples (#57)

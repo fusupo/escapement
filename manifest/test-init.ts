@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseContextPath } from "./init.ts";
+import { parseContextPath, resolveDbPath } from "./init.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Shared with scripts/test-get-context-path.sh; format described at its top.
@@ -54,4 +54,36 @@ function run() {
   console.log("\nAll parseContextPath tests passed.");
 }
 
+function runDbPath() {
+  console.log("\nShared manifest location\n");
+
+  const home = "/home/someone";
+  const cwd = "/work/some-project";
+  assert(
+    resolveDbPath({ env: {}, home, cwd }) === "/home/someone/.local/share/escapement/manifest.db",
+    "default: ~/.local/share/escapement/manifest.db",
+  );
+  assert(
+    resolveDbPath({ env: { XDG_DATA_HOME: "/xdg" }, home, cwd }) === "/xdg/escapement/manifest.db",
+    "XDG_DATA_HOME is honoured",
+  );
+  assert(
+    resolveDbPath({ env: { XDG_DATA_HOME: "/xdg", ESCAPEMENT_MANIFEST_DIR: "/shared" }, home, cwd }) ===
+      "/shared/manifest.db",
+    "ESCAPEMENT_MANIFEST_DIR overrides the default",
+  );
+  assert(
+    resolveDbPath({ dataDir: "data", env: { ESCAPEMENT_MANIFEST_DIR: "/shared" }, home, cwd }) ===
+      "/work/some-project/data/manifest.db",
+    "--data-dir overrides everything, relative to the cwd",
+  );
+  assert(
+    resolveDbPath({ env: {}, home, cwd: "/work/other-project" }) === resolveDbPath({ env: {}, home, cwd }),
+    "every project gets the same database",
+  );
+
+  console.log("\nAll manifest location tests passed.");
+}
+
 run();
+runDbPath();

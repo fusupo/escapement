@@ -378,8 +378,8 @@ ul.tight li{margin:.3rem 0}
       <h3>Prerequisites</h3>
       <ul class="tight">
         <li><b>#57, context-path detection</b> <span class="state s-pass">done</span>. Detection matched the documentation example before the real value, so run artifacts would have landed in the wrong place. Found alongside it: <b>#67</b> <span class="state s-pass">done</span>, the manifest skills now run their CLI through a plugin-root wrapper.</li>
-        <li><b>Project identity in the manifest code</b> (#58). <code>resolveContextPath()</code> reads the CLAUDE.md next to the <i>plugin</i>, so every project resolves to Escapement's own context path and database. The CLI must take the target root explicitly.</li>
-        <li><b>Versioned schema</b> (#58). <code>ensureSchema()</code> skips setup whenever <code>work_items</code> exists, so factory tables would never reach an existing database. Replace it with ordered migrations.</li>
+        <li><b>Project identity in the manifest code</b> (#58) <span class="state s-pass">done</span>. <code>resolveContextPath()</code> reads the CLAUDE.md next to the <i>plugin</i>, so every project resolves to Escapement's own context path and database. Now one per-user database is shared by all projects, since work items carry their repo and dependencies cross repos. Its location no longer depends on the plugin. The factory's own <code>--project-root</code> comes with #59.</li>
+        <li><b>Versioned schema</b> (#58) <span class="state s-pass">done</span>. <code>ensureSchema()</code> skips setup whenever <code>work_items</code> exists, so factory tables would never reach an existing database. It is replaced by ordered migrations tracked in <code>PRAGMA user_version</code>.</li>
       </ul>
     </section>
 
@@ -1012,8 +1012,8 @@ $("#cfgRows").innerHTML=CFG.map(([k,v,d])=>`<tr><td><code>${k}</code></td><td cl
 /* build order */
 const BUILD=[
  [1,"#57","Context-path detection","Ignore documentation examples; read only Escapement Settings.","done"],
- [2,"#58","Project identity and versioned schema","Explicit target root for the manifest and factory CLIs; ordered migrations.","next"],
- [3,"#59","factory CLI core","Run, attempt and authorization tables; state machines; start, approve, exec, status, resume, revoke; locks; deadlines; cleanup.","open"],
+ [2,"#58","Shared manifest location and versioned schema","One per-user manifest independent of plugin location; ordered migrations.","done"],
+ [3,"#59","factory CLI core","Run, attempt and authorization tables; state machines; start, approve, exec, status, resume, revoke; locks; deadlines; cleanup.","next"],
  [4,"#60","Contract, settings, readiness, tiers","Schemas, evidence types, settings parsing.","open"],
  [5,"#61","factory validate","Identity, setup policy, static and evidence phases, fresh results, classification, actual tier, draft reports.","open"],
  [6,"#62","Reviewer","validation-reviewer, bundle, record-review completeness and idempotency.","open"],

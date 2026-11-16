@@ -1,12 +1,10 @@
 import Database from "better-sqlite3";
 import type { Database as DatabaseType } from "better-sqlite3";
-import { readFileSync, existsSync } from "node:fs";
-import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { existsSync } from "node:fs";
+import { resolve, dirname, join } from "node:path";
+import { homedir } from "node:os";
 import { mkdirSync } from "node:fs";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const SCHEMA_PATH = resolve(__dirname, "schema.sql");
+import { migrate } from "./migrations.ts";
 
 const SETTINGS_HEADING_RE = /^##[ \t]+Escapement Settings[ \t]*$/;
 const HEADING_RE = /^##?[ \t]/;
@@ -81,38 +79,37 @@ function stripQuotes(s: string): string {
 }
 
 /**
- * Read context-path from the CLAUDE.md in the repo root (parent of
- * manifest/) and resolve it against that root.
+ * Where the manifest database lives.
+ *
+ * There is one manifest per user, shared by every project: work items carry
+ * their repo, and dependencies cross repos. The location never depends on
+ * the current project or on where the plugin is installed.
+ *
+ * 1. `dataDir` (the CLI's --data-dir): `{dataDir}/manifest.db`
+ * 2. `ESCAPEMENT_MANIFEST_DIR`: `{dir}/manifest.db`
+ * 3. `${XDG_DATA_HOME:-~/.local/share}/escapement/manifest.db`
+ *
+ * Relative paths resolve against the current directory.
  */
-function resolveContextPath(): string | null {
-  const repoRoot = resolve(__dirname, "..");
-  const claudeMd = resolve(repoRoot, "CLAUDE.md");
-  if (!existsSync(claudeMd)) return null;
-
-  const raw = parseContextPath(readFileSync(claudeMd, "utf-8"), (line) =>
-    console.error(
-      `manifest: warning: ${claudeMd}:${line}: context-path outside "## Escapement Settings" is ignored`,
-    ),
-  );
-  return raw === null ? null : resolve(repoRoot, raw);
+export function resolveDbPath(
+  opts: { dataDir?: string; env?: NodeJS.ProcessEnv; home?: string; cwd?: string } = {},
+): string {
+  const env = opts.env ?? process.env;
+  const cwd = opts.cwd ?? process.cwd();
+  const dir =
+    opts.dataDir ||
+    env.ESCAPEMENT_MANIFEST_DIR ||
+    resolve(env.XDG_DATA_HOME || join(opts.home ?? homedir(), ".local", "share"), "escapement");
+  return resolve(cwd, dir, "manifest.db");
 }
 
-/**
- * Get or create a SQLite database instance at the given path.
- * If no dataDir is provided, derives the path from CLAUDE.md context-path,
- * falling back to {repo-root}/../escapement-ctx/manifest/manifest.db.
- */
-export function getDb(dataDir?: string): DatabaseType {
-  let dbPath: string;
-  if (dataDir) {
-    dbPath = resolve(dataDir, "manifest.db");
-  } else {
-    const contextPath = resolveContextPath();
-    const base = contextPath ?? resolve(__dirname, "..", "..", "escapement-ctx");
-    dbPath = resolve(base, "manifest", "manifest.db");
-  }
+export type ManifestOptions = { dataDir?: string };
 
-  // Ensure parent directory exists
+/**
+ * Get or create the SQLite database at the location given by resolveDbPath.
+ */
+export function getDb(opts: ManifestOptions = {}): DatabaseType {
+  const dbPath = resolveDbPath(opts);
   const parentDir = dirname(dbPath);
   if (!existsSync(parentDir)) {
     mkdirSync(parentDir, { recursive: true });
@@ -127,38 +124,25 @@ export function getDb(dataDir?: string): DatabaseType {
 }
 
 /**
- * Apply the V2 schema to a SQLite instance.
- * Safe to call on a fresh database. Will error if tables already exist
- * (use ensureSchema for idempotent setup).
+ * Bring a SQLite instance up to the latest schema by running any pending
+ * migrations (see migrations.ts). Idempotent, so it is safe on fresh and
+ * existing databases alike.
  */
 export function applySchema(db: DatabaseType): void {
-  const sql = readFileSync(SCHEMA_PATH, "utf-8");
-  db.exec(sql);
-}
-
-/**
- * Idempotent schema setup: only applies if work_items table doesn't exist.
- */
-export function ensureSchema(db: DatabaseType): boolean {
-  const row = db
-    .prepare(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name='work_items'"
-    )
-    .get() as { name: string } | undefined;
-
-  if (row) {
-    return false;
-  }
-  applySchema(db);
-  return true;
+  migrate(db);
 }
 
 /**
  * Initialize the manifest database: create/open the SQLite instance
- * and ensure the schema is applied.
+ * and run any pending schema migrations.
  */
-export function initManifest(dataDir?: string): DatabaseType {
-  const db = getDb(dataDir);
-  ensureSchema(db);
+export function initManifest(opts: ManifestOptions = {}): DatabaseType {
+  const db = getDb(opts);
+  try {
+    migrate(db);
+  } catch (err) {
+    db.close();
+    throw err;
+  }
   return db;
 }

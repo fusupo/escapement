@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# Tests for manifest.sh. Every CLI run uses a temporary --data-dir, so the
-# real manifest database is never opened.
+# Tests for manifest.sh. Every CLI run uses a temporary --data-dir or a
+# temporary project, so the real manifest database is never opened.
 #
 # Usage: bash scripts/test-manifest.sh
 #
@@ -42,6 +42,18 @@ if [[ "$out" == *"Total items: 1"* ]]; then ok; else bad "seed-applied" "$out"; 
 # Exit status passes through (no command -> usage, exit 1)
 (cd "$project" && bash "$wrapper" --data-dir "$tmp/data") >/dev/null 2>&1
 if [[ $? -ne 0 ]]; then ok; else bad "exit-status-passthrough"; fi
+
+# Without --data-dir, every project shares one manifest (#58).
+# ESCAPEMENT_MANIFEST_DIR keeps it in $tmp instead of the real location.
+shared="$tmp/shared"
+other="$tmp/other"
+mkdir -p "$other"
+out="$(cd "$tmp" && ESCAPEMENT_MANIFEST_DIR="$shared" bash "$wrapper" db-path 2>&1)"
+if [[ "$out" == "$shared/manifest.db" && ! -e "$shared" ]]; then ok; else bad "db-path-without-creating" "$out"; fi
+
+out="$(cd "$project" && ESCAPEMENT_MANIFEST_DIR="$shared" bash "$wrapper" seed ctx/manifest/seed.sql 2>&1)"
+out2="$(cd "$other" && ESCAPEMENT_MANIFEST_DIR="$shared" bash "$wrapper" status 2>&1)"
+if [[ "$out2" == *"Total items: 1"* ]]; then ok; else bad "shared-across-projects" "$out$out2"; fi
 
 # Missing dependencies: a copy of the plugin layout without node_modules
 fake="$tmp/fake-plugin"
