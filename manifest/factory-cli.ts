@@ -1,6 +1,6 @@
 import type { Database } from "better-sqlite3";
 import { initManifest } from "./init.ts";
-import { projectContext } from "./factory/context.ts";
+import { projectContext, resolveWorktree, excludePatterns } from "./factory/context.ts";
 import { startRun, approveRun, revokeRun, runStatus, listRuns } from "./factory/runs.ts";
 import { getRun } from "./factory/state.ts";
 import { loadSettings, SETTING_DEFAULTS, type FactorySettings } from "./factory/settings.ts";
@@ -57,11 +57,15 @@ Commands:
                                 verdict, readiness); --print for its content
   prompt [name]                 Path of an agent prompt the factory ships
                                 (reviewer); --print for its content
+  exclude <pattern>...          Add .gitignore-style patterns for the host's
+                                working files to the repository's
+                                .git/info/exclude (no run needed)
 
 Options:
   --json                Print one JSON object (see docs/FACTORY_CLI.md)
   --data-dir <path>     Use {path}/manifest.db instead of the shared manifest
-  --project-root <path> Worktree to run in (default: git toplevel of the cwd)
+  --project-root <path> start, check, exclude: the worktree
+                        (default: git toplevel of the cwd)
   --artifact-dir <path> Put run artifacts in {path}/{run_id}/
   --issue <n>           start: issue number, when the work item isn't #N
   --manifest-id <id>    start: manifest work item, for reference only
@@ -163,7 +167,7 @@ function need(value: string | undefined, what: string): string {
 type Outcome = { result: unknown; text: string; exitCode?: number };
 
 /** Commands that don't touch the manifest database, so hosts can run them anywhere. */
-const NO_DB_COMMANDS = new Set(["check", "schema", "prompt"]);
+const NO_DB_COMMANDS = new Set(["check", "schema", "prompt", "exclude"]);
 
 function dispatchNoDb(command: string, p: Parsed): Outcome {
   const [arg] = p.positional;
@@ -183,6 +187,15 @@ function dispatchNoDb(command: string, p: Parsed): Outcome {
         ...r.questions.map((q) => `  - [${q.about}${q.ref ? ` ${q.ref}` : ""}] ${q.question}`),
         ...(r.tier ? [`  tier: ${r.tier.tier}${r.tier.reasons.length ? ` (${r.tier.reasons.join("; ")})` : ""}`] : []),
         `  required checks: ${r.required_checks.map((c) => `${c.name}=${c.command ?? "(not configured)"}`).join(", ") || "none"}`,
+      ];
+      return { result: r, text: lines.join("\n") };
+    }
+    case "exclude": {
+      const r = excludePatterns(resolveWorktree(str(p, "--project-root")), p.positional);
+      const lines = [
+        ...r.added.map((x) => `added   ${x}`),
+        ...r.present.map((x) => `present ${x}`),
+        `  in ${r.path}`,
       ];
       return { result: r, text: lines.join("\n") };
     }

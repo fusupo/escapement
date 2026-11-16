@@ -122,11 +122,42 @@ export function resolveArtifactDir(opts: {
 
 /** Add `pattern` to the repository's info/exclude (shared by all its worktrees) unless present. */
 export function ensureExcluded(mainRoot: string, pattern: string): void {
-  const rel = git(["rev-parse", "--git-path", "info/exclude"], mainRoot);
-  const path = isAbsolute(rel) ? rel : resolve(mainRoot, rel);
+  excludePatterns(mainRoot, [pattern], "escapement factory run artifacts");
+}
+
+export type ExcludeResult = { path: string; added: string[]; present: string[] };
+
+/**
+ * Add each pattern to the repository's `info/exclude`, which every worktree
+ * of the repository shares, unless an identical line is already there. The
+ * project's `.gitignore` is never touched. Patterns use `.gitignore` syntax;
+ * a comment (`#…`) or negation (`!…`) is refused, since neither excludes
+ * anything and a negation could make ignored files count as untracked.
+ */
+export function excludePatterns(worktree: string, patterns: string[], comment = "escapement working files"): ExcludeResult {
+  if (patterns.length === 0) throw new FactoryError("usage", "missing pattern");
+  for (const p of patterns) {
+    if (p.trim() === "" || /[\r\n]/.test(p) || /^[#!]/.test(p)) {
+      throw new FactoryError("bad_pattern", `not an exclude pattern: ${JSON.stringify(p)}`);
+    }
+  }
+  const rel = git(["rev-parse", "--git-path", "info/exclude"], worktree);
+  const path = isAbsolute(rel) ? rel : resolve(worktree, rel);
   const current = existsSync(path) ? readFileSync(path, "utf-8") : "";
-  if (current.split("\n").some((l) => l.trim() === pattern)) return;
-  mkdirSync(dirname(path), { recursive: true });
-  const sep = current === "" || current.endsWith("\n") ? "" : "\n";
-  appendFileSync(path, `${sep}# escapement factory run artifacts\n${pattern}\n`);
+  const lines = new Set(current.split("\n").map((l) => l.trim()));
+  const added: string[] = [];
+  const present: string[] = [];
+  for (const p of patterns) {
+    if (lines.has(p)) {
+      if (!present.includes(p)) present.push(p);
+    } else if (!added.includes(p)) {
+      added.push(p);
+    }
+  }
+  if (added.length > 0) {
+    mkdirSync(dirname(path), { recursive: true });
+    const sep = current === "" || current.endsWith("\n") ? "" : "\n";
+    appendFileSync(path, `${sep}# ${comment}\n${added.join("\n")}\n`);
+  }
+  return { path, added, present };
 }

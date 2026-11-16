@@ -176,8 +176,15 @@ if [[ $status -eq 2 && "$(jq -r '.error.kind == "blocked" and .error.code == "di
 out="$(CWD="$vproject" f --json status '#9-r1')"
 if [[ "$(jq -r '(.result.attempts | length) == 0 and .result.run.state == "approved"' <<<"$out")" == true ]]; then ok; else bad "validate-blocked-no-attempt" "$out"; fi
 
-# listed in .git/info/exclude, it validates; --json gives the outcome and report path
-echo 'SCRATCHPAD_*.md' >> "$vproject/.git/info/exclude"
+# factory exclude lists it in .git/info/exclude (no database needed), once
+out="$(CWD="$vproject" ESCAPEMENT_MANIFEST_DIR="$tmp/no-db" f --json exclude 'SCRATCHPAD_*' 'SESSION_LOG_*')"
+if [[ $? -eq 0 && "$(jq -r '.ok and .result.added == ["SCRATCHPAD_*", "SESSION_LOG_*"] and (.result.path | endswith(".git/info/exclude"))' <<<"$out")" == true && ! -e "$tmp/no-db" ]]; then ok; else bad "exclude-json" "$out"; fi
+out="$(CWD="$vproject" f --json exclude 'SCRATCHPAD_*')"
+if [[ "$(jq -r '.result.added == [] and .result.present == ["SCRATCHPAD_*"]' <<<"$out")" == true && "$(grep -c '^SCRATCHPAD_\*$' "$vproject/.git/info/exclude")" == 1 ]]; then ok; else bad "exclude-idempotent" "$out"; fi
+out="$(CWD="$vproject" f --json exclude '!README.md')"
+if [[ $? -eq 1 && "$(jq -r '.error.code' <<<"$out")" == bad_pattern ]]; then ok; else bad "exclude-bad-pattern" "$out"; fi
+
+# excluded, it validates; --json gives the outcome and report path
 out="$(CWD="$vproject" f --json validate '#9-r1')"
 status=$?
 if [[ $status -eq 0 && "$(jq -r '.ok and .result.status == "awaiting_review" and .result.outcome == null and .result.attempt == 1' <<<"$out")" == true ]]; then ok; else bad "validate-json" "status=$status out=$out"; fi
