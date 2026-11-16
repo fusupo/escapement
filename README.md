@@ -489,9 +489,13 @@ fusupo
 
 ## Version
 
-**Current:** 3.13.0
+**Current:** 3.13.1
 
 **Changelog:**
+- 3.13.1 (2026-11-16): Fixes from the factory's first-release acceptance run (#65). The factory's first release is complete
+  - **`factory pr` updates PRs through the REST API.** `gh pr edit` fails in repositories where classic Projects are deprecated, so a PR created before a crash couldn't be recorded, and a PR couldn't be refreshed after a manual check
+  - **`factory check` works on a detached HEAD**, so setup-work offers a factory run in a `git worktree add --detach` worktree
+  - **The PR's report section escapes `<` and `>`**, so GitHub no longer drops text such as an email address in a manual note
 - 3.13.0 (2026-11-16): Crash recovery for the factory, and Escapement as a factory project (#65)
   - **Crash tests:** `ESCAPEMENT_FACTORY_FAULT` (testing only) makes the runner die at a named point: during checks, after checks, after the review is issued, while the review is recorded, after the PR is created. `scripts/test-factory.sh` crashes it at each one and checks that the run resumes
   - **A crashed check no longer keeps running:** its process group is killed by `factory resume`, or by the next command that takes over the dead runner's lock
