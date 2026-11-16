@@ -7,6 +7,7 @@ tools:
   - Edit
   - Write
   - Bash:git *
+  - Bash:bash *
   - Glob
   - Grep
   - TodoWrite
@@ -15,6 +16,7 @@ tools:
   - Task
   - LSP
   - EnterPlanMode
+  - PushNotification
 ---
 
 # Work Session Skill
@@ -77,6 +79,30 @@ This skill activates when the user says things like:
 
 3. **If scratchpad exists:**
    - Proceed to Phase 1 (normal work flow)
+
+### Phase 0.5: Authorized Run Check
+
+A factory run approved with setup-work's "Approve + authorize run" lets this session carry the work from the approved plan to an open PR with no further questions: the operator's touches are plan approval and merge (docs/FACTORY_DESIGN.md §6.1). Ask the runner whether this worktree has one:
+
+```bash
+FACTORY="${CLAUDE_PLUGIN_ROOT}/scripts/factory.sh"
+bash "$FACTORY" --check && bash "$FACTORY" --json authorization
+```
+
+- **`--check` fails, or `.result.matched` is false:** not authorized. Every phase below runs exactly as written. If `.result.run_id` is set, a run exists but can't continue on its own (`.result.reasons`, such as `run_halted` or `contract_changed`): say so in one line, then continue interactively.
+- **Matched:** authorized. Note `run_id`, `artifact_dir` and `next`, and check the agent identity commits will carry:
+  ```bash
+  bash "$FACTORY" --json agent
+  ```
+  If it fails (`no_agent_token`), stop before any work: "Factory run {run_id} commits and opens its PR as the AI agent: set ESCAPEMENT_AGENT_GH_TOKEN, then resume." Nothing is escalated; this is setup, not a failure of the run.
+
+**The authorized path.** Follow the Authorized Path section below instead of the confirmations in Phases 1–6. In short:
+
+| `next` | Do |
+|---|---|
+| `implement` | work through the unchecked tasks, then validate |
+| `resume`, `review` | validate (validate-work picks up where the attempt stopped) |
+| `pr`, `refresh_pr` | open or refresh the PR (create-pr) |
 
 ### Phase 1: Validate Setup
 
@@ -151,6 +177,8 @@ For each unchecked item in the Implementation Checklist:
 
 #### 3.2 Implement Task
 
+Under an authorized run, the Authorized Path (step A) replaces the questions below.
+
 **Before starting implementation, assess complexity:**
 
 **Complex Task Detection → EnterPlanMode:**
@@ -203,7 +231,7 @@ Task:
        - Notes: {any decisions or observations}
      ```
 
-3. **Offer Commit:**
+3. **Offer Commit** (under an authorized run: commit with commit-changes, no question):
    ```
    AskUserQuestion:
      question: "Task complete. Ready to commit?"
@@ -229,6 +257,8 @@ Task:
 
 #### 3.4 Handle Blockers
 
+Under an authorized run: note the blocker, then escalate and stop (Authorized Path, step D).
+
 If blocked during a task:
 
 1. **Update Scratchpad:**
@@ -250,7 +280,7 @@ If blocked during a task:
 
 Throughout the session:
 
-1. **Push Reminders:**
+1. **Push Reminders** (not under an authorized run: `factory pr` pushes):
    - After every 2-3 commits, offer to push:
      ```
      📤 You have {N} unpushed commits. Push to remote?
@@ -269,7 +299,7 @@ Throughout the session:
 
 ### Phase 5: Completion Check
 
-When all Implementation Tasks are complete:
+When all Implementation Tasks are complete (under an authorized run, run the quality checks through `factory exec`, then go on with the Authorized Path, step B):
 
 1. **Quality Checks:**
    - Run through Quality Checks section of scratchpad
@@ -294,7 +324,7 @@ When all Implementation Tasks are complete:
 
 ### Phase 6: Next Steps
 
-Present options:
+Under an authorized run, the Authorized Path (steps B–E) replaces this phase. Otherwise present options:
 
 ```
 ✅ All tasks complete!
@@ -306,6 +336,54 @@ Options:
 4. End session → Save state and exit
 
 Select option:
+```
+
+## Authorized Path
+
+Only after Phase 0.5 matched. The approved plan and contract stand in for every confirmation; nothing here asks the operator a question. When something can't go on, the run is escalated and the operator is notified, and the session stops.
+
+### A. Implement
+
+1. **Resume** from the first unchecked task in the scratchpad, without asking. TodoWrite and the Work Log are kept as usual.
+2. **No plan-mode or approach questions** (3.2): the approved plan is the plan. Explore agents and LSP are fine.
+3. **Builds and tests go through the runner**, so they wait their turn on the shared build lock:
+   ```bash
+   bash "$FACTORY" exec '{run_id}' -- {command}
+   ```
+   It exits with the command's status; its output is streamed and logged under the artifact dir. The `factory-exec-guard` hook refuses the project's `static` and `verify` commands run any other way, with the exact command to use instead.
+4. **Commit each task** by invoking commit-changes (3.3), with no "Ready to commit?" question. commit-changes sees the same authorization and commits as the agent, without asking.
+5. **Stay inside the contract.** Read it at `{artifact_dir}/contract.json`. Don't edit it, and don't edit the project's checks, test configuration or CI to make them pass: the runner flags policy and modified-assertion changes for the reviewer.
+6. **A blocker** (3.4) you can't resolve from the plan, the contract and the code: note it under Questions/Blockers, then escalate and stop (step D).
+
+### B. Validate
+
+After the last task:
+1. Make sure everything is committed: `git status --porcelain --untracked-files=all` lists nothing but working files excluded in `.git/info/exclude`. Commit what belongs to the work (commit-changes). Anything else is a blocker (step D).
+2. Invoke validate-work. Route on its result:
+   - `pass` or `pending_manual`: step C.
+   - `fail` or `error`: the runner has already escalated the run. Step D, with the report's blocking findings.
+   - `blocked`: when it is `dirty_tree` caused by your own uncommitted work, commit it and invoke validate-work once more. Anything else: escalate (step D).
+
+### C. Open the PR
+
+Invoke create-pr. It writes the title and description, and `factory pr` pushes the branch and opens the PR as the agent, with the validation report. On success, update the scratchpad's Work Log and notify (step E) with the PR URL. Merging is the operator's: never merge. If create-pr is refused, escalate (step D).
+
+### D. Escalate and stop
+
+```bash
+bash "$FACTORY" --json escalate '{run_id}' --reason '{one line: what stopped the run}'
+```
+
+A run the runner already escalated stays as it is (no-op). Record the reason in the Work Log, notify (step E) with the reason and the report path when there is one, and stop. Don't try to work around a refusal.
+
+### E. Notify the operator
+
+Send a push notification (PushNotification tool, when available) and end with the same summary as the final message:
+
+```
+🏭 {run_id}: {PR #{n} opened: {url} | escalated: {reason}}
+   Outcome: {outcome}   Report: {report_path}
+   {pending manual checks, if any: each ID and how to record it (validate-work)}
 ```
 
 ## State Management
@@ -361,8 +439,12 @@ If Claude Code restarts mid-session:
 
 **Invokes:**
 - `commit-changes` skill - After completing tasks
-- `create-pr` skill - When all tasks complete
+- `validate-work` skill - Under an authorized run, after the last task
+- `create-pr` skill - When all tasks complete (under an authorized run, after validation passes)
 - `archive-work` skill - After PR created
+
+**Calls:**
+- `scripts/factory.sh` `authorization`, `agent`, `exec` and `escalate` (docs/FACTORY_CLI.md)
 
 **Invoked by:**
 - User directly via natural language
@@ -390,9 +472,10 @@ If Claude Code restarts mid-session:
 
 ---
 
-**Version:** 1.1.0
-**Last Updated:** 2025-12-31
+**Version:** 1.2.0
+**Last Updated:** 2026-11-16
 **Maintained By:** Escapement
 **Changelog:**
+- v1.2.0: Authorized path: under a matching active factory authorization, implement with builds and tests through `factory exec`, commit, validate (validate-work) and open the PR (create-pr) without questions; escalate and notify when it can't go on (#64)
 - v1.1.0: Added EnterPlanMode for complex tasks, Task delegation, LSP navigation
 - v1.0.0: Initial conversion from commands/start-work.md
