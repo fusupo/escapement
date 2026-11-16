@@ -84,7 +84,7 @@ export async function project(opts: {
   contract?: Record<string, unknown>;
 }) {
   const db = opts.db ?? (await memDb());
-  const root = realpathSync(makeRepo({ claudeMd: opts.settings ?? SETTINGS }));
+  const root = realpathSync(makeRepo({ branch: "main", claudeMd: opts.settings ?? SETTINGS }));
   commit(
     root,
     {

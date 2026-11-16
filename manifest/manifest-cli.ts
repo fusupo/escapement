@@ -3,6 +3,7 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { initManifest, resolveDbPath, type ManifestOptions } from "./init.ts";
 import { buildDispatchPlan, formatPlan } from "./plan.ts";
+import { parseReadiness, mirrorReadiness } from "./readiness-meta.ts";
 import type { Database } from "better-sqlite3";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -28,6 +29,11 @@ Check subcommands:
   plan              Generate dispatch plan with parallel groups and overlaps
   query <sql>       Execute inline SQL and print results
   in-progress <id> <branch>  Mark a work item as in_progress and record its branch
+  readiness <repo> <issue> <file|->
+                    Mirror a readiness check (factory readiness.schema.json)
+                    into the work item for owner/repo#issue: needs_human sets
+                    meta.needs_human and meta.readiness_questions, ready
+                    clears them. No matching work item is not an error.
   db-path           Print the database path (does not open or create it)
 
 Options:
@@ -551,6 +557,42 @@ function cmdInProgress(db: Database, args: string[]): void {
   console.log(`Marked '${id}' as in_progress on branch '${branch}'.`);
 }
 
+function cmdReadiness(db: Database, args: string[]): void {
+  const [repo, issueText, file] = args;
+  if (!repo || !issueText || !file) {
+    console.error("Error: readiness requires repo, issue and file.\n  manifest readiness <owner/repo> <issue> <file|->");
+    process.exit(1);
+  }
+  if (!/^[1-9]\d*$/.test(issueText)) {
+    console.error(`Error: issue must be a positive number, not ${issueText}.`);
+    process.exit(1);
+  }
+  const source = file === "-" ? "stdin" : file;
+  let text: string;
+  try {
+    text = readFileSync(file === "-" ? 0 : resolve(process.cwd(), file), "utf-8");
+  } catch (err) {
+    console.error(`Error: cannot read ${source}: ${(err as Error).message}`);
+    process.exit(1);
+  }
+  let r;
+  try {
+    r = mirrorReadiness(db, { repo, issue: Number(issueText), readiness: parseReadiness(text, source) });
+  } catch (err) {
+    console.error(`Error: ${(err as Error).message}`);
+    process.exit(1);
+  }
+  if (!r.mirrored) {
+    console.log(`No work item for ${repo}#${issueText}; nothing mirrored.`);
+  } else if (!r.changed) {
+    console.log(`'${r.id}' already reflects readiness ${r.status}; nothing changed.`);
+  } else if (r.status === "needs_human") {
+    console.log(`Marked '${r.id}' needs_human with ${r.questions} readiness question(s).`);
+  } else {
+    console.log(`Cleared readiness questions on '${r.id}'${r.needs_human ? " (still needs_human: bootstrap ambiguities remain)" : ""}.`);
+  }
+}
+
 function cmdPlan(db: Database): void {
   const plan = buildDispatchPlan(db);
   console.log(formatPlan(plan));
@@ -618,6 +660,9 @@ function main(): void {
         break;
       case "in-progress":
         cmdInProgress(db, args.slice(1));
+        break;
+      case "readiness":
+        cmdReadiness(db, args.slice(1));
         break;
       default:
         console.error(`Unknown command: ${command}\n`);

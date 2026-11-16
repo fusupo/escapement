@@ -18,7 +18,7 @@ function project(claudeMd: string | null): string {
   return dir;
 }
 
-function check(contractText: string | null, dir: string) {
+function check(contractText: string | null | undefined, dir: string) {
   const r = checkReadiness({ contractText, source: "contract.json", projectDir: dir });
   assert(schemaErrors("readiness", r).length === 0, `output validates against readiness.schema.json (${r.status})`);
   return r;
@@ -32,6 +32,9 @@ function run() {
     assert(r.status === "ready" && r.questions.length === 0, "a valid contract in a configured project is ready");
     assert(r.required_checks.map((c) => `${c.name}=${c.command}`).join() === "static=npm run lint,verify=npx jest --runInBand", "it lists the required checks with their commands");
     assert(r.tier?.tier === "standard" && /^sha256:/.test(r.settings_digest), "it reports the tier and the settings digest");
+    assert(r.target_ref === "main", "and the default target branch (main without origin/develop)");
+    const based = check(undefined, project(CONFIGURED + "- **base-branch**: trunk\n"));
+    assert(based.target_ref === "trunk", "the base-branch setting is the target branch");
   }
 
   {
@@ -48,6 +51,14 @@ function run() {
     const refs = r.questions.map((q) => `${q.about}:${q.ref}`).join();
     assert(refs === "settings:static,settings:verify,settings:test-results", "it asks for each missing required command and for test-results");
     assert(r.required_checks.every((c) => c.command === null), "missing commands are null");
+  }
+
+  {
+    const ready = check(undefined, project(CONFIGURED));
+    assert(ready.status === "ready" && ready.tier === undefined, "without a contract, a configured project is ready (settings only, no tier)");
+    const bare = check(undefined, project(null));
+    const refs = bare.questions.map((q) => `${q.about}:${q.ref}`).join();
+    assert(bare.status === "needs_human" && refs === "settings:static,settings:verify", "and an unconfigured one asks for each missing required command, nothing about a contract");
   }
 
   {

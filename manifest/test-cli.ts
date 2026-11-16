@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import { applySchema } from "./init.ts";
+import { parseReadiness, mirrorReadiness } from "./readiness-meta.ts";
 
 /**
  * Smoke tests for manifest CLI queries.
@@ -199,6 +200,57 @@ function run() {
     "SELECT state FROM work_items WHERE id = ?"
   ).get("test#1") as { state: string };
   assert(alreadyDone.state === "done", "test#1 state is 'done'");
+
+  // ── Test 5: Readiness mirror ─────────────────────────────────────
+  console.log("\n5. Readiness mirror (factory §3.1)");
+
+  db.exec(`
+    INSERT INTO work_items (id, name, kind, state, repo, issue_number, meta) VALUES
+      ('esc#63', 'Setup work', 'issue', 'planned', 'fusupo/escapement', 63, '{"bootstrap_status":"active"}'),
+      ('esc#64', 'Authorized path', 'issue', 'planned', 'fusupo/escapement', 64, '{"ambiguities":["depends on #63?"],"needs_human":true}');
+  `);
+  const metaOf = (id: string) =>
+    JSON.parse((db.prepare("SELECT meta FROM work_items WHERE id = ?").get(id) as { meta: string }).meta);
+  const onFrontier = (id: string) =>
+    (db.prepare("SELECT COALESCE(json_extract(meta, '$.needs_human'), 0) AS nh FROM work_items WHERE id = ?").get(id) as { nh: number }).nh === 0;
+
+  const needs = parseReadiness(
+    JSON.stringify({
+      version: 1,
+      status: "needs_human",
+      questions: [{ about: "criterion", ref: "AC-2", question: "Criterion AC-2 has no evidence. What would show it is met?" }],
+    }),
+  );
+  const ready = parseReadiness(JSON.stringify({ version: 1, status: "ready", questions: [] }));
+
+  const r1 = mirrorReadiness(db, { repo: "fusupo/escapement", issue: 63, readiness: needs });
+  const m1 = metaOf("esc#63");
+  assert(r1.mirrored && r1.id === "esc#63" && r1.questions === 1 && r1.changed, "needs_human is mirrored to the work item for repo#issue");
+  assert(m1.needs_human === true && m1.readiness_questions[0].ref === "AC-2" && m1.bootstrap_status === "active", "it sets needs_human and readiness_questions, keeping other meta");
+  assert(!onFrontier("esc#63"), "so the item leaves the frontier");
+
+  mirrorReadiness(db, { repo: "fusupo/escapement", issue: 63, readiness: ready });
+  const m2 = metaOf("esc#63");
+  assert(!("needs_human" in m2) && !("readiness_questions" in m2) && m2.bootstrap_status === "active", "ready clears both");
+  assert(onFrontier("esc#63"), "and the item is back on the frontier");
+  const again = mirrorReadiness(db, { repo: "fusupo/escapement", issue: 63, readiness: ready });
+  assert(again.mirrored && !again.changed, "mirroring ready again reports no change");
+
+  mirrorReadiness(db, { repo: "fusupo/escapement", issue: 64, readiness: needs });
+  mirrorReadiness(db, { repo: "fusupo/escapement", issue: 64, readiness: ready });
+  const m3 = metaOf("esc#64");
+  assert(m3.needs_human === true && m3.ambiguities.length === 1 && !("readiness_questions" in m3), "ready keeps needs_human while bootstrap ambiguities remain");
+
+  const none = mirrorReadiness(db, { repo: "acme/other", issue: 1, readiness: needs });
+  assert(!none.mirrored && none.reason === "no_work_item", "no matching work item is a no-op, not an error");
+
+  let rejected = "";
+  try {
+    parseReadiness(JSON.stringify({ version: 1, status: "needs_human", questions: [] }));
+  } catch (err) {
+    rejected = (err as Error).message;
+  }
+  assert(/not a readiness document/.test(rejected), "a document that isn't valid readiness is rejected (needs_human needs questions)");
 
   // ── Done ─────────────────────────────────────────────────────────
   db.close();

@@ -66,6 +66,12 @@ export function startRun(db: Database, opts: StartOptions): RunRow & { artifact_
   const base = runIdBase(opts.workItem);
   const targetRef =
     opts.targetRef ?? readSettings(opts.ctx.worktreePath).settings.baseBranch ?? defaultTargetRef(opts.ctx.worktreePath);
+  if (opts.ctx.branch === targetRef.replace(/^origin\//, "")) {
+    throw blocked(
+      "on_target_branch",
+      `worktree ${opts.ctx.worktreePath} is on ${opts.ctx.branch}, the run's target branch; check out a feature branch first`,
+    );
+  }
   let source: ArtifactSource = "flag";
   const run = tx(db, () => {
     const open = db
@@ -178,8 +184,8 @@ export function approveRun(
        ON CONFLICT (run_id, contract_digest) DO UPDATE SET status = 'active', approved_at = excluded.approved_at, ended_at = NULL`,
     ).run(runId, digest, JSON.stringify(AUTHORIZES), nowIso(now));
     db.prepare(
-      "UPDATE factory_runs SET contract_digest = ?, deadline_at = COALESCE(deadline_at, ?) WHERE run_id = ?",
-    ).run(digest, nowIso(new Date(now.getTime() + opts.budgetMs)), runId);
+      "UPDATE factory_runs SET contract_digest = ?, tier_proposed = ?, deadline_at = COALESCE(deadline_at, ?) WHERE run_id = ?",
+    ).run(digest, contract.risk_tier_proposed, nowIso(new Date(now.getTime() + opts.budgetMs)), runId);
     recordEvent(db, runId, "state_change", {
       entity: "authorization",
       to: "active",

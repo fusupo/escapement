@@ -1,6 +1,7 @@
 import { schemaErrors, contractErrors, type Contract } from "./schemas.ts";
 import { readSettings, type CheckName } from "./settings.ts";
 import { assessTier, type TierAssessment } from "./tiers.ts";
+import { defaultTargetRef } from "./context.ts";
 
 /**
  * The mechanical half of the readiness check (docs/FACTORY_DESIGN.md §3.1).
@@ -24,6 +25,8 @@ export type Readiness = {
   questions: ReadinessQuestion[];
   tier?: TierAssessment;
   required_checks: { name: CheckName; command: string | null }[];
+  /** The branch `factory start` targets without --target-ref: base-branch, else develop when origin/develop exists, else main. */
+  target_ref: string;
   settings_digest: string;
 };
 
@@ -59,14 +62,18 @@ function contractQuestion(error: string, data: unknown): ReadinessQuestion {
 /**
  * Check a contract against the project in `projectDir` (its CLAUDE.md
  * settings). `contractText` is the file's content, or null if unreadable.
+ * Without a contract (`undefined`), only the settings are checked: a host
+ * can ask whether the project is set up for the factory before planning.
  */
-export function checkReadiness(opts: { contractText: string | null; source: string; projectDir: string }): Readiness {
+export function checkReadiness(opts: { contractText?: string | null; source: string; projectDir: string }): Readiness {
   const questions: ReadinessQuestion[] = [];
   const loaded = readSettings(opts.projectDir);
   const { settings } = loaded;
 
   let data: unknown = undefined;
-  if (opts.contractText === null) {
+  if (opts.contractText === undefined) {
+    // settings only
+  } else if (opts.contractText === null) {
     questions.push({ about: "contract", question: `Cannot read ${opts.source}. Where is the contract?` });
   } else {
     try {
@@ -124,6 +131,7 @@ export function checkReadiness(opts: { contractText: string | null; source: stri
         }
       : {}),
     required_checks,
+    target_ref: settings.baseBranch ?? defaultTargetRef(opts.projectDir),
     settings_digest: loaded.digest,
   };
 

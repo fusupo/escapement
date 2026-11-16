@@ -1,6 +1,6 @@
-import { existsSync, readFileSync, realpathSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, realpathSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { projectContext, resolveArtifactDir, repoName, defaultTargetRef } from "./factory/context.ts";
+import { projectContext, resolveArtifactDir, repoName, defaultTargetRef, excludePatterns } from "./factory/context.ts";
 import { atomicWrite, parseDuration } from "./factory/util.ts";
 import { assert, throws, tempDir, cleanup, sh, makeRepo } from "./factory/testkit.ts";
 
@@ -77,6 +77,41 @@ function run() {
     sh("git", ["worktree", "add", "-q", "-b", "8-z", wt], root);
     const w = resolveArtifactDir({ ctx: projectContext(wt), runId: "r1" });
     assert(w.dir === join(root, ".escapement/runs/8-z/r1"), "a worktree's in-repo artifacts go in the main checkout");
+  }
+
+  console.log("\nHost working-file excludes\n");
+
+  {
+    const root = realpathSync(makeRepo());
+    const excludeFile = join(root, ".git/info/exclude");
+    writeFileSync(excludeFile, "*.swp"); // no trailing newline
+    writeFileSync(join(root, "SCRATCHPAD_9.md"), "plan\n");
+    writeFileSync(join(root, "SESSION_LOG_1.jsonl"), "{}\n");
+    const r = excludePatterns(root, ["SCRATCHPAD_*", "SESSION_LOG_*", "AGENT_CONSTRAINTS.md", "SCRATCHPAD_*"]);
+    assert(r.path === excludeFile, "patterns go to the repository's info/exclude");
+    assert(
+      r.added.join(",") === "SCRATCHPAD_*,SESSION_LOG_*,AGENT_CONSTRAINTS.md" && r.present.length === 0,
+      "each new pattern is added once, in order",
+    );
+    const text = readFileSync(excludeFile, "utf-8");
+    assert(text.startsWith("*.swp\n# escapement working files\nSCRATCHPAD_*\n"), "existing lines are kept and a newline is supplied");
+    assert(sh("git", ["status", "--porcelain"], root) === "", "excluded working files leave the tree clean");
+
+    const again = excludePatterns(root, ["SESSION_LOG_*", "*.swp", "NOTES.md"]);
+    assert(again.added.join(",") === "NOTES.md" && again.present.join(",") === "SESSION_LOG_*,*.swp", "existing patterns are reported present");
+    assert(readFileSync(excludeFile, "utf-8").split("SESSION_LOG_*").length === 2, "and not added again");
+
+    const wt = join(tempDir(), "wt");
+    sh("git", ["worktree", "add", "-q", "-b", "9-w", wt], root);
+    const w = excludePatterns(wt, ["SCRATCHPAD_*"]);
+    assert(w.path === excludeFile && w.present.join(",") === "SCRATCHPAD_*", "a linked worktree shares the main checkout's exclude file");
+    writeFileSync(join(wt, "SCRATCHPAD_9.md"), "plan\n");
+    assert(sh("git", ["status", "--porcelain"], wt) === "", "so its working files are excluded too");
+
+    for (const bad of ["", "  ", "# note", "!keep.md", "a\nb"]) {
+      throws(() => excludePatterns(root, [bad]), /bad_pattern/, `refuses ${JSON.stringify(bad)}`);
+    }
+    throws(() => excludePatterns(root, []), /usage/, "needs at least one pattern");
   }
 
   console.log("\nHelpers\n");

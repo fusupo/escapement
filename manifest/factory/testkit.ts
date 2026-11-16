@@ -51,7 +51,7 @@ export function sh(cmd: string, args: string[], cwd: string): string {
 /** A git repository with one commit on `branch` and an optional origin URL. */
 export function makeRepo(opts: { branch?: string; origin?: string; claudeMd?: string } = {}): string {
   const root = tempDir("factory-repo-");
-  sh("git", ["init", "-q", "-b", opts.branch ?? "main"], root);
+  sh("git", ["init", "-q", "-b", opts.branch ?? "1-work"], root);
   if (opts.origin) sh("git", ["remote", "add", "origin", opts.origin], root);
   writeFileSync(join(root, "README.md"), "test\n");
   if (opts.claudeMd !== undefined) writeFileSync(join(root, "CLAUDE.md"), opts.claudeMd);

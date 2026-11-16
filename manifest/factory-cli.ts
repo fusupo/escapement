@@ -1,6 +1,6 @@
 import type { Database } from "better-sqlite3";
 import { initManifest } from "./init.ts";
-import { projectContext } from "./factory/context.ts";
+import { projectContext, resolveWorktree, excludePatterns } from "./factory/context.ts";
 import { startRun, approveRun, revokeRun, runStatus, listRuns } from "./factory/runs.ts";
 import { getRun } from "./factory/state.ts";
 import { loadSettings, SETTING_DEFAULTS, type FactorySettings } from "./factory/settings.ts";
@@ -50,24 +50,29 @@ Commands:
   status [run_id]               List open runs (--all: include closed), or show one
   resume <run_id>               Reconcile an interrupted run
   revoke <run_id>               End the run's active authorization
-  check --contract <file>       Readiness: is the contract valid and runnable in
+  check [--contract <file>]     Readiness: is the contract valid and runnable in
                                 this project? Prints ready or needs_human with
-                                questions (no run needed)
+                                questions (no run needed). Without --contract,
+                                checks only the project's settings
   schema [name]                 Path of a published JSON Schema (contract, report,
                                 verdict, readiness); --print for its content
   prompt [name]                 Path of an agent prompt the factory ships
                                 (reviewer); --print for its content
+  exclude <pattern>...          Add .gitignore-style patterns for the host's
+                                working files to the repository's
+                                .git/info/exclude (no run needed)
 
 Options:
   --json                Print one JSON object (see docs/FACTORY_CLI.md)
   --data-dir <path>     Use {path}/manifest.db instead of the shared manifest
-  --project-root <path> Worktree to run in (default: git toplevel of the cwd)
+  --project-root <path> start, check, exclude: the worktree
+                        (default: git toplevel of the cwd)
   --artifact-dir <path> Put run artifacts in {path}/{run_id}/
   --issue <n>           start: issue number, when the work item isn't #N
   --manifest-id <id>    start: manifest work item, for reference only
   --target-ref <ref>    start: branch the work targets (default develop or main)
   --work-type <type>    start: e.g. feature, bug
-  --contract <file>     approve, check: the contract
+  --contract <file>     approve, check: the contract (check: optional)
   --run-budget <dur>    approve: run deadline after first approval
                         (default: run-budget setting, else ${SETTING_DEFAULTS["run-budget"]})
   --timeout <dur>       exec, validate: timeout per command
@@ -163,18 +168,21 @@ function need(value: string | undefined, what: string): string {
 type Outcome = { result: unknown; text: string; exitCode?: number };
 
 /** Commands that don't touch the manifest database, so hosts can run them anywhere. */
-const NO_DB_COMMANDS = new Set(["check", "schema", "prompt"]);
+const NO_DB_COMMANDS = new Set(["check", "schema", "prompt", "exclude"]);
 
 function dispatchNoDb(command: string, p: Parsed): Outcome {
   const [arg] = p.positional;
   switch (command) {
     case "check": {
-      const file = resolve(need(str(p, "--contract"), "--contract <file>"));
-      let text: string | null = null;
-      try {
-        text = readFileSync(file, "utf-8");
-      } catch {
-        text = null;
+      const contract = str(p, "--contract");
+      const file = contract === undefined ? "" : resolve(contract);
+      let text: string | null | undefined = undefined;
+      if (contract !== undefined) {
+        try {
+          text = readFileSync(file, "utf-8");
+        } catch {
+          text = null;
+        }
       }
       const ctx = projectContext(str(p, "--project-root"));
       const r = checkReadiness({ contractText: text, source: file, projectDir: ctx.worktreePath });
@@ -183,6 +191,15 @@ function dispatchNoDb(command: string, p: Parsed): Outcome {
         ...r.questions.map((q) => `  - [${q.about}${q.ref ? ` ${q.ref}` : ""}] ${q.question}`),
         ...(r.tier ? [`  tier: ${r.tier.tier}${r.tier.reasons.length ? ` (${r.tier.reasons.join("; ")})` : ""}`] : []),
         `  required checks: ${r.required_checks.map((c) => `${c.name}=${c.command ?? "(not configured)"}`).join(", ") || "none"}`,
+      ];
+      return { result: r, text: lines.join("\n") };
+    }
+    case "exclude": {
+      const r = excludePatterns(resolveWorktree(str(p, "--project-root")), p.positional);
+      const lines = [
+        ...r.added.map((x) => `added   ${x}`),
+        ...r.present.map((x) => `present ${x}`),
+        `  in ${r.path}`,
       ];
       return { result: r, text: lines.join("\n") };
     }

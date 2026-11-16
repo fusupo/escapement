@@ -419,6 +419,7 @@ ul.tight li{margin:.3rem 0}
         </tr></tbody>
       </table></div>
       <p class="muted" style="font-size:.9rem">An authorization ends when the run reaches a terminal state. <code>factory revoke</code> or any contract change revokes it; re-approval issues a new one on the same run.</p>
+      <p><i>As built (#63):</i> <code>setup-work</code> takes this path only when the project's required checks are configured (a settings-only <code>factory check</code> is <code>ready</code>), and then offers <b>Approve + authorize run</b> next to plain <b>Approve</b>, which creates no run. The contract is drafted in the scratchpad, so a rejected plan leaves nothing behind. On approval it checks out the branch (<code>factory start</code> refuses the target branch), excludes its working files with <code>factory exclude</code>, starts the run, writes the contract into the run, checks and approves it, and confirms the authorization's digest matches the stored contract. Readiness is mirrored into the manifest with <code>manifest.sh readiness</code>, under its own key so dependency ambiguities are kept.</p>
 
       <h3>What setup-work adds</h3>
       <div class="tbl-wrap"><table>
@@ -1025,8 +1026,8 @@ const BUILD=[
  [4,"#60","Contract, settings, readiness, tiers","Published JSON Schemas, evidence types, settings parsing, factory check and factory schema.","done"],
  [5,"#61","factory validate","Identity, setup policy, static and evidence phases, fresh results, classification, actual tier, draft reports.","done"],
  [6,"#62","Reviewer","validation-reviewer prompt and agent, bundle, record-review completeness and idempotency.","done"],
- [7,"#63","setup-work produces the contract","Readiness, tier, contract and authorization.","next"],
- [8,"#64","Authorized path","do-work, commit-changes, create-pr, factory pr, record-manual.","open"],
+ [7,"#63","setup-work produces the contract","Readiness, tier, contract and authorization; factory exclude, settings-only check, manifest readiness.","done"],
+ [8,"#64","Authorized path","do-work, commit-changes, create-pr, factory pr, record-manual.","next"],
  [9,"#65","Release acceptance test","A real issue end to end, interrupted on purpose during checks, between checks and review, during finalization, and between PR creation and recording.","open"]
 ];
 const ST={done:["s-pass","done"],next:["s-pend","next up"],open:["s-neutral","open"]};

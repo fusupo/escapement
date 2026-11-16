@@ -64,6 +64,21 @@ async function run() {
   const db2 = await memDb();
   const rb = startRun(db2, { workItem: "#5", ctx: projectContext(based), artifactDir: tempDir() });
   assert(rb.target_ref === "trunk", "without --target-ref, the base-branch setting is the target");
+
+  const onMain = realpathSync(makeRepo({ branch: "main" }));
+  const art = tempDir();
+  throws(
+    () => startRun(db2, { workItem: "#6", ctx: projectContext(onMain), artifactDir: art }),
+    /on_target_branch/,
+    "start refuses when the worktree is on the target branch (default target)",
+  );
+  throws(
+    () => startRun(db2, { workItem: "#6", ctx: projectContext(based), artifactDir: art, targetRef: "origin/1-work" }),
+    /on_target_branch/,
+    "and when --target-ref names the current branch through origin/",
+  );
+  const refused = db2.prepare("SELECT COUNT(*) AS n FROM factory_runs WHERE work_item = '#6'").get() as { n: number };
+  assert(refused.n === 0 && !existsSync(join(art, "#6-r1")), "a refused start creates no run and no artifact dir");
   db2.close();
 
   console.log("\napprove\n");
@@ -73,6 +88,7 @@ async function run() {
   const before = Date.now();
   const a1 = approveRun(db, r1.run_id, { contractFile: contract, budgetMs: 2 * HOUR });
   assert(a1.run.state === "approved" && a1.changed, "approve moves planned to approved");
+  assert(a1.run.tier_proposed === "standard", "the run records the contract's proposed tier");
   assert(a1.authorization.status === "active" && a1.authorization.contract_digest === contractDigest(first), "an active authorization holds the contract digest");
   assert(JSON.parse(a1.authorization.authorizes_json).includes("commit"), "the authorization lists what it allows");
   assert(readFileSync(join(r1.artifact_dir, "contract.json"), "utf-8") === first, "the contract is copied to the artifact dir");
@@ -82,13 +98,14 @@ async function run() {
   const again = approveRun(db, r1.run_id, { contractFile: contract, budgetMs: 2 * HOUR });
   assert(!again.changed && auths(db, r1.run_id).length === 1, "re-approving the same contract changes nothing");
 
-  writeFileSync(contract, contractJson(r1.run_id, { predicted_files: ["src/a.ts"] }));
+  writeFileSync(contract, contractJson(r1.run_id, { predicted_files: ["src/a.ts"], risk_tier_proposed: "sensitive", risk_reasons: ["auth"] }));
   const a2 = approveRun(db, r1.run_id, { contractFile: contract, budgetMs: 10 * HOUR });
   const statuses = auths(db, r1.run_id).map((a) => a.status).sort().join(",");
   assert(a2.changed && a2.superseded === a1.authorization.contract_digest, "a changed contract supersedes the old authorization");
   assert(statuses === "active,superseded", "one active and one superseded authorization remain");
   assert(getRun(db, r1.run_id).deadline_at === a1.run.deadline_at, "re-approval doesn't move the deadline");
   assert(getRun(db, r1.run_id).contract_digest === a2.authorization.contract_digest, "the run records the current contract digest");
+  assert(getRun(db, r1.run_id).tier_proposed === "sensitive", "and the current contract's proposed tier");
   throws(() => approveRun(db, r1.run_id, { contractFile: "/no/such/file", budgetMs: HOUR }), /no_contract/, "a missing contract file is an error");
   throws(() => approveRun(db, r1.run_id, { contractFile: contractFor("#42-r9"), budgetMs: HOUR }), /bad_contract.*not acme-w#42-r1/, "a contract for another run is rejected");
   throws(() => approveRun(db, r1.run_id, { contractFile: contractFor(r1.run_id, { issue: 7 }), budgetMs: HOUR }), /bad_contract.*issue 7/, "a contract naming another issue is rejected");
