@@ -4,7 +4,7 @@ The factory runner is a small deterministic CLI that owns a run's state, locks, 
 
 The Escapement skills are one client of the runner. Other hosts, such as Escapement Studio, can call it as a subprocess and read its `--json` output. The runner never invokes a skill or an agent. It runs git and the commands you give it, and, for a run's push and PR, `gh` as the AI agent's GitHub identity (see [GitHub and the agent identity](#github-and-the-agent-identity)).
 
-First-release status: #59 provides `start`, `approve`, `exec`, `status`, `resume` and `revoke`. #60 adds contract validation, settings, `check` and `schema`. #61 adds `validate`. #62 adds `review-input`, `record-review` and `prompt`. #63 adds `exclude`, a settings-only `check`, and a `start` that refuses the target branch; `setup-work` drives `check`, `exclude`, `start` and `approve` (its factory path). #64 adds `authorization`, `agent`, `escalate`, `pr`, `record-manual` and `archive`, GitHub access as the agent, and the exec guard; `do-work`, `commit-changes`, `create-pr`, `validate-work` and `archive-work` drive them (the authorized path, FACTORY_DESIGN.md §6.1). #65 adds fault injection for crash tests, the `validate` next step, and killing a crashed check's process group; Escapement itself is configured as a factory project.
+First-release status: #59 provides `start`, `approve`, `exec`, `status`, `resume` and `revoke`. #60 adds contract validation, settings, `check` and `schema`. #61 adds `validate`. #62 adds `review-input`, `record-review` and `prompt`. #63 adds `exclude`, a settings-only `check`, and a `start` that refuses the target branch; `setup-work` drives `check`, `exclude`, `start` and `approve` (its factory path). #64 adds `authorization`, `agent`, `escalate`, `pr`, `record-manual` and `archive`, GitHub access as the agent, and the exec guard; `do-work`, `commit-changes`, `create-pr`, `validate-work` and `archive-work` drive them (the authorized path, FACTORY_DESIGN.md §6.1). #65 adds fault injection for crash tests, the `validate` next step, and killing a crashed check's process group; Escapement itself is configured as a factory project. #80 adds `push`, so skills push as the agent outside a run too.
 
 ## Running it
 
@@ -73,6 +73,7 @@ pr/body.md                      the PR description as last sent (pr)
 | `escalate <run_id> --reason <text>` | Stop the run to wait on a human | yes |
 | `authorization` | Does this worktree's run let skills act without asking? Read-only; never creates the database | yes |
 | `agent` | The AI agent's commit identity. No database needed | n/a |
+| `push` | Push the current branch as the agent, with no run (plain skills). Never forced, never the base branch, `main` or `master`. No database needed | n/a |
 | `pr <run_id>` | Push the branch and open or update the run's PR, as the agent | **no** to create; yes to update |
 | `record-manual <run_id> <evidence_id> pass\|fail --note <text>` | Record a human's outcome for manual evidence | yes |
 | `archive <run_id> --path <dir>` | Record where the run was archived; `--close` closes it | yes |
@@ -346,7 +347,7 @@ Everything the factory does on GitHub runs as the AI agent's GitHub account, so 
 
 | Variable | Use |
 |---|---|
-| `ESCAPEMENT_AGENT_GH_TOKEN` | Required for `pr`, and for `archive --close` with a PR. The agent account's token |
+| `ESCAPEMENT_AGENT_GH_TOKEN` | Required for `pr`, `push`, and `archive --close` with a PR. The agent account's token |
 | `ESCAPEMENT_AGENT_NAME`, `ESCAPEMENT_AGENT_EMAIL` | Optional. The agent's commit author. Default: the token account's login and its GitHub noreply address (`{id}+{login}@users.noreply.github.com`) |
 
 **Where they come from.** Each variable is read from the environment, or else from the user's `${XDG_CONFIG_HOME:-~/.config}/escapement/agent.env`, so nothing needs exporting before the host starts:
@@ -363,10 +364,20 @@ ESCAPEMENT_AGENT_EMAIL=agent@example.com      # optional
 - The identity is the user's, not a project's, so the runner never reads a project's `.env`.
 
 - The token reaches `gh` as `GH_TOKEN` (`GITHUB_TOKEN` is dropped), and `git push` through a credential helper that reads the variable. It never appears in argv, URLs, logs, events or JSON output; errors redact it.
-- Without it, `pr` and `archive --close` are blocked with `no_agent_token`. The runner never falls back to the operator's own `gh` login.
+- Without it, `pr`, `push` and `archive --close` are blocked with `no_agent_token`. The runner never falls back to the operator's own `gh` login; a plain skill may (see [push](#push)).
 - Keep the token out of any file a project commits.
-- `agent` prints the commit identity (`{name, email, login, source}`, `source` being `env` or `github`). Skills commit with it under an authorization: `git -c user.name=… -c user.email=… commit`.
+- `agent` prints the commit identity (`{name, email, login, source}`, `source` being `env` or `github`). Skills commit with it, under an authorization and on the plain path alike: `git -c user.name=… -c user.email=… commit`.
 - The `gh` CLI must be on PATH (`gh_missing` otherwise).
+
+**Skills use the same identity.** The runner is the only Escapement component that calls `gh`, and always with the agent token. Skills never call `gh` (it is logged in as the operator): they reach GitHub through the GitHub MCP tools, which are authenticated as the agent account, push with `push`, and commit with `agent`'s identity (FACTORY_DESIGN.md §4.8).
+
+### push
+
+`factory push` pushes the worktree's current branch as the agent, with no run and no database. It is how a plain skill (create-pr, do-work's push reminder) pushes, instead of a `git push` that would carry the operator's credentials.
+
+- HEAD goes to `refs/heads/{branch}` and nothing else, never forced, through the same path as `pr`'s push: over https with the agent token from a credential helper on a GitHub remote, as configured on a local one. Project `pre-push` hooks still run. No upstream is set.
+- Refused (`push_base_branch`): the project's base branch (`base-branch` setting, else `develop` when origin has it, else `main`), `main` and `master`. A detached HEAD is `detached_head`. It takes no arguments (`usage`).
+- Without the agent token it is `no_agent_token` and nothing is pushed. The runner never falls back; the skill decides. Escapement's skills then push with the operator's `git push` and say so in one line. On `agent_env_permissions`, `push_failed` or `no_remote` they report and stop, never retrying as the operator.
 
 ### pr
 
@@ -476,6 +487,7 @@ With `--json`, every command prints exactly one JSON object on stdout.
 - **escalate:** `{run, changed}`
 - **authorization:** `{matched: false, reasons, run_id, state}`, or `{matched: true, reasons: [], run_id, state, repo, branch, target_ref, worktree_path, artifact_dir, contract_path, contract_digest, authorizes, approved_at, deadline_at, issue_number, pr_number, latest_attempt: {attempt, status, outcome, head_sha} | null, next}`
 - **agent:** `{name, email, login, source}`
+- **push:** `{branch, sha, repo, remote}`; `remote` is the URL pushed to, never with the token
 - **pr:** `{run_id, pr_number, url, action, state, head_sha, attempt, report_revision, outcome, body_path}`; `action` is `created`, `updated` (the recorded PR) or `recovered` (an unrecorded PR an earlier, interrupted call created)
 - **record-manual:** `{run_id, attempt, evidence_id, outcome, noop, recorded: [{evidence_id, outcome}], pending, resolved, report_path, report_revision, run_state, pr_number, refresh_pr}`; `resolved` is null until the report resolves
 - **archive:** `{run_id, archive_path, changed, closed, pr_state, state}`; `closed` is `merged`, `abandoned` or null
@@ -505,7 +517,7 @@ Error codes:
 
 | kind | codes |
 |---|---|
-| `blocked` (exit 2) | from start `on_target_branch`; `run_deadline`, `not_authorized`, `run_halted`, `run_closed`, `lock_timeout`, `attempt_budget`; from validate also `attempt_open`, `bad_setting`, `contract_mismatch`, `not_configured`, `dirty_tree`, `no_target`, `no_merge_base`; from review-input and record-review also `contract_mismatch`, `not_issued`, `invalid_verdict`, `incomplete_verdict`, `verdict_conflict`; from pr `not_validated`, `no_report`, `stale_report`, `head_moved`, `pr_conflict`, `pr_not_open`, `no_agent_token`; from record-manual `no_report`, `not_pending_manual`, `already_resolved`, `stale_report`, `stale_contract`, `unknown_evidence`; from archive `pr_open`, `no_agent_token`; from agent `no_agent_token`; wherever the agent identity is read, `agent_env_permissions` |
+| `blocked` (exit 2) | from start `on_target_branch`; `run_deadline`, `not_authorized`, `run_halted`, `run_closed`, `lock_timeout`, `attempt_budget`; from validate also `attempt_open`, `bad_setting`, `contract_mismatch`, `not_configured`, `dirty_tree`, `no_target`, `no_merge_base`; from review-input and record-review also `contract_mismatch`, `not_issued`, `invalid_verdict`, `incomplete_verdict`, `verdict_conflict`; from pr `not_validated`, `no_report`, `stale_report`, `head_moved`, `pr_conflict`, `pr_not_open`, `no_agent_token`; from record-manual `no_report`, `not_pending_manual`, `already_resolved`, `stale_report`, `stale_contract`, `unknown_evidence`; from archive `pr_open`, `no_agent_token`; from agent `no_agent_token`; from push `push_base_branch`, `no_agent_token`; wherever the agent identity is read, `agent_env_permissions` |
 | `error` (exit 1) | `usage`, `no_such_run`, `run_exists`, `wrong_state`, `illegal_transition`, `no_contract`, `bad_contract`, `bad_setting`, `no_active_authorization`, `bad_duration`, `bad_work_item`, `bad_project_root`, `not_a_repo`, `detached_head`, `git_failed`, `no_such_attempt`, `revision_changed`, `snapshot_failed`, `unreadable`, `bad_pattern`, `gh_missing`, `gh_failed`, `push_failed`, `no_remote`, `internal` |
 
 ## Fault injection (testing only)

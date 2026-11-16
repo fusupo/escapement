@@ -98,7 +98,7 @@ escapement/
 
 **PreToolUse hook** `factory-exec-guard.sh` (matcher `Bash`): while a worktree's factory run is implemented under an authorization, refuses the project's `static`/`verify` commands outside `factory exec`. It reads only a marker the runner keeps in the worktree's git dir, so it is inert everywhere else; `exec-hook: off` opts a project out. Tests: `scripts/test-factory-hook.sh`.
 
-**Authorized path:** `commit-changes`, `create-pr` and `do-work` drop their confirmations only when `factory authorization` matches. Everything the factory writes to GitHub (push, PR) goes through the runner as the AI agent's identity (`ESCAPEMENT_AGENT_GH_TOKEN`, from the environment or `~/.config/escapement/agent.env`), never as the operator. See `docs/FACTORY_CLI.md`. Skills follow the same rule: they use the GitHub MCP tools (authenticated as the agent account), not `gh` (the operator's login); converting the remaining `gh` calls is #80.
+**Authorized path:** `commit-changes`, `create-pr` and `do-work` drop their confirmations only when `factory authorization` matches. Everything the factory writes to GitHub (push, PR) goes through the runner as the AI agent's identity (`ESCAPEMENT_AGENT_GH_TOKEN`, from the environment or `~/.config/escapement/agent.env`), never as the operator, and never falls back to the operator. See `docs/FACTORY_CLI.md`. Outside a run the skills act as the agent too (see GitHub as the Agent below).
 
 ### Agents
 
@@ -191,6 +191,16 @@ Each project repo should have its own CLAUDE.md defining:
 - Branch naming conventions
 - Testing standards
 
+### GitHub as the Agent
+
+Escapement's GitHub work is visibly the AI agent's, never the operator's (#80, `docs/FACTORY_DESIGN.md` §4.8). The GitHub MCP server is authenticated as the agent account; the `gh` CLI is logged in as the operator.
+
+- **Skills use the GitHub MCP tools for everything on GitHub** (issues, PRs, comments, reviews, reads), with the server's current tool names (`issue_read`, `issue_write`, `pull_request_read`, `create_pull_request`, `pull_request_review_write`, …). Skills never call `gh` and never list `Bash:gh` in their tools. `manifest/test-skills-github.ts` enforces this.
+- **The only remaining `gh` use is the runner** (`manifest/factory/`), always with the agent token as `GH_TOKEN`: the authorized path's PR and `factory agent`'s account lookup. It is a subprocess for hosts with no MCP client, so it can't use the MCP tools.
+- **Pushes:** skills push with `factory push` (the current branch, with the agent token, never forced, never the base branch, `main` or `master`), not `git push`. Under an authorized run, `factory pr` pushes.
+- **Commits:** `commit-changes` commits with the `factory agent` identity, on the plain path too.
+- **Without an agent identity** (`no_agent_token`), plain `commit-changes` and `create-pr` fall back to the operator's git identity and `git push`, and say so in one line. A configured identity that fails (`agent_env_permissions`, a failed lookup or push) is reported, never retried as the operator. The authorized path never falls back.
+
 ### Commit Message Format
 
 Default format (customizable per project):
@@ -230,6 +240,7 @@ Skills can be invoked two ways:
 - Don't mix unrelated changes in single commit
 - Don't modify project-specific files (each repo's CLAUDE.md) from muleteer repo
 - Don't push directly to main (always PR)
+- Don't call `gh` from a skill: use the GitHub MCP tools, and `factory push` for pushes
 - Don't skip commit message descriptions
 - Don't leave debugging code or console.logs
 
