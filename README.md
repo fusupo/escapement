@@ -240,7 +240,7 @@ escapement/
 ├── manifest/                 # Manifest and factory CLIs (TypeScript, SQLite)
 │   ├── manifest-cli.ts       # Manifest entry point; run it through scripts/manifest.sh
 │   ├── factory-cli.ts        # Factory runner entry point; run it through scripts/factory.sh
-│   ├── factory/              # Runs, locks, exec, resume, settings, tiers, schemas, readiness
+│   ├── factory/              # Runs, locks, exec, resume, settings, tiers, schemas, readiness, validate
 │   ├── init.ts               # Database setup and context-path resolution
 │   ├── plan.ts               # Dispatch plan generation
 │   ├── migrations.ts         # Ordered schema migrations (PRAGMA user_version)
@@ -453,9 +453,14 @@ fusupo
 
 ## Version
 
-**Current:** 3.8.0
+**Current:** 3.9.0
 
 **Changelog:**
+- 3.9.0 (2026-11-16): `factory validate` (#61)
+  - **`factory.sh validate <run_id>`** runs one attempt's deterministic checks and writes its draft report: setup when the lockfile changed, `static`, then one `verify` run whose JUnit results resolve the contract's test evidence, plus command and manual evidence. `--json` returns the outcome and report path
+  - **Revision-bound**: the report records HEAD, the target and the merge base. A check that moves HEAD or modifies tracked files makes the attempt an error, and results count only if this run produced them (stale files, missing results or zero executed tests are errors)
+  - **Change classification**: new tests, modified assertions and execution-policy changes are counted and located for the reviewer. A sensitive path or policy change in the actual diff makes the run sensitive whatever the plan proposed. The new `test-files` setting names test files
+  - **Clean tree**: untracked working files must be listed in `.git/info/exclude`. Otherwise validate is blocked, naming them, and uses no attempt
 - 3.8.0 (2026-11-16): Factory contract, settings, readiness and risk tiers (#60)
   - **Published schemas**: `schemas/factory/` holds JSON Schemas for the contract, report, reviewer verdict and readiness documents, so other hosts can produce and check them. The runner validates against the same files. `factory.sh schema` prints their paths
   - **Contract validation**: `factory approve` rejects an invalid contract, listing every problem. Contracts name no commands, so they can't skip or narrow a project's required checks
