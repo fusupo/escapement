@@ -6,6 +6,8 @@ import { deadlinePassed } from "./runs.ts";
 import { withLocks, listLocks, worktreeLock, BUILD_LOCK } from "./locks.ts";
 import { isAlive, parseOwner, type Owner } from "./owner.ts";
 import { verdictPath } from "./attempts.ts";
+import { reviewDir } from "./review.ts";
+import { join } from "node:path";
 
 /**
  * What `resume` found for an attempt and did about it (§4.7):
@@ -22,7 +24,9 @@ import { verdictPath } from "./attempts.ts";
  * | complete, run still validating      | advanced_run      |
  *
  * `reissue_review`, `record_review` and `refinalize` are next steps for the
- * caller; #61 and #62 implement them. Resume itself never starts checks.
+ * caller, and `detail` names the command: `factory review-input`, or
+ * `factory record-review` with the verdict file. Resume itself never starts
+ * checks or records a verdict.
  */
 export type ResumeAction = {
   attempt: number;
@@ -83,7 +87,11 @@ export async function resumeRun(
       .all(runId) as AttemptRow[];
 
     for (const a of attempts) {
-      const verdict = existsSync(verdictPath(run.artifact_dir, a.attempt));
+      const stored = verdictPath(run.artifact_dir, a.attempt);
+      const verdict = existsSync(stored);
+      // A verdict the reviewer wrote where the bundle asked, not yet recorded.
+      const written = join(reviewDir(run.artifact_dir, a.attempt), "verdict.json");
+      const record = (file: string) => `factory record-review ${runId} ${a.attempt} ${file}`;
       if (a.status === "checks_running") {
         if (ownerAlive(a)) {
           actions.push({ attempt: a.attempt, found: a.status, action: "running" });
@@ -101,7 +109,12 @@ export async function resumeRun(
           });
           actions.push({ attempt: a.attempt, found: a.status, action: "identity_error", detail: id.detail });
         } else {
-          actions.push({ attempt: a.attempt, found: a.status, action: verdict ? "record_review" : "reissue_review" });
+          const file = verdict ? stored : existsSync(written) ? written : null;
+          actions.push(
+            file
+              ? { attempt: a.attempt, found: a.status, action: "record_review", detail: record(file) }
+              : { attempt: a.attempt, found: a.status, action: "reissue_review", detail: `factory review-input ${runId} ${a.attempt}` },
+          );
         }
       } else if (a.status === "finalizing") {
         if (ownerAlive(a)) {
@@ -111,7 +124,7 @@ export async function resumeRun(
             attempt: a.attempt,
             found: a.status,
             action: verdict ? "refinalize" : "needs_attention",
-            detail: verdict ? undefined : "finalizing without a verdict file",
+            detail: verdict ? record(stored) : "finalizing without a verdict file",
           });
         }
       }
