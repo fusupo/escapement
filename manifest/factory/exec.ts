@@ -5,7 +5,7 @@ import { FactoryError, atomicWrite } from "./util.ts";
 import { runProcess } from "./process.ts";
 import { requireExecutable, deadlinePassed } from "./runs.ts";
 import { transitionRun, getRun } from "./state.ts";
-import { withLocks, worktreeLock, BUILD_LOCK } from "./locks.ts";
+import { withLocks, worktreeLock, BUILD_LOCK, setLockChild } from "./locks.ts";
 import type { Owner } from "./owner.ts";
 
 export type ExecResult = {
@@ -96,7 +96,9 @@ export async function execCommand(
         logPath: join(dir, `${seq}.log`),
         graceMs: opts.graceMs,
         echo: opts.echo,
+        onSpawn: (child) => setLockChild(db, BUILD_LOCK, opts.owner, child),
       });
+      setLockChild(db, BUILD_LOCK, opts.owner, null);
       const result: ExecResult = { run_id: runId, seq, command: argv, cwd: run.worktree_path, ...p };
       atomicWrite(join(dir, `${seq}.json`), JSON.stringify(result, null, 2) + "\n");
       if (result.reason === "run_deadline" || deadlinePassed(getRun(db, runId))) {

@@ -15,6 +15,7 @@ import { recordManual } from "./factory/manual.ts";
 import { archiveRun } from "./factory/archive.ts";
 import { syncGuard } from "./factory/guard.ts";
 import { currentOwner } from "./factory/owner.ts";
+import { parseFaultSpec, FAULT_ENV } from "./factory/fault.ts";
 import { FactoryError, parseDuration } from "./factory/util.ts";
 import { checkReadiness } from "./factory/readiness.ts";
 import { SCHEMA_NAMES, schemaPath, isSchemaName } from "./factory/schemas.ts";
@@ -537,6 +538,7 @@ async function dispatch(db: Database, command: string, p: Parsed, json: boolean)
         `${r.run.run_id}: ${r.run.state}${r.deadline_passed ? " (deadline passed: reconciled only)" : ""}`,
         ...(r.actions.length ? r.actions.map((a) => `  attempt ${a.attempt} (${a.found}): ${a.action}${a.detail ? ` — ${a.detail}` : ""}`) : ["  nothing to reconcile"]),
         ...r.released_locks.map((l) => `  released stale lock ${l}`),
+        ...r.killed_groups.map((g) => `  killed process group ${g}, left running by a crashed check`),
       ];
       return { result: r, text: lines.join("\n") };
     }
@@ -596,7 +598,10 @@ async function main(argv: string[]): Promise<number> {
 
   try {
     parsed = parseArgs(argv);
+    // A mistyped fault spec must fail loudly up front, not mid-command.
+    if (process.env[FAULT_ENV]) parseFaultSpec(process.env[FAULT_ENV]!);
   } catch (err) {
+    if (err instanceof Error && !(err instanceof FactoryError)) err = new FactoryError("usage", err.message);
     return fail(err);
   }
   command = parsed.positional.shift() ?? "";

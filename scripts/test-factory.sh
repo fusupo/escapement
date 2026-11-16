@@ -23,6 +23,8 @@ export ESCAPEMENT_MANIFEST_DIR="$tmp/data"
 # Never act as a real agent identity, from the environment or ~/.config/escapement/agent.env.
 unset ESCAPEMENT_AGENT_GH_TOKEN ESCAPEMENT_AGENT_NAME ESCAPEMENT_AGENT_EMAIL GH_TOKEN GITHUB_TOKEN
 export XDG_CONFIG_HOME="$tmp/config"
+# Faults are armed per command below, never inherited from a factory run.
+unset ESCAPEMENT_FACTORY_FAULT ESCAPEMENT_FACTORY_FAULT_DIR
 
 # A project with no context-path, so artifacts go in .escapement/, and a
 # short command-timeout so exec's default timeout comes from settings.
@@ -358,6 +360,100 @@ CWD="$fproject" f --json approve '#9-r2' --contract "$tmp/fcontract.json" >/dev/
 out="$(CWD="$fproject" f --json validate '#9-r2')"
 status=$?
 if [[ $status -eq 0 && "$(jq -r '.result.outcome == "fail" and .result.failed_phase == "evidence" and .result.run_state == "escalated"' <<<"$out")" == true ]]; then ok; else bad "validate-fail-json" "status=$status out=$out"; fi
+
+# Crashes and resume (#65): ESCAPEMENT_FACTORY_FAULT kills the runner
+# (SIGKILL, exit 137, no JSON) at a named point; resume and the next command
+# pick up from what it left, at each boundary.
+cproject="$tmp/cproject"
+make_vproject "$cproject" 0
+sed 's/#5-r1/#12-r1/' "$project/../contract.json" > "$tmp/ccontract.json"
+CWD="$cproject" f --json start '#12' --target-ref main >/dev/null
+CWD="$cproject" f --json approve '#12-r1' --contract "$tmp/ccontract.json" >/dev/null
+cf() { CWD="$cproject" f "$@"; }
+crash() { local spec="$1"; shift; ESCAPEMENT_FACTORY_FAULT="$spec" CWD="$cproject" f "$@" 2>"$tmp/crash.err"; }
+cnext() { cf --json authorization | jq -r '.result.next'; }
+cguard="$cproject/.git/escapement-factory-run.json"
+
+# a mistyped fault point is a usage error before anything runs
+out="$(crash 'validate.befor_check' --json validate '#12-r1')"
+if [[ $? -eq 1 && "$(jq -r '.error.code' <<<"$out")" == usage && "$(cf --json status '#12-r1' | jq '.result.attempts | length')" == 0 ]]; then ok; else bad "crash-bad-spec" "$out"; fi
+
+# during checks (the second check, verify, about to start): attempt 1 is left checks_running
+out="$(crash 'validate.before_check@2' --json validate '#12-r1')"
+status=$?
+if [[ $status -eq 137 && -z "$out" && "$(cat "$tmp/crash.err")" == *"fault injected at validate.before_check"* ]]; then ok; else bad "crash-checks-killed" "status=$status out=$out err=$(cat "$tmp/crash.err")"; fi
+if [[ "$(cf --json status '#12-r1' | jq -r '.result.attempts[0].status')" == checks_running && "$(cnext)" == resume ]]; then ok; else bad "crash-checks-state" "$(cf --json status '#12-r1')"; fi
+deadline_before="$(cf --json status '#12-r1' | jq -r '.result.run.deadline_at')"
+out="$(cf --json resume '#12-r1')"
+if [[ "$(jq -r '.result.actions[0].action == "interrupted" and .result.actions[0].attempt == 1' <<<"$out")" == true && "$(cnext)" == validate ]]; then ok; else bad "crash-checks-resume" "$out"; fi
+if [[ "$(jq -r '.run_id' "$cguard" 2>/dev/null)" == "#12-r1" ]]; then ok; else bad "crash-checks-guard" "$(cat "$cguard" 2>&1)"; fi
+
+# between checks and review (after attempt 2's checks committed, before any output)
+out="$(crash 'validate.committed' --json validate '#12-r1')"
+status=$?
+st="$(cf --json status '#12-r1')"
+if [[ $status -eq 137 && "$(jq -r '[.result.attempts[] | .status] == ["interrupted", "awaiting_review"]' <<<"$st")" == true && "$(cnext)" == review ]]; then ok; else bad "crash-committed" "status=$status $st"; fi
+if [[ "$(jq -r '.result.run.deadline_at' <<<"$st")" == "$deadline_before" ]]; then ok; else bad "crash-budget-not-reset" "$st"; fi
+out="$(cf --json resume '#12-r1')"
+if [[ "$(jq -r '[.result.actions[] | select(.attempt == 2) | .action] == ["reissue_review"]' <<<"$out")" == true &&
+      "$(cf --json status '#12-r1' | jq -r '.result.attempts[1].status')" == awaiting_review ]]; then ok; else bad "crash-committed-resume" "$out"; fi
+
+# review-input dies after issuing; resume re-issues, and it isn't interrupted
+out="$(crash 'review-input.issued' --json review-input '#12-r1' 2 --issue-file "$tmp/issue.md")"
+status=$?
+out2="$(cf --json resume '#12-r1')"
+if [[ $status -eq 137 && "$(jq -r '[.result.actions[] | select(.attempt == 2) | .action] == ["reissue_review"]' <<<"$out2")" == true ]]; then ok; else bad "crash-review-input" "status=$status $out2"; fi
+out="$(cf --json review-input '#12-r1' 2 --issue-file "$tmp/issue.md")"
+cbundle="$(jq -r .result.bundle_path <<<"$out")"
+if [[ "$(jq -r '.ok and .result.reused_snapshot' <<<"$out")" == true ]]; then ok; else bad "crash-review-reissued" "$out"; fi
+
+# during finalization: the verdict is stored, the attempt left finalizing
+jq '{version: 1, source_digest: .source.digest,
+     evidence: [.required.evidence[] | {id, (.judgment): "yes", rationale: "covers it"}],
+     sensitive_paths: [.required.sensitive_paths[] | {path, signoff: "approve", rationale: "ok"}],
+     modified_assertions: [.required.modified_assertions[] | {location, justified: true, rationale: "ok"}],
+     findings: []}' "$cbundle" > "$tmp/cverdict.json"
+out="$(crash 'record-review.verdict_stored' --json record-review '#12-r1' 2 "$tmp/cverdict.json")"
+status=$?
+if [[ $status -eq 137 && "$(cf --json status '#12-r1' | jq -r '.result.attempts[1].status')" == finalizing && "$(cnext)" == resume ]]; then ok; else bad "crash-finalizing" "status=$status $(cf --json status '#12-r1')"; fi
+out="$(cf --json resume '#12-r1')"
+vfile="$(jq -r '.result.actions[] | select(.attempt == 2) | .file' <<<"$out")"
+if [[ "$(jq -r '[.result.actions[] | select(.attempt == 2) | .action] == ["refinalize"]' <<<"$out")" == true && "$vfile" == */attempts/2/review.json ]]; then ok; else bad "crash-finalizing-resume" "$out"; fi
+out="$(cf --json record-review '#12-r1' 2 "$vfile")"
+if [[ "$(jq -r '.ok and .result.refinalized and .result.outcome == "pass" and .result.run_state == "validated"' <<<"$out")" == true && ! -e "$cguard" ]]; then ok; else bad "crash-refinalized" "$out"; fi
+
+# between PR creation and recording: running pr again records that PR, no second one
+echo '[]' > "$tmp/cprs.json"
+cgh() { PATH="$tmp/ghbin:$PATH" GH_STUB_STATE="$tmp/cprs.json" ESCAPEMENT_AGENT_GH_TOKEN=agent-token "$@"; }
+out="$(cgh crash 'pr.created' --json pr '#12-r1' --title 'feat: crash test (#12)' --body-file "$tmp/narrative.md")"
+status=$?
+st="$(cf --json status '#12-r1')"
+if [[ $status -eq 137 && "$(jq length "$tmp/cprs.json")" == 1 && "$(jq -r '.result.run.pr_number == null and .result.run.state == "validated"' <<<"$st")" == true && "$(cnext)" == pr ]]; then ok; else bad "crash-pr-created" "status=$status $st"; fi
+out="$(cgh cf --json pr '#12-r1' --title 'feat: crash test (#12)' --body-file "$tmp/narrative.md")"
+if [[ "$(jq -r '.ok and .result.action == "recovered" and .result.pr_number == 1 and .result.state == "pr_open"' <<<"$out")" == true && "$(jq length "$tmp/cprs.json")" == 1 ]]; then ok; else bad "crash-pr-recovered" "$out"; fi
+
+# the run used two attempts (the interrupted one counts) and lost nothing
+st="$(cf --json status '#12-r1')"
+if [[ "$(jq -r '(.result.attempts | length) == 2 and .result.attempts[0].status == "interrupted" and .result.attempts[1].outcome == "pass"' <<<"$st")" == true ]]; then ok; else bad "crash-attempts" "$st"; fi
+
+# a runner killed mid-check leaves the check running; resume kills its process group.
+# The check writes its pid outside the tree, in the results dir.
+oproject="$tmp/oproject"
+make_vproject "$oproject" 0
+(cd "$oproject" && printf 'echo $$ > "$FACTORY_RESULTS_DIR/verify.pid"\nsleep 30\n' > ci/verify.sh && git -c user.name=t -c user.email=t@example.invalid commit -qam 'slow verify')
+sed 's/#5-r1/#13-r1/' "$project/../contract.json" > "$tmp/ocontract.json"
+oart="$(CWD="$oproject" f --json start '#13' --target-ref main | jq -r .result.artifact_dir)"
+CWD="$oproject" f --json approve '#13-r1' --contract "$tmp/ocontract.json" >/dev/null
+(cd "$oproject" && exec bash "$wrapper" --json validate '#13-r1') >/dev/null 2>&1 &
+runner=$!
+pidfile="$oart/attempts/1/results/2-verify/verify.pid"
+for _ in $(seq 150); do [[ -s "$pidfile" ]] && break; sleep 0.1; done
+kill -KILL "$runner" 2>/dev/null; wait "$runner" 2>/dev/null
+check_pid="$(cat "$pidfile" 2>/dev/null)"
+if [[ -n "$check_pid" ]] && kill -0 "$check_pid" 2>/dev/null; then ok; else bad "orphan-left-running" "pidfile=$pidfile pid=$check_pid"; fi
+out="$(CWD="$oproject" f --json resume '#13-r1')"
+for _ in $(seq 50); do kill -0 "$check_pid" 2>/dev/null || break; sleep 0.1; done
+if [[ "$(jq -r '(.result.killed_groups | length) == 1 and .result.actions[0].action == "interrupted"' <<<"$out")" == true ]] && ! kill -0 "$check_pid" 2>/dev/null; then ok; else bad "orphan-killed-by-resume" "$out"; [[ -n "$check_pid" ]] && kill "$check_pid" 2>/dev/null; fi
 
 # prompt: the reviewer prompt ships as data, found through the runner
 out="$(f prompt reviewer)"

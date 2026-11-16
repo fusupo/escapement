@@ -85,7 +85,10 @@ function run() {
     const own = readSettings(root);
     assert(own.errors.length === 0 && own.source === join(root, "CLAUDE.md"), "Escapement's CLAUDE.md is read without errors");
     const s = own.settings;
-    assert(s.verify === null && s.static === null && s.sensitivePaths.length === 0, "its doc examples are not picked up");
+    // Escapement is a factory project itself (#65): its real settings are read,
+    // and the fenced examples in its docs sections are not.
+    assert(s.verify === "bash scripts/run-tests.sh" && s.static?.startsWith("(cd manifest && npx tsc --noEmit)") === true, "its own static and verify are read");
+    assert(s.sensitivePaths.includes("manifest/factory/**") && !s.sensitivePaths.includes("src/auth/**"), "its doc examples are not picked up");
     const design = parse(readFileSync(join(root, "docs", "FACTORY_DESIGN.md"), "utf-8"));
     assert(design.settings.verify === null && design.settings.maxAttempts === 3, "the fenced §8 example in FACTORY_DESIGN.md is ignored");
   }

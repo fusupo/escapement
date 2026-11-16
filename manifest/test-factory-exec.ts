@@ -75,6 +75,17 @@ async function run() {
     assert(r.outcome === "fail" && r.exit_code === 3 && execExitCode(r) === 3, "a failing command reports its exit code");
     assert(r.seq === 2, "exec records are numbered in order");
   }
+  {
+    // While a command runs, its process group is on the build lock, so a
+    // runner that dies mid-command doesn't leave it running (see resume).
+    const running = execCommand(db, runA.run_id, ["sh", "-c", "sleep 0.6"], opts);
+    await new Promise((r) => setTimeout(r, 300));
+    const holder = listLocks(db).find((l) => l.name === BUILD_LOCK)?.holder;
+    assert(typeof holder?.child?.pgid === "number" && holder.pid === process.pid, "a running command's process group is recorded on the build lock");
+    await running;
+    assert(!listLocks(db).some((l) => l.name === BUILD_LOCK), "and the lock is released when it ends");
+  }
+
 
   {
     const r = await execCommand(db, runA.run_id, ["no-such-command-xyz"], opts);

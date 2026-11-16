@@ -1,13 +1,14 @@
 import type { Database } from "better-sqlite3";
 import { existsSync } from "node:fs";
 import { identityHolds } from "./revision.ts";
-import { tx, getRun, transitionRun, transitionAttempt, type AttemptRow, type RunRow, type RunState } from "./state.ts";
+import { tx, getRun, transitionRun, transitionAttempt, recordEvent, type AttemptRow, type RunRow, type RunState } from "./state.ts";
 import { deadlinePassed } from "./runs.ts";
-import { withLocks, listLocks, worktreeLock, BUILD_LOCK } from "./locks.ts";
+import { withLocks, listLocks, worktreeLock, reapDeadHolder, BUILD_LOCK } from "./locks.ts";
 import { isAlive, parseOwner, type Owner } from "./owner.ts";
 import { verdictPath } from "./attempts.ts";
 import { reviewDir } from "./review.ts";
 import { join } from "node:path";
+import { shq } from "./util.ts";
 
 /**
  * What `resume` found for an attempt and did about it (§4.7):
@@ -41,6 +42,8 @@ export type ResumeAction = {
     | "needs_attention"
     | "advanced_run";
   detail?: string;
+  /** For record_review and refinalize: the verdict file to pass to record-review. */
+  file?: string;
 };
 
 export type ResumeResult = {
@@ -49,6 +52,8 @@ export type ResumeResult = {
   actions: ResumeAction[];
   /** Locks for this run's worktree (or the build lock) whose holder had died, now removed. */
   released_locks: string[];
+  /** Process groups a dead holder left running under those locks (a crashed check), now killed. */
+  killed_groups: number[];
 };
 
 /**
@@ -79,7 +84,7 @@ export async function resumeRun(
   opts: { owner: Owner; lockWaitMs: number },
 ): Promise<ResumeResult> {
   const run = getRun(db, runId);
-  const released = releaseDeadLocks(db, run);
+  const { released, killed } = releaseDeadLocks(db, run);
   return withLocks(db, [worktreeLock(run.worktree_path)], opts.owner, { waitMs: opts.lockWaitMs, runId }, () => {
     const actions: ResumeAction[] = [];
     const attempts = db
@@ -91,7 +96,7 @@ export async function resumeRun(
       const verdict = existsSync(stored);
       // A verdict the reviewer wrote where the bundle asked, not yet recorded.
       const written = join(reviewDir(run.artifact_dir, a.attempt), "verdict.json");
-      const record = (file: string) => `factory record-review ${runId} ${a.attempt} ${file}`;
+      const record = (file: string) => `factory record-review ${shq(runId)} ${a.attempt} ${shq(file)}`;
       if (a.status === "checks_running") {
         if (ownerAlive(a)) {
           actions.push({ attempt: a.attempt, found: a.status, action: "running" });
@@ -112,8 +117,8 @@ export async function resumeRun(
           const file = verdict ? stored : existsSync(written) ? written : null;
           actions.push(
             file
-              ? { attempt: a.attempt, found: a.status, action: "record_review", detail: record(file) }
-              : { attempt: a.attempt, found: a.status, action: "reissue_review", detail: `factory review-input ${runId} ${a.attempt}` },
+              ? { attempt: a.attempt, found: a.status, action: "record_review", detail: record(file), file }
+              : { attempt: a.attempt, found: a.status, action: "reissue_review", detail: `factory review-input ${shq(runId)} ${a.attempt}` },
           );
         }
       } else if (a.status === "finalizing") {
@@ -125,6 +130,7 @@ export async function resumeRun(
             found: a.status,
             action: verdict ? "refinalize" : "needs_attention",
             detail: verdict ? record(stored) : "finalizing without a verdict file",
+            ...(verdict ? { file: stored } : {}),
           });
         }
       }
@@ -149,19 +155,28 @@ export async function resumeRun(
     if (passed && now.state !== "closed" && now.state !== "escalated") {
       transitionRun(db, runId, "escalated", { owner: opts.owner, reason: "run_deadline" });
     }
-    return { run: getRun(db, runId), deadline_passed: passed, actions, released_locks: released };
+    return { run: getRun(db, runId), deadline_passed: passed, actions, released_locks: released, killed_groups: killed };
   });
 }
 
-/** Remove the run's worktree lock and the build lock when their holders have died. */
-function releaseDeadLocks(db: Database, run: RunRow): string[] {
+/**
+ * Remove the run's worktree lock and the build lock when their holders have
+ * died, first killing any command group a dead holder left running (a check
+ * the crashed runner had started), so it can't overlap the next attempt.
+ */
+function releaseDeadLocks(db: Database, run: RunRow): { released: string[]; killed: number[] } {
   const names = [worktreeLock(run.worktree_path), BUILD_LOCK];
-  return tx(db, () =>
+  const killed: number[] = [];
+  const released = tx(db, () =>
     listLocks(db)
       .filter((l) => names.includes(l.name) && !l.alive)
       .map((l) => {
+        const group = reapDeadHolder(l.holder);
+        if (group) killed.push(group.pgid);
         db.prepare("DELETE FROM factory_locks WHERE name = ?").run(l.name);
+        recordEvent(db, run.run_id, "state_change", { entity: "lock", name: l.name, to: "released_dead", from_holder: l.holder, killed_group: group?.pgid ?? null });
         return l.name;
       }),
   );
+  return { released, killed };
 }

@@ -9,6 +9,11 @@ import { randomBytes } from "node:crypto";
  */
 export type ErrorKind = "error" | "blocked";
 
+/** Quote for a POSIX shell: run IDs such as `owner-repo#42-r1` start a comment unquoted. */
+export function shq(text: string): string {
+  return `'${text.replace(/'/g, `'\\''`)}'`;
+}
+
 export class FactoryError extends Error {
   constructor(
     readonly code: string,

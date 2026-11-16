@@ -6,9 +6,11 @@ import { fileURLToPath } from "node:url";
 import { FactoryError, atomicWrite, blocked } from "./util.ts";
 import { requireExecutable, contractDigest, type AuthorizationRow } from "./runs.ts";
 import { tx, getRun, getAttempt, transitionRun, transitionAttempt, recordEvent, type RunRow, type AttemptRow } from "./state.ts";
-import { withLocks, worktreeLock, BUILD_LOCK } from "./locks.ts";
+import { withLocks, worktreeLock, BUILD_LOCK, setLockChild } from "./locks.ts";
+import type { ChildGroup } from "./process.ts";
 import { allocateAttempt, attemptDir } from "./attempts.ts";
 import { runProcess, type ProcessResult } from "./process.ts";
+import { faultPoint } from "./fault.ts";
 import { readSettings, type FactorySettings, type LoadedSettings } from "./settings.ts";
 import { parseContract, schemaErrors, type Contract, type Evidence } from "./schemas.ts";
 import { assessTier, type TierAssessment } from "./tiers.ts";
@@ -267,7 +269,7 @@ class Attempt {
   constructor(
     readonly run: RunRow,
     readonly attempt: number,
-    private readonly opts: ValidateOptions & { commandTimeoutMs: number },
+    private readonly opts: ValidateOptions & { commandTimeoutMs: number; trackChild: (child: ChildGroup | null) => void },
   ) {
     this.dir = attemptDir(run.artifact_dir, attempt);
     mkdirSync(join(this.dir, "logs"), { recursive: true });
@@ -295,6 +297,7 @@ class Attempt {
     const id = `${++this.seq}-${phase}`;
     const want = opts.timeoutMs ?? this.opts.commandTimeoutMs;
     const limit = Math.min(want, this.remaining());
+    faultPoint("validate.before_check");
     const p = await runProcess({
       command,
       cwd: opts.cwd ?? this.run.worktree_path,
@@ -305,7 +308,9 @@ class Attempt {
       graceMs: this.opts.graceMs,
       echo: this.opts.echo,
       captureStdout: opts.captureStdout,
+      onSpawn: (child) => this.opts.trackChild(child),
     });
+    this.opts.trackChild(null);
     const invocation: Invocation = {
       id,
       phase,
@@ -355,6 +360,7 @@ export async function validateRun(db: Database, runId: string, opts: ValidateOpt
     const at = new Attempt(run, row.attempt, {
       ...opts,
       commandTimeoutMs: opts.timeoutMs ?? settings.commandTimeoutMs,
+      trackChild: (child) => setLockChild(db, BUILD_LOCK, opts.owner, child),
     });
 
     try {
@@ -528,8 +534,9 @@ async function runPhases(
   if (problems.length) throw new FactoryError("internal", `report for attempt ${at.attempt} is invalid: ${problems.join("; ")}`);
   const reportPath = join(at.dir, "report.json");
   atomicWrite(reportPath, JSON.stringify(report, null, 2) + "\n");
+  faultPoint("validate.report_written");
 
-  return tx(db, () => {
+  const result = tx(db, () => {
     db.prepare(
       `UPDATE factory_attempts SET report_path = ?, failed_phase = ?, duration_s = ?, findings_json = ?, flags_json = ?
          WHERE run_id = ? AND attempt = ?`,
@@ -557,6 +564,8 @@ async function runPhases(
       run_state: getRun(db, run.run_id).state,
     };
   });
+  faultPoint("validate.committed");
+  return result;
 }
 
 /** Phase 2 (§4.4): one structured verify run, command evidence, manual evidence pending. */

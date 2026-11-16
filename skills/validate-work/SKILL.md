@@ -50,10 +50,32 @@ To record a manual outcome, go to **Recording a Manual Check**. Otherwise route 
 
 | `next` | Meaning | Go to |
 |---|---|---|
-| `implement` | no attempt is waiting | Phase 2 |
-| `resume` | an attempt's checks were interrupted | run `factory resume '{run_id}'`, then Phase 1 again (once) |
-| `review` | `latest_attempt` awaits review | Phase 3, with `latest_attempt.attempt` |
+| `implement`, `validate` | no attempt is waiting (`validate`: the last one was interrupted, for example by a crash during checks) | Phase 2: a new attempt |
+| `resume`, `review` | an attempt was left mid-way: checks running or crashed, a review outstanding, a crash while recording it | **Resuming**, below |
 | `pr`, `refresh_pr`, `await_merge` | already validated | Phase 4, with `latest_attempt` |
+
+**The runner died.** A factory command that prints no JSON, or exits with status 128 or more (137 after a SIGKILL), was interrupted, not refused. Whatever it left is reconciled by `resume`: go back to Phase 1 and route again. Do this at most three times in one validate-work; then escalate (`factory escalate '{run_id}' --reason 'runner kept dying: {command}'`) and stop with result `error`.
+
+#### Resuming
+
+```bash
+bash "$FACTORY" --json resume '{run_id}'
+```
+
+Take the entry of `.result.actions` for `latest_attempt.attempt`:
+
+| `action` | Do |
+|---|---|
+| `interrupted` | the attempt's checks died with their runner. It still counts toward the attempt budget. Phase 2: a new attempt |
+| `reissue_review` | checks are done, the review is outstanding: Phase 3 |
+| `record_review` | the reviewer already wrote a verdict that was never recorded: Phase 3 step 4 with `.file`. Don't run the reviewer again |
+| `refinalize` | the verdict is stored and its finalization was interrupted: Phase 3 step 4 with `.file` (the stored `review.json`) |
+| `advanced_run` | the attempt had finished; its run transition is now applied: Phase 1 again |
+| `running` | another process is still working on this attempt: report it and stop |
+| `identity_error` | HEAD moved or the tree changed under the attempt; the attempt is `error` and the run escalated: Phase 4 |
+| `needs_attention` | escalate with the detail as the reason and stop with result `error` |
+
+No entry for the latest attempt: Phase 1 again (once). Resume never resets a budget; past the deadline it only reconciles and escalates the run.
 
 ### Phase 2: Validate
 
@@ -62,7 +84,7 @@ bash "$FACTORY" --json validate '{run_id}'
 ```
 
 - **Exit 2 (`.error.kind` blocked):** no attempt was used and the run is unchanged. Report `.error.code` and `.error.message` and stop with result `blocked`. `dirty_tree` names the files: uncommitted work (commit it) or working files missing from `.git/info/exclude` (`factory exclude`).
-- **Exit 1:** report the error and stop with result `error`.
+- **Exit 1:** report the error and stop with result `error`. No JSON, or exit 128 or more: the runner died (Phase 1).
 - **`.result.outcome` is `fail` or `error`:** the deterministic checks decided; no review is needed, and the run is escalated. Go to Phase 4.
 - **`.result.outcome` is null** (status `awaiting_review`): note `.result.attempt` and go to Phase 3.
 
@@ -124,6 +146,7 @@ Use `fail` instead of `pass` for a failed check. Single-quote the note (a `'` in
 ## Error Handling
 
 - **No run, or not matched:** Phase 1 explains; validate-work changes nothing.
+- **A runner that dies** (no JSON, exit ≥ 128) during `validate`, `review-input` or `record-review`: Phase 1 again, which resumes from what it left (at most three times).
 - **Lock timeouts** (`lock_timeout`): another factory operation holds the worktree or build lock. Report the holder from `factory status '{run_id}'`; don't retry in a loop.
 - **Past the deadline** (`run_deadline`): the run was escalated. Validation can't start; recording a review in progress and manual outcomes still work.
 
@@ -144,8 +167,9 @@ Use `fail` instead of `pass` for a failed check. Single-quote the note (a `'` in
 
 ---
 
-**Version:** 1.0.0
+**Version:** 1.1.0
 **Last Updated:** 2026-11-16
 **Maintained By:** Escapement
 **Changelog:**
+- v1.1.0: Resume after a crash: `next` `validate` and `resume`, the Resuming table (resume's actions), and a runner that dies without JSON goes back through Phase 1 (#65)
 - v1.0.0: validate → fresh-context reviewer → record-review, with a bounded re-run on an incomplete verdict; manual outcomes (#64)

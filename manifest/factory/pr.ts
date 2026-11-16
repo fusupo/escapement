@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { FactoryError, blocked, atomicWrite } from "./util.ts";
 import { tx, getRun, transitionRun, recordEvent, type RunRow, type RunState } from "./state.ts";
+import { faultPoint } from "./fault.ts";
 import { activeAuthorization, contractDigest, deadlinePassed, type AuthorizationRow } from "./runs.ts";
 import { currentReport } from "./attempts.ts";
 import { identityHolds } from "./revision.ts";
@@ -156,6 +157,7 @@ export async function openPr(
       const m = url.match(/\/pull\/(\d+)\b/);
       if (!m) throw new FactoryError("gh_failed", `gh pr create printed no PR URL: ${url}`);
       number = Number(m[1]);
+      faultPoint("pr.created");
     }
 
     const action = !existing ? "created" : run.pr_number === null ? "recovered" : "updated";
@@ -175,6 +177,7 @@ export async function openPr(
         ? transitionRun(db, runId, "pr_open", { owner: opts.owner, reason: `PR #${number}` })
         : getRun(db, runId);
     });
+    faultPoint("pr.recorded");
     return {
       run_id: runId,
       pr_number: number,

@@ -54,6 +54,7 @@ bash "$FACTORY" --check && bash "$FACTORY" --json authorization
   ```
   Single-quote the run ID and title (a `'` in the title is written `'\''`). For `refresh_pr` the title is optional; the PR keeps its own unless you pass one.
   - **`.ok`:** report `.result.url`, `.result.pr_number` and `.result.action`: `created`, `updated`, or `recovered` (an earlier, interrupted call had created it). Running it again is safe: it finds the PR an earlier call created.
+  - **No JSON, or exit status 128 or more:** the runner died, possibly after GitHub created the PR. Run the same command again: the lookup finds that PR and records it (`action: recovered`), never a second one.
   - **`gh_failed` or `push_failed`** (exit 1): GitHub may have acted before the failure. Run the same command once more; it finds a PR an earlier call created. If it fails again, report it and stop.
   - **Refused** (exit 2, `.error.code`): report the code and message and stop; under do-work, the caller decides whether to escalate. `head_moved` means commits came after validation, or the tree is dirty (validate again); `no_agent_token` means ESCAPEMENT_AGENT_GH_TOKEN isn't set (environment or `~/.config/escapement/agent.env`); `run_deadline` means the run was escalated.
 
@@ -319,9 +320,10 @@ Based on context, automatically determine:
 
 ---
 
-**Version:** 1.1.0
+**Version:** 1.2.0
 **Last Updated:** 2026-11-16
 **Maintained By:** Escapement
 **Converted From:** commands/open-pr.md
 **Changelog:**
+- v1.2.0: Under authorization, a `factory pr` that dies without JSON is run again; the lookup records the PR it created (#65)
 - v1.1.0: Under a matching active factory authorization, open or update the PR through `factory pr` (as the AI agent, with the validation report), without confirmation; refuse without a passing report (#64)

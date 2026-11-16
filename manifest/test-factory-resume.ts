@@ -9,8 +9,10 @@ import { startRun, approveRun } from "./factory/runs.ts";
 import { allocateAttempt, verdictPath, attemptDir } from "./factory/attempts.ts";
 import { resumeRun, runStateForOutcome } from "./factory/resume.ts";
 import { getRun, getAttempt, transitionRun, transitionAttempt } from "./factory/state.ts";
-import { tryAcquire, listLocks, worktreeLock } from "./factory/locks.ts";
+import { tryAcquire, listLocks, worktreeLock, setLockChild, BUILD_LOCK } from "./factory/locks.ts";
+import { processStartTime } from "./factory/owner.ts";
 import { currentOwner, type Owner } from "./factory/owner.ts";
+import { shq } from "./factory/util.ts";
 import { assert, throws, tempDir, cleanup, makeRepo, sh, contractFor } from "./factory/testkit.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -107,19 +109,19 @@ for (let i = 0; i < 5; i++) {
     transitionAttempt(db, v.runId, 1, "awaiting_review", { owner: null });
     const r = await resumeRun(db, v.runId, { owner: me, lockWaitMs: 1000 });
     assert(r.actions[0].action === "reissue_review", "awaiting_review without a verdict → reissue review");
-    assert(r.actions[0].detail === `factory review-input ${v.runId} 1`, "naming the command");
+    assert(r.actions[0].detail === `factory review-input ${shq(v.runId)} 1`, "naming the command");
     assert(getAttempt(db, v.runId, 1).status === "awaiting_review", "awaiting_review is not interrupted");
 
     const written = join(attemptDir(v.art, 1), "review", "verdict.json");
     mkdirSync(dirname(written), { recursive: true });
     writeFileSync(written, "{}");
     const r1 = await resumeRun(db, v.runId, { owner: me, lockWaitMs: 1000 });
-    assert(r1.actions[0].action === "record_review" && r1.actions[0].detail === `factory record-review ${v.runId} 1 ${written}`, "a verdict the reviewer wrote to review/verdict.json → record it");
+    assert(r1.actions[0].action === "record_review" && r1.actions[0].detail === `factory record-review ${shq(v.runId)} 1 ${shq(written)}`, "a verdict the reviewer wrote to review/verdict.json → record it");
 
     writeFileSync(verdictPath(v.art, 1), "{}");
     const r2 = await resumeRun(db, v.runId, { owner: me, lockWaitMs: 1000 });
     assert(r2.actions[0].action === "record_review", "awaiting_review with a verdict file → record it");
-    assert(r2.actions[0].detail === `factory record-review ${v.runId} 1 ${verdictPath(v.art, 1)}`, "the stored verdict (a crash before finalizing) is preferred");
+    assert(r2.actions[0].detail === `factory record-review ${shq(v.runId)} 1 ${shq(verdictPath(v.art, 1))}`, "the stored verdict (a crash before finalizing) is preferred");
 
     writeFileSync(join(v.root, "README.md"), "changed\n");
     const r3 = await resumeRun(db, v.runId, { owner: me, lockWaitMs: 1000 });
@@ -145,7 +147,7 @@ for (let i = 0; i < 5; i++) {
     writeFileSync(verdictPath(v.art, 1), "{}");
     const r = await resumeRun(db, v.runId, { owner: me, lockWaitMs: 1000 });
     assert(r.actions[0].action === "refinalize", "finalizing with a verdict file → re-run finalization");
-    assert(r.actions[0].detail === `factory record-review ${v.runId} 1 ${verdictPath(v.art, 1)}`, "by recording the stored verdict again");
+    assert(r.actions[0].detail === `factory record-review ${shq(v.runId)} 1 ${shq(verdictPath(v.art, 1))}`, "by recording the stored verdict again");
     assert(getAttempt(db, v.runId, 1).status === "finalizing", "the attempt stays finalizing for idempotent re-finalization");
   }
   {
@@ -185,6 +187,66 @@ for (let i = 0; i < 5; i++) {
       err = String((e as { code?: string }).code);
     }
     assert(err === "lock_timeout", "resume waits for a live operation on the worktree");
+  }
+
+  console.log("\nA crashed check's process group\n");
+  // A check left running by a runner that died: its own process group,
+  // recorded on the dead runner's build lock.
+  const orphan = () => {
+    const child = spawn("sh", ["-c", "sleep 300 & sleep 300; wait"], { detached: true, stdio: "ignore" });
+    child.unref();
+    return { pgid: child.pid!, start_time: processStartTime(child.pid!) };
+  };
+  const groupAlive = (pgid: number) => {
+    try {
+      process.kill(-pgid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const waitGone = async (pgid: number) => {
+    for (let i = 0; i < 50 && groupAlive(pgid); i++) await new Promise((r) => setTimeout(r, 20));
+    return !groupAlive(pgid);
+  };
+  {
+    const v = validatingRun();
+    const dead = deadOwner();
+    v.alloc(dead);
+    const group = orphan();
+    tryAcquire(db, BUILD_LOCK, dead, v.runId);
+    setLockChild(db, BUILD_LOCK, dead, group);
+    assert(groupAlive(group.pgid), "the orphaned check is running");
+    const r = await resumeRun(db, v.runId, { owner: me, lockWaitMs: 1000 });
+    assert(r.killed_groups.includes(group.pgid) && r.released_locks.includes(BUILD_LOCK), "resume kills the group a dead holder left under the build lock");
+    assert(await waitGone(group.pgid), "the whole group is gone, children included");
+    assert(r.actions[0].action === "interrupted", "and then marks the attempt interrupted");
+  }
+  {
+    const dead = deadOwner();
+    const group = orphan();
+    tryAcquire(db, BUILD_LOCK, dead);
+    setLockChild(db, BUILD_LOCK, dead, group);
+    const took = tryAcquire(db, BUILD_LOCK, me);
+    assert(took.acquired && (await waitGone(group.pgid)), "taking over a dead holder's build lock kills its group too");
+    db.prepare("DELETE FROM factory_locks").run();
+  }
+  {
+    const dead = deadOwner();
+    const group = orphan();
+    tryAcquire(db, BUILD_LOCK, dead);
+    setLockChild(db, BUILD_LOCK, dead, { ...group, start_time: "not-its-start-time" });
+    tryAcquire(db, BUILD_LOCK, me);
+    assert(groupAlive(group.pgid), "a live leader with another start time is a reused pid: left alone");
+    process.kill(-group.pgid, "SIGKILL");
+    db.prepare("DELETE FROM factory_locks").run();
+  }
+  {
+    tryAcquire(db, BUILD_LOCK, me);
+    setLockChild(db, BUILD_LOCK, deadOwner(), { pgid: 1, start_time: null });
+    const row = listLocks(db).find((l) => l.name === BUILD_LOCK)!;
+    assert(!row.holder.child, "only the lock's holder can record its child");
+    db.prepare("DELETE FROM factory_locks").run();
   }
 
   db.close();
