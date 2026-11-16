@@ -4,7 +4,7 @@ The factory runner is a small deterministic CLI that owns a run's state, locks, 
 
 The Escapement skills are one client of the runner. Other hosts, such as Escapement Studio, can call it as a subprocess and read its `--json` output. The runner never invokes a skill or an agent. It only runs git and the commands you give it.
 
-First-release status: #59 provides `start`, `approve`, `exec`, `status`, `resume` and `revoke`. `validate`, `review-input`, `record-review`, `record-manual` and `pr` arrive in #61, #62 and #64.
+First-release status: #59 provides `start`, `approve`, `exec`, `status`, `resume` and `revoke`. #60 adds contract validation, settings, `check` and `schema`. `validate`, `review-input`, `record-review`, `record-manual` and `pr` arrive in #61, #62 and #64.
 
 ## Running it
 
@@ -48,6 +48,8 @@ exec/{n}.json          its result record (same shape as exec's JSON result)
 attempts/{n}/…         per-attempt reports, logs, results, review (#61, #62)
 ```
 
+**Schemas.** The documents hosts exchange with the runner have published JSON Schemas in `schemas/factory/` (contract, report, verdict, readiness). `factory schema` prints their paths. See [schemas/factory/README.md](../schemas/factory/README.md).
+
 **Host obligation.** Hosts that write their own files into a worktree, such as scratchpads or session logs, must exclude them through `.git/info/exclude`. Otherwise validation sees an unclean tree.
 
 ## Commands
@@ -60,6 +62,8 @@ attempts/{n}/…         per-attempt reports, logs, results, review (#61, #62)
 | `status [run_id]` | List open runs (`--all` includes closed ones), or show one run | yes |
 | `resume <run_id>` | Reconcile an interrupted run (§4.7) | yes, reconciliation only |
 | `revoke <run_id>` | End the active authorization | yes |
+| `check --contract <file>` | Readiness: is the contract valid and runnable in this project? No run or database needed | n/a |
+| `schema [name]` | Path of a published JSON Schema, or its content with `--print`; no name lists them all. No database needed | n/a |
 
 Options:
 
@@ -67,25 +71,49 @@ Options:
 |---|---|---|
 | `--json` | all | off |
 | `--data-dir <path>` | all | shared manifest |
-| `--project-root <path>` | start | git toplevel of the cwd |
+| `--project-root <path>` | start, check | git toplevel of the cwd |
 | `--artifact-dir <path>` | start | see Storage |
 | `--issue <n>` | start | parsed from `#N` or `owner/repo#N` |
 | `--manifest-id <id>` | start | none |
 | `--target-ref <ref>` | start | `develop` if `origin/develop` exists, else `main` |
 | `--work-type <type>` | start | none |
-| `--contract <file>` | approve | required |
-| `--run-budget <dur>` | approve | `2h` |
-| `--timeout <dur>` | exec | `15m` |
-| `--lock-timeout <dur>` | exec, resume | `30m` |
+| `--contract <file>` | approve, check | required |
+| `--run-budget <dur>` | approve | `run-budget` setting, else `2h` |
+| `--timeout <dur>` | exec | `command-timeout` setting, else `15m` |
+| `--lock-timeout <dur>` | exec, resume | `lock-timeout` setting, else `30m` |
 | `--all` | status | off |
+| `--print` | schema | off |
 
-Durations are written like `30s`, `15m`, `2h` or `1d`. #60 will read the defaults from `## Escapement Settings` (`command-timeout`, `lock-timeout`, `run-budget`).
+Durations are written like `30s`, `15m`, `2h` or `1d`.
+
+## Settings
+
+The runner reads the factory keys of `## Escapement Settings` (FACTORY_DESIGN.md §8) from the CLAUDE.md of the run's worktree, with the same section and fence rules as `context-path`. Every key is optional.
+
+| Key | Value | Default |
+|---|---|---|
+| `base-branch` | branch name | none |
+| `setup`, `static`, `verify` | shell command | none |
+| `test-results` | `junit:{path}`, usually under `$FACTORY_RESULTS_DIR` | none |
+| `required-checks` | comma list of `setup`, `static`, `verify` | `static, verify` |
+| `sensitive-paths`, `validation-files` | comma list of globs | none |
+| `max-attempts` | positive whole number | `3` |
+| `command-timeout`, `lock-timeout`, `run-budget` | duration | `15m`, `30m`, `2h` |
+| `exec-hook` | `on`, `off` | `off` |
+| `gate-mode` | `report-only` | `report-only` |
+
+- Settings are read when a command needs them, not copied per run. Their digest (factory keys only) is reported by `check` and goes into each report's `policy_version`. A branch that changes them is an execution-policy change (§4.6), so weakening them is visible to review.
+- A command reads settings only for a limit you didn't pass as a flag, so an invalid CLAUDE.md doesn't stop a command whose limits are all given. Otherwise invalid settings are a `bad_setting` error that names each key.
+- **Globs** follow `.gitignore`: `*` and `?` stay within a path segment, `**` spans segments, a pattern without a `/` matches at any depth (`package.json`), a pattern with one is anchored at the repository root (`src/auth/**`), and a trailing `/` means a directory.
+- **Risk tier.** A file matching `sensitive-paths`, or `validation-files` (an execution-policy change), makes a run `sensitive`; otherwise it is `standard`. A tier proposed in the contract is never lowered.
 
 **Run IDs.** A run ID is the work item made path-safe, followed by `-r{n}`. For example, `#42` gives `#42-r1`, and `fusupo/escapement#42` gives `fusupo-escapement#42-r1`. The work item can be any external identifier.
 
 ### approve
 
-- The digest is the `sha256:` hash of the contract file's bytes. #60 adds schema validation.
+- The contract must validate against `schemas/factory/contract.schema.json`, with unique criterion and evidence IDs. Its `run_id` must be this run, and its `issue`, if set, the run's issue. Otherwise `bad_contract` lists every problem.
+- A contract names no commands. Checks come only from settings, so a contract can't skip or narrow a required check.
+- The digest is the `sha256:` hash of the contract file's bytes.
 - The first approval sets `deadline_at` to `approved_at` plus `--run-budget`. Later approvals never move the deadline.
 - Approving a different contract marks the active authorization `superseded` and issues a new one.
 - Approving the same contract again does nothing.
@@ -106,6 +134,17 @@ Durations are written like `30s`, `15m`, `2h` or `1d`. #60 will read the default
 6. Release the locks, then write `exec/{n}.json`.
 
 The first exec on an `approved` run moves it to `implementing`.
+
+### check
+
+`check` is the mechanical half of the readiness check (§3.1), for a planner to run before `start` or `approve`. It reads the contract and the settings of `--project-root` (default: the current worktree) and reports `needs_human` with a question for each gap:
+
+- the contract is invalid (each problem), has no criteria, or has a criterion without evidence;
+- a required check has no command configured;
+- a setting is invalid;
+- the contract has `test` evidence but the project sets no `test-results`.
+
+Whether the criteria capture the intent, and whether scope and dependencies are clear, is the planner's judgment; it adds those questions in the same shape. `check` exits 0 for both `ready` and `needs_human`; read `status`.
 
 ## Locks
 
@@ -159,6 +198,8 @@ With `--json`, every command prints exactly one JSON object on stdout.
 - **status** without one: `{runs: [run, …]}`
 - **resume:** `{run, deadline_passed, actions: [{attempt, found, action, detail?}], released_locks}`
 - **revoke:** `{authorization}`
+- **check:** a readiness document (`schemas/factory/readiness.schema.json`): `{version, status, questions: [{about, question, ref?}], tier?: {tier, reasons}, required_checks: [{name, command}], settings_digest}`
+- **schema:** `{schemas: [{name, path}]}`, or `{name, path}`, plus `schema` with `--print`
 
 Run fields:
 - `run_id`, `work_item`, `repo`, `worktree_path`, `branch`, `target_ref`, `artifact_dir`
@@ -180,7 +221,7 @@ Error codes:
 | kind | codes |
 |---|---|
 | `blocked` (exit 2) | `run_deadline`, `not_authorized`, `run_halted`, `run_closed`, `lock_timeout`, `attempt_budget` |
-| `error` (exit 1) | `usage`, `no_such_run`, `run_exists`, `wrong_state`, `illegal_transition`, `no_contract`, `no_active_authorization`, `bad_duration`, `bad_work_item`, `bad_project_root`, `not_a_repo`, `detached_head`, `git_failed`, `internal` |
+| `error` (exit 1) | `usage`, `no_such_run`, `run_exists`, `wrong_state`, `illegal_transition`, `no_contract`, `bad_contract`, `bad_setting`, `no_active_authorization`, `bad_duration`, `bad_work_item`, `bad_project_root`, `not_a_repo`, `detached_head`, `git_failed`, `internal` |
 
 ## Exit status
 

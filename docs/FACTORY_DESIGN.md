@@ -453,12 +453,13 @@ The agent supplies the judgment; the runner guarantees it is complete.
       ]
     }
   ],
-  "commands": { "narrow_verify": null },
   "predicted_files": ["src/auth/refresh.ts", "tests/auth/refresh.test.ts"]
 }
 ```
 
-Commands come from project settings. A contract may narrow `verify` for speed (`narrow_verify`), but `required-checks` always run in full. Contract changes require re-approval (new digest, new authorization, same `run_id`).
+Contracts name no commands in the first release: every check comes from project settings (§8), so a contract can't skip or narrow `required-checks`. A narrowed `verify` for quick feedback returns with the fix loop (§6.2). Contract changes require re-approval (new digest, new authorization, same `run_id`).
+
+*As built (#60):* the contract, report (§5.3), verdict (§4.9) and readiness (§3.1) documents have published JSON Schemas in `schemas/factory/`, and the runner validates against those same files. Each document carries `"version": 1`; the contract may also carry `risk_reasons` for a proposed tier. `issue` and `manifest_id` are optional, so hosts with their own work-item IDs need neither.
 
 ### 5.3 Report schema
 
@@ -545,6 +546,7 @@ On `fail`, the implementer receives findings only, fixes, commits, and re-valida
 - **Stuck:** a blocking finding whose `evidence_digest` is unchanged across two consecutive attempts → `escalated`. A repeated finding ID with changing evidence is progress, not stuck.
 - **Regression:** evidence that passed in an earlier attempt and now fails is flagged.
 - `blocked` / `error` always escalate; they aren't the implementer's to fix blindly.
+- **Narrowed verify between attempts:** a contract may name a faster `narrow_verify` (only the tests relevant to the criteria) so fix attempts get quick feedback. It never replaces a required check: the attempt that can produce `pass` always runs every `required-checks` command in full. Deferred from the first release (#60): there, validation runs once per attempt and `verify` is required by default, so a narrowed command would never run.
 
 ### 6.3 Gate
 
@@ -681,6 +683,8 @@ Extends `## Escapement Settings` in each project's CLAUDE.md:
 
 All keys optional. Missing `static`/`verify` → `blocked` ("not configured"). `required-checks` cannot be narrowed by a contract. `test-results` should reference `$FACTORY_RESULTS_DIR` (for jest-junit, set `JEST_JUNIT_OUTPUT_DIR` from it). If a test runner can only write to a fixed path inside the worktree, it must be gitignored; the runner clears it before each invocation and moves results into the artifact dir afterward (§4.4). `run-budget` sets the enforced run deadline; agent time and token figures are advisory.
 
+*As built (#60):* settings are read from the CLAUDE.md of the run's worktree whenever a command needs them, not copied per run. Each report records their digest in `policy_version`, and a branch that changes them, or weakens `required-checks`, is an execution-policy change (§4.6), so a weakened setting is flagged for review rather than silently used. `factory check` reports a required check with no command as a readiness question. Reference: [FACTORY_CLI.md](FACTORY_CLI.md#settings).
+
 ---
 
 ## 9. Changes to Existing Skills
@@ -704,13 +708,13 @@ All keys optional. Missing `static`/`verify` → `blocked` ("not configured"). `
 
 ## 10. Build Order
 
-Status as of 2026-11-15; tracked in #66.
+Status as of 2026-11-16; tracked in #66.
 
 1. **#57** — context-path detection. **Done** (PR #68). Found alongside it and also done: **#67**, the manifest skills run their CLI through a plugin-root wrapper, `scripts/manifest.sh` (PR #69).
 2. **#58 Shared manifest location + versioned schema** — one per-user manifest database independent of plugin and project location; `PRAGMA user_version` and ordered migrations replacing `ensureSchema` (§2.5). **Done.**
 3. **#59 `factory` CLI core** — run/attempt/authorization tables, state machines, `start`/`approve`/`exec`/`status`/`resume`/`revoke`, build and worktree locks, command and run deadlines, process-group cleanup, artifact dir. **Done.** Locks are SQLite rows (§4.1); CLI reference in [FACTORY_CLI.md](FACTORY_CLI.md).
-4. **#60 Contract + settings + readiness + tiers** — schema, evidence types, settings parsing. **Next.**
-5. **#61 `factory validate`** — identity (clean tree + HEAD), setup policy, static + evidence phases, fresh results dirs, single structured test run, change classification, actual-diff tier, draft reports. Open.
+4. **#60 Contract + settings + readiness + tiers** — schema, evidence types, settings parsing. **Done.** Published JSON Schemas in `schemas/factory/`, `factory check` (readiness) and `factory schema`; contracts name no commands (§5.2).
+5. **#61 `factory validate`** — identity (clean tree + HEAD), setup policy, static + evidence phases, fresh results dirs, single structured test run, change classification, actual-diff tier, draft reports. **Next.**
 6. **#62 Reviewer** — `validation-reviewer` agent, bundle, `record-review` completeness checks and idempotency. Open.
 7. **#63 `setup-work`** produces contract + authorization. Open.
 8. **#64 Authorized path** — `do-work`, `commit-changes`, `create-pr`, `factory pr`, `record-manual`. Open.

@@ -463,7 +463,8 @@ ul.tight li{margin:.3rem 0}
         <div class="plate-h"><span class="t">Example: issue #42, expired refresh tokens</span><span class="hint">Attempt 2 of the run, after review</span></div>
         <div class="plate-b" id="critCards"></div>
       </div>
-      <p>A contract may narrow <code>verify</code> for speed, but <code>required-checks</code> always run in full. Changing the contract means re-approval: a new digest and a new authorization on the same run.</p>
+      <p>A contract names no commands: every check comes from project settings, so it can't skip or narrow <code>required-checks</code>. A narrowed <code>verify</code> for quick feedback returns with the fix loop. Changing the contract means re-approval: a new digest and a new authorization on the same run.</p>
+      <p>The contract, report, verdict and readiness documents have published JSON Schemas in <code>schemas/factory/</code>, and the runner validates against those same files.</p>
       <details><summary>Contract JSON (md §5.2)</summary><div class="d-b"><pre id="contractJson"></pre></div></details>
       <details><summary>Report JSON (md §5.3)</summary><div class="d-b"><pre id="reportJson"></pre>
         <p class="muted" style="font-size:.86rem"><code>evidence_digest</code> hashes the normalized failure output, so the fix loop can tell "same test, different failure" from "no change".</p></div></details>
@@ -634,6 +635,7 @@ ul.tight li{margin:.3rem 0}
         <li><b>Stuck:</b> a blocking finding whose <code>evidence_digest</code> is unchanged across two consecutive attempts escalates. The same finding with changing evidence counts as progress.</li>
         <li><b>Regression:</b> evidence that passed before and now fails is flagged.</li>
         <li><code>blocked</code> and <code>error</code> always escalate. They aren't the implementer's to fix blindly.</li>
+        <li><b>Narrowed verify between attempts:</b> a contract may name a faster <code>narrow_verify</code> so fix attempts get quick feedback. It never replaces a required check: the attempt that can produce <code>pass</code> runs every required check in full. Deferred from the first release (#60), where validation runs once per attempt and <code>verify</code> is required by default, so it would never run.</li>
       </ul>
       <h3>Gate <span class="state s-pend" style="vertical-align:middle">next, report-only</span></h3>
       <p>The gate computes and records a recommendation, and in report-only mode always pings anyway. Toggle the conditions to see what it would recommend.</p>
@@ -677,6 +679,7 @@ ul.tight li{margin:.3rem 0}
         <thead><tr><th>Key</th><th>Example</th><th>Purpose</th></tr></thead>
         <tbody id="cfgRows"></tbody>
       </table></div>
+      <p>Settings are read from the run's worktree CLAUDE.md whenever they're needed, not copied per run. Each report records their digest, and a branch that changes them is an execution-policy change, so a weakened setting is flagged for review rather than silently used.</p>
       <p class="muted" style="font-size:.9rem">If a test runner can only write to a fixed path in the worktree, that path must be gitignored; the runner clears it before each run and moves the results into the artifact directory afterward.</p>
     </section>
 
@@ -684,7 +687,7 @@ ul.tight li{margin:.3rem 0}
     <section id="build">
       <div class="eyebrow">12 · Build order <span class="src">md §9, §10</span></div>
       <h2>Nine steps to the first release</h2>
-      <p>Status as of 2026-11-15. Tracked in <a href="https://github.com/fusupo/escapement/issues/66">#66</a>.</p>
+      <p>Status as of 2026-11-16. Tracked in <a href="https://github.com/fusupo/escapement/issues/66">#66</a>.</p>
       <ol class="build" id="buildList"></ol>
       <div class="callout info"><b>Host-agnostic interface.</b> #59–#62 now also require the factory to be usable by hosts other than the skills, such as Escapement Studio calling it as a subprocess: <code>--json</code> output, external work-item IDs, explicit project root and artifact directory, published JSON Schemas, the clean-tree exclude obligation, and the reviewer defined as a prompt plus schema.</div>
 
@@ -897,8 +900,8 @@ $("#contractJson").textContent=JSON.stringify({version:1,run_id:"esc#42-r1",issu
  {id:"AC-1",text:"Expired refresh tokens return 401",evidence:[{id:"AC-1.e1",type:"test",kind:"new_behavior",selector:"tests/auth/refresh.test.ts::rejects expired token"}]},
  {id:"AC-2",text:"Existing refresh flow still works",evidence:[{id:"AC-2.e1",type:"test",kind:"regression",selector:"tests/auth/refresh.test.ts::refreshes valid token"}]},
  {id:"AC-3",text:"Docs describe the refresh flow",evidence:[{id:"AC-3.e1",type:"manual",kind:"new_behavior",instructions:"docs/auth.md has a 'Refresh' section matching the new behavior"}]}],
- commands:{narrow_verify:null},predicted_files:["src/auth/refresh.ts","tests/auth/refresh.test.ts"]},null,2);
-$("#reportJson").textContent=JSON.stringify({run_id:"esc#42-r1",attempt:2,status:"complete",outcome:"fail",validation_scope:"branch",head_sha:"d4e5f6…",merge_base_sha:"a1b2c3…",target_ref:"develop",target_sha:"c7d8e9…",contract_digest:"sha256:…",policy_version:"factory@1.0.0+settings:sha256:…",lockfile_digest:"sha256:…",tree_clean_after:true,
+ predicted_files:["src/auth/refresh.ts","tests/auth/refresh.test.ts"]},null,2);
+$("#reportJson").textContent=JSON.stringify({version:1,run_id:"esc#42-r1",attempt:2,status:"complete",outcome:"fail",validation_scope:"branch",head_sha:"d4e5f6…",merge_base_sha:"a1b2c3…",target_ref:"develop",target_sha:"c7d8e9…",contract_digest:"sha256:…",policy_version:"factory@1.0.0+settings:sha256:…",lockfile_digest:"sha256:…",tree_clean_after:true,
  tier:{proposed:"standard",actual:"standard",reasons:[]},changes:{new_evidence:1,modified_assertions:0,execution_policy:0},
  phases:[{name:"static",outcome:"pass",duration_s:41,log:"logs/static.log"},{name:"evidence",outcome:"fail",duration_s:132,log:"logs/verify.log"}],
  evidence:[{id:"AC-1.e1",executed:"failed",supports_criterion:null,excerpt:"expected 401, received 500"}],
@@ -1008,7 +1011,7 @@ function gate(){const miss=GATE.filter(([k])=>!$("#g-"+k).checked).map(g=>g[1]);
 $$("#gateList input").forEach(i=>i.onchange=gate); gate();
 
 /* config */
-const CFG=[["context-path","../myproject-ctx","Where run artifacts, archives and the database live."],["base-branch","develop","Target for branches and PRs."],["setup","npm ci","Run under the lock when the lockfile digest changes."],["static","npm run typecheck && npm run lint","Phase 1. Required."],["verify","npx jest --runInBand --reporters=default --reporters=jest-junit","Phase 2, run once. Required."],["test-results","junit:$FACTORY_RESULTS_DIR/junit.xml","Where structured results land. Should use the fresh results directory."],["required-checks","static, verify","Always run in full; a contract can't narrow them."],["sensitive-paths","src/auth/**, migrations/**, .github/**","Touching these makes a run sensitive."],["validation-files","jest.config.*, tsconfig*.json, package.json","Changing these is an execution-policy change."],["max-attempts","3","Fix-loop cap (next)."],["command-timeout","15m","Per-command deadline; process group killed on expiry."],["lock-timeout","30m","Longest wait for the build lock."],["run-budget","2h","Sets the enforced run deadline."],["exec-hook","off","Optional enforcement of factory exec."],["gate-mode","report-only","How the gate behaves."]];
+const CFG=[["context-path","../myproject-ctx","Where run artifacts and archives live."],["base-branch","develop","Target for branches and PRs."],["setup","npm ci","Run under the lock when the lockfile digest changes."],["static","npm run typecheck && npm run lint","Phase 1. Required."],["verify","npx jest --runInBand --reporters=default --reporters=jest-junit","Phase 2, run once. Required."],["test-results","junit:$FACTORY_RESULTS_DIR/junit.xml","Where structured results land. Should use the fresh results directory."],["required-checks","static, verify","Always run in full; contracts name no commands, so they can't narrow them."],["sensitive-paths","src/auth/**, migrations/**, .github/**","Touching these makes a run sensitive."],["validation-files","jest.config.*, tsconfig*.json, package.json","Changing these is an execution-policy change."],["max-attempts","3","Fix-loop cap (next)."],["command-timeout","15m","Per-command deadline; process group killed on expiry."],["lock-timeout","30m","Longest wait for the build lock."],["run-budget","2h","Sets the enforced run deadline."],["exec-hook","off","Optional enforcement of factory exec."],["gate-mode","report-only","How the gate behaves."]];
 $("#cfgRows").innerHTML=CFG.map(([k,v,d])=>`<tr><td><code>${k}</code></td><td class="mono" style="font-size:.78rem;word-break:break-word">${esc(v)}</td><td>${esc(d)}</td></tr>`).join("");
 
 /* build order */
@@ -1016,8 +1019,8 @@ const BUILD=[
  [1,"#57","Context-path detection","Ignore documentation examples; read only Escapement Settings.","done"],
  [2,"#58","Shared manifest location and versioned schema","One per-user manifest independent of plugin location; ordered migrations.","done"],
  [3,"#59","factory CLI core","Run, attempt and authorization tables; state machines; start, approve, exec, status, resume, revoke; locks; deadlines; cleanup.","done"],
- [4,"#60","Contract, settings, readiness, tiers","Schemas, evidence types, settings parsing.","next"],
- [5,"#61","factory validate","Identity, setup policy, static and evidence phases, fresh results, classification, actual tier, draft reports.","open"],
+ [4,"#60","Contract, settings, readiness, tiers","Published JSON Schemas, evidence types, settings parsing, factory check and factory schema.","done"],
+ [5,"#61","factory validate","Identity, setup policy, static and evidence phases, fresh results, classification, actual tier, draft reports.","next"],
  [6,"#62","Reviewer","validation-reviewer, bundle, record-review completeness and idempotency.","open"],
  [7,"#63","setup-work produces the contract","Readiness, tier, contract and authorization.","open"],
  [8,"#64","Authorized path","do-work, commit-changes, create-pr, factory pr, record-manual.","open"],
