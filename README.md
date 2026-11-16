@@ -164,6 +164,20 @@ Skills are invoked automatically by Claude Code when relevant, or you can refere
 | `manifest-check` | "check manifest health"         | Detect stale items, reconcile predictions, find drift |
 | `manifest-dispatch` | "dispatch work"              | Create worktrees, constraint blocks, launch parallel agents |
 
+### Manifest Skills
+
+The `manifest-*` skills are an optional layer for running several issues in parallel. The core workflow above handles one issue at a time and never calls them.
+
+The manifest is a SQLite dependency graph of a project's open issues, recording which issues block which and which files each is expected to touch:
+
+1. **`manifest-bootstrap`** builds the graph from open GitHub issues and a codebase analysis
+2. **`manifest-plan`** finds the issues whose dependencies are done and groups those that don't touch the same files
+3. **`manifest-dispatch`** does `setup-work`'s job for a whole group: a worktree, branch, scratchpad and file-ownership constraints per issue, then launches an agent for each
+4. **`manifest-sync`** runs after `archive-work`: it marks the item done, records the archive path and the files actually changed, and recomputes what is ready next
+5. **`manifest-check`** can run at any time to catch drift: new issues, superseded items, wrong file predictions
+
+The skills need the CLI's dependencies installed (see [Manifest Skills (Optional)](#manifest-skills-optional)) and the database lives under the context path. Until [#58](https://github.com/fusupo/escapement/issues/58) is fixed, the CLI always uses Escapement's own database, whichever project it runs in. Design: `docs/MANIFEST_SYSTEM_DESIGN_V2.md`.
+
 ## Hooks
 
 Escapement includes a **PreCompact hook** that captures your raw session transcript before Claude Code compacts it (auto or manual). The hook writes only the conversation since the previous log to `SESSION_LOG_{N}.jsonl` in the **project root**, so a long session spanning many issues doesn't repeat itself in every log. See [Session Archiving](docs/SESSION-ARCHIVING.md#what-a-session-log-covers) for exactly what each log covers.
@@ -221,6 +235,13 @@ escapement/
 ├── hooks/
 │   ├── hooks.json            # Hook configuration
 │   └── archive-session-log.sh # PreCompact hook (JSONL slice)
+├── manifest/                 # Manifest CLI (TypeScript, SQLite) used by the manifest-* skills
+│   ├── manifest-cli.ts       # Entry point; run it through scripts/manifest.sh
+│   ├── init.ts               # Database setup and context-path resolution
+│   ├── plan.ts               # Dispatch plan generation
+│   ├── schema.sql            # Database schema
+│   ├── queries/              # SQL for frontier, overlap, reconcile, etc.
+│   └── test-*.ts             # Tests (`npm run test:*`, run one at a time)
 ├── scripts/
 │   ├── convert-session-log.py # JSONL→markdown session log converter
 │   ├── get-context-path.sh    # Shared context-path parser for skills
@@ -288,6 +309,7 @@ When set:
 - **`archive-work`** archives scratchpads and session logs to `{context-path}/{branch}/archive/` instead of `docs/dev/cc-archive/`
 - **`archive-work`** also maintains `{context-path}/INDEX.md` — a chronological table of all archived work across branches (oldest-first)
 - **`stash-artifact`** saves ad hoc scripts and notes to `{context-path}/{branch}/scripts/` or `{context-path}/{branch}/notes/`
+- **The manifest skills** keep their database at `{context-path}/manifest/manifest.db`
 
 Note: The PreCompact hook always writes `SESSION_LOG_{N}.jsonl` to the project root (alongside the scratchpad). Session logs are converted to markdown and moved to the context directory by `archive-work` at archive time.
 
