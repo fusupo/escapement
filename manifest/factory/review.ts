@@ -289,7 +289,7 @@ export async function reviewInput(
     const { run } = requireExecutable(db, runId, opts.owner);
     const a = getAttempt(db, runId, attempt);
     if (a.status !== "awaiting_review") {
-      throw blocked("wrong_state", `attempt ${attempt} of ${runId} is ${a.status}; only an attempt awaiting review can be reviewed`);
+      throw new FactoryError("wrong_state", `attempt ${attempt} of ${runId} is ${a.status}; only an attempt awaiting review can be reviewed`);
     }
     const { path: contractPath, contract } = attemptContract(run, a);
     requireIdentity(db, run, a, opts.owner);
@@ -631,13 +631,13 @@ export async function recordReview(
       if (a.verdict_digest) {
         throw blocked("verdict_conflict", `attempt ${attempt} of ${runId} already has a different verdict (${a.verdict_digest}); a complete attempt's verdict can't change`);
       }
-      throw blocked("wrong_state", `attempt ${attempt} of ${runId} completed without review (${a.outcome ?? "no outcome"})`);
+      throw new FactoryError("wrong_state", `attempt ${attempt} of ${runId} completed without review (${a.outcome ?? "no outcome"})`);
     }
     if (a.status === "finalizing" && a.verdict_digest !== digest) {
       throw blocked("verdict_conflict", `attempt ${attempt} of ${runId} is finalizing another verdict (${a.verdict_digest})`);
     }
     if (a.status !== "awaiting_review" && a.status !== "finalizing") {
-      throw blocked("wrong_state", `attempt ${attempt} of ${runId} is ${a.status}; only an attempt awaiting review takes a verdict`);
+      throw new FactoryError("wrong_state", `attempt ${attempt} of ${runId} is ${a.status}; only an attempt awaiting review takes a verdict`);
     }
 
     const shape = schemaErrors("verdict", parsed);
