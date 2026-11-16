@@ -86,7 +86,8 @@ function runSettings() {
 
   const claudeMd = readFileSync(resolve(__dirname, "..", "CLAUDE.md"), "utf-8");
   const own = parseEscapementSettings(claudeMd);
-  assert(own.size === 1 && own.get("context-path") === "../escapement-ctx", "Escapement's CLAUDE.md has only its real context-path");
+  assert(own.get("context-path") === "../escapement-ctx" && own.get("verify") === "bash scripts/run-tests.sh", "Escapement's CLAUDE.md gives its real context-path and factory settings");
+  assert(![...own.values()].some((v) => v.includes("myproject")), "and none of the examples in its fenced blocks");
 }
 
 function runDbPath() {
