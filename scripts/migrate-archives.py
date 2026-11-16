@@ -56,7 +56,7 @@ def parse_context_path(text, warn=lambda line: None):
     """Extract the context-path value from CLAUDE.md text.
 
     Same rules as scripts/get-context-path.sh (keep them in sync; the shared
-    fixtures in scripts/fixtures/context-path/ are checked by
+    fixtures in scripts/fixtures/context-path.md are checked by
     scripts/test-migrate-archives.py): only the first "## Escapement
     Settings" section counts, up to the next "#" or "##" heading; fenced code
     blocks are ignored; the value is the rest of the line with trailing

@@ -18,7 +18,7 @@ const SETTING_RE = /^[ \t]*[-*][ \t]+\*\*context-path\*\*:[ \t]*(.*)$/;
  * Extract the context-path value from CLAUDE.md content.
  *
  * Same rules as scripts/get-context-path.sh (keep them in sync; the shared
- * fixtures in scripts/fixtures/context-path/ are checked by test-init.ts):
+ * fixtures in scripts/fixtures/context-path.md are checked by test-init.ts):
  * only the first "## Escapement Settings" section counts, up to the next
  * "#" or "##" heading; fenced code blocks are ignored; the value is the rest
  * of the line with trailing whitespace trimmed and one pair of surrounding

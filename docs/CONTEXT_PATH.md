@@ -60,7 +60,7 @@ Skills run the parser like this:
 CONTEXT_PATH=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/get-context-path.sh" CLAUDE.md)
 ```
 
-The shared fixtures in `scripts/fixtures/context-path/` describe the expected behavior, and all three implementations are tested against them:
+The shared cases in `scripts/fixtures/context-path.md` describe the expected behavior, and all three implementations are tested against them:
 - `scripts/test-get-context-path.sh`
 - `manifest/test-init.ts`
 - `scripts/test-migrate-archives.py`

@@ -1,3 +1,0 @@
-# Project
-
-Nothing configured here.

@@ -21,7 +21,7 @@
 #
 # The same rules are implemented in manifest/init.ts (parseContextPath) and
 # scripts/migrate-archives.py (parse_context_path). Keep them in sync; the
-# fixtures in scripts/test-get-context-path.sh describe the expected behavior.
+# cases in scripts/fixtures/context-path.md describe the expected behavior.
 #
 # Usage:
 #   get-context-path.sh [CLAUDE.md]     (default: ./CLAUDE.md)
