@@ -49,7 +49,8 @@ export type AttemptState = (typeof ATTEMPT_STATES)[number];
 export const ATTEMPT_TRANSITIONS: Record<AttemptState, readonly AttemptState[]> = {
   // Deterministic failure, blocked or error completes without review.
   checks_running: ["awaiting_review", "complete", "interrupted"],
-  awaiting_review: ["finalizing", "interrupted"],
+  // complete: identity check failed before review (outcome error).
+  awaiting_review: ["finalizing", "complete", "interrupted"],
   finalizing: ["complete", "interrupted"],
   complete: [],
   interrupted: [],
