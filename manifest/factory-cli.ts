@@ -13,6 +13,7 @@ import { reviewInput, recordReview } from "./factory/review.ts";
 import { openPr } from "./factory/pr.ts";
 import { recordManual } from "./factory/manual.ts";
 import { archiveRun } from "./factory/archive.ts";
+import { syncGuard } from "./factory/guard.ts";
 import { currentOwner } from "./factory/owner.ts";
 import { FactoryError, parseDuration } from "./factory/util.ts";
 import { checkReadiness } from "./factory/readiness.ts";
@@ -209,6 +210,20 @@ function need(value: string | undefined, what: string): string {
 }
 
 type Outcome = { result: unknown; text: string; exitCode?: number };
+
+/** Commands that can change a run's state or authorization: the exec guard's marker is re-synced after them. */
+const GUARD_SYNC_COMMANDS = new Set([
+  "approve",
+  "revoke",
+  "escalate",
+  "exec",
+  "validate",
+  "record-review",
+  "record-manual",
+  "pr",
+  "archive",
+  "resume",
+]);
 
 /** Commands that don't touch the manifest database, so hosts can run them anywhere. */
 const NO_DB_COMMANDS = new Set(["check", "schema", "prompt", "exclude", "agent"]);
@@ -581,6 +596,15 @@ async function main(argv: string[]): Promise<number> {
   } catch (err) {
     return fail(err);
   } finally {
+    // Also after a failure: a blocked command may have escalated the run.
+    const runId = parsed.positional[0];
+    if (db && runId && GUARD_SYNC_COMMANDS.has(command)) {
+      try {
+        syncGuard(db, runId);
+      } catch {
+        // The marker is advisory; resume and the next command re-sync it.
+      }
+    }
     db?.close();
   }
 }

@@ -203,6 +203,10 @@ sed 's/#5-r1/#9-r1/' "$project/../contract.json" > "$tmp/vcontract.json"
 CWD="$vproject" f --json start '#9' --target-ref main >/dev/null
 CWD="$vproject" f --json approve '#9-r1' --contract "$tmp/vcontract.json" >/dev/null
 
+# the exec guard's marker: on while the approved run is implemented (inside .git, not the tree)
+guard="$vproject/.git/escapement-factory-run.json"
+if [[ "$(jq -r '.run_id == "#9-r1" and .commands == ["true", "sh ci/verify.sh"]' "$guard" 2>/dev/null)" == true ]]; then ok; else bad "guard-marker-on-approve" "$(cat "$guard" 2>&1)"; fi
+
 # an untracked scratchpad blocks validate (exit 2) and uses no attempt
 echo notes > "$vproject/SCRATCHPAD_9.md"
 out="$(CWD="$vproject" f --json validate '#9-r1')"
@@ -253,6 +257,7 @@ out="$(CWD="$vproject" f --json record-review '#9-r1' 1 - < "$tmp/verdict.json")
 status=$?
 if [[ $status -eq 0 && "$(jq -r '.ok and .result.outcome == "pass" and .result.run_state == "validated" and .result.noop == false' <<<"$out")" == true ]]; then ok; else bad "record-review-json" "status=$status out=$out"; fi
 if [[ "$(jq -r '.status == "complete" and .outcome == "pass" and .evidence[0].supports_criterion == "yes"' "$report")" == true ]]; then ok; else bad "record-review-final-report" "$(cat "$report")"; fi
+if [[ ! -e "$guard" ]]; then ok; else bad "guard-marker-off-when-validated"; fi
 
 # the same verdict again is a no-op; a different one is a conflict
 out="$(CWD="$vproject" f --json record-review '#9-r1' 1 "$tmp/verdict.json")"

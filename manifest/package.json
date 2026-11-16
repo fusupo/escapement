@@ -34,7 +34,8 @@
     "test:factory-github": "node --import tsx test-factory-github.ts",
     "test:factory-pr": "node --import tsx test-factory-pr.ts",
     "test:factory-manual": "node --import tsx test-factory-manual.ts",
-    "test:factory-archive": "node --import tsx test-factory-archive.ts"
+    "test:factory-archive": "node --import tsx test-factory-archive.ts",
+    "test:factory-guard": "node --import tsx test-factory-guard.ts"
   },
   "dependencies": {
     "ajv": "^8.17.1",

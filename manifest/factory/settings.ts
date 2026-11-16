@@ -66,7 +66,7 @@ export const SETTING_DEFAULTS = {
   "command-timeout": "15m",
   "lock-timeout": "30m",
   "run-budget": "2h",
-  "exec-hook": "off",
+  "exec-hook": "on",
   "gate-mode": "report-only",
 } as const;
 
@@ -151,7 +151,7 @@ export function parseFactorySettings(raw: Map<string, string>): { settings: Fact
     commandTimeoutMs: duration("command-timeout"),
     lockTimeoutMs: duration("lock-timeout"),
     runBudgetMs: duration("run-budget"),
-    execHook: oneOf("exec-hook", withDefault("exec-hook"), EXEC_HOOK_MODES, errors, "off"),
+    execHook: oneOf("exec-hook", withDefault("exec-hook"), EXEC_HOOK_MODES, errors, "on"),
     gateMode: oneOf("gate-mode", withDefault("gate-mode"), GATE_MODES, errors, "report-only"),
   };
   return { settings, errors };
