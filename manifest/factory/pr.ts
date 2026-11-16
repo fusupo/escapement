@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { FactoryError, blocked, atomicWrite } from "./util.ts";
 import { tx, getRun, transitionRun, recordEvent, type RunRow, type RunState } from "./state.ts";
 import { activeAuthorization, contractDigest, deadlinePassed, type AuthorizationRow } from "./runs.ts";
-import { latestReportPath } from "./attempts.ts";
+import { currentReport } from "./attempts.ts";
 import { identityHolds } from "./revision.ts";
 import { withLocks, worktreeLock } from "./locks.ts";
 import { agentToken, gh, ghJson, pushBranch, remoteOf } from "./github.ts";
@@ -54,17 +54,6 @@ function readJson<T>(path: string, what: string): T {
   } catch (err) {
     throw new FactoryError("unreadable", `cannot read ${what} ${path}: ${(err as Error).message}`);
   }
-}
-
-/** The run's current report: the latest complete attempt's highest revision. */
-export function currentReport(db: Database, run: RunRow): { report: ReportView; path: string; revision: number } | null {
-  const row = db
-    .prepare("SELECT attempt FROM factory_attempts WHERE run_id = ? AND status = 'complete' ORDER BY attempt DESC LIMIT 1")
-    .get(run.run_id) as { attempt: number } | undefined;
-  if (!row) return null;
-  const { path, revision } = latestReportPath(run.artifact_dir, row.attempt);
-  if (!existsSync(path)) return null;
-  return { report: { ...readJson<ReportView>(path, "report"), revision }, path, revision };
 }
 
 function checkAuthorization(db: Database, run: RunRow): AuthorizationRow {

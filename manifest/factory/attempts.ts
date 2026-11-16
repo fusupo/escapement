@@ -1,8 +1,9 @@
 import type { Database } from "better-sqlite3";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { blocked, nowIso } from "./util.ts";
-import { tx, getRun, getAttempt, recordEvent, type AttemptRow } from "./state.ts";
+import { FactoryError, blocked, nowIso } from "./util.ts";
+import { tx, getRun, getAttempt, recordEvent, type AttemptRow, type RunRow } from "./state.ts";
+import type { ReportView } from "./report-section.ts";
 import type { Owner } from "./owner.ts";
 
 /** `{artifact_dir}/attempts/{n}/`: report, logs, results and the reviewer verdict (§4.2). */
@@ -29,6 +30,29 @@ export function latestReportPath(artifactDir: string, attempt: number): { path: 
     }
   }
   return { path: join(dir, best === 1 ? "report.json" : `report.r${best}.json`), revision: best };
+}
+
+/**
+ * The run's current report: the latest complete attempt's highest
+ * revision, or null when no attempt has completed with a report.
+ */
+export function currentReport(
+  db: Database,
+  run: RunRow,
+): { report: ReportView & { contract_digest: string }; path: string; revision: number; attempt: number } | null {
+  const row = db
+    .prepare("SELECT attempt FROM factory_attempts WHERE run_id = ? AND status = 'complete' ORDER BY attempt DESC LIMIT 1")
+    .get(run.run_id) as { attempt: number } | undefined;
+  if (!row) return null;
+  const { path, revision } = latestReportPath(run.artifact_dir, row.attempt);
+  if (!existsSync(path)) return null;
+  let report: ReportView;
+  try {
+    report = JSON.parse(readFileSync(path, "utf-8")) as ReportView;
+  } catch (err) {
+    throw new FactoryError("unreadable", `cannot read report ${path}: ${(err as Error).message}`);
+  }
+  return { report: { ...report, revision }, path, revision, attempt: row.attempt };
 }
 
 /**

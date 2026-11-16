@@ -304,6 +304,11 @@ if [[ "$(jq -r '.result.action == "updated" and .result.pr_number == 1' <<<"$out
 out="$(CWD="$vproject" f --json authorization)"
 if [[ "$(jq -r '.result.matched and .result.state == "pr_open" and .result.next == "refresh_pr" and .result.pr_number == 1' <<<"$out")" == true ]]; then ok; else bad "pr-authorization-next" "$out"; fi
 
+# record-manual: this report has no manual evidence, so nothing awaits a human (exit 2)
+out="$(CWD="$vproject" f --json record-manual '#9-r1' AC-1.e1 pass --note 'looked')"
+status=$?
+if [[ $status -eq 2 && "$(jq -r '.error.code' <<<"$out")" == not_pending_manual ]]; then ok; else bad "record-manual-not-pending" "status=$status out=$out"; fi
+
 # a failing attempt still exits 0; the outcome is in the JSON
 fproject="$tmp/fproject"
 make_vproject "$fproject" 1

@@ -11,6 +11,7 @@ import { resumeRun } from "./factory/resume.ts";
 import { validateRun } from "./factory/validate.ts";
 import { reviewInput, recordReview } from "./factory/review.ts";
 import { openPr } from "./factory/pr.ts";
+import { recordManual } from "./factory/manual.ts";
 import { currentOwner } from "./factory/owner.ts";
 import { FactoryError, parseDuration } from "./factory/util.ts";
 import { checkReadiness } from "./factory/readiness.ts";
@@ -50,6 +51,10 @@ Commands:
   record-review <run_id> <attempt> <file>
                                 Check a reviewer verdict (- reads stdin) and
                                 finalize the attempt's report
+  record-manual <run_id> <evidence_id> pass|fail --note <text>
+                                Record a human's outcome for manual evidence the
+                                report left pending; all pass (or any fail)
+                                writes the next report revision
   pr <run_id> [--title <t>] [--body-file <f>]
                                 Push the branch and open or update the run's PR
                                 as the agent (idempotent; needs a validated run
@@ -95,10 +100,13 @@ Options:
   --timeout <dur>       exec, validate: timeout per command
                         (default: command-timeout setting, else ${SETTING_DEFAULTS["command-timeout"]})
   --issue-file <file>   review-input: the issue text to put in the bundle
-  --lock-timeout <dur>  exec, validate, review-input, record-review, resume, pr:
+  --lock-timeout <dur>  exec, validate, review-input, record-review, resume, pr,
+                        record-manual:
                         how long to wait for locks
                         (default: lock-timeout setting, else ${SETTING_DEFAULTS["lock-timeout"]})
   --reason <text>       escalate: why the run needs a human
+  --note <text>         record-manual: what was checked and seen
+  --recorder <name>     record-manual: who checked (default: the OS user)
   --title <text>        pr: the PR title (needed to create it)
   --body-file <file>    pr: the host's PR description; the runner adds its
                         report section (on update, only the section changes)
@@ -124,6 +132,8 @@ const VALUE_FLAGS = new Set([
   "--reason",
   "--title",
   "--body-file",
+  "--note",
+  "--recorder",
 ]);
 const BOOL_FLAGS = new Set(["--json", "--all", "--print", "--help", "-h"]);
 
@@ -398,6 +408,22 @@ async function dispatch(db: Database, command: string, p: Parsed, json: boolean)
       return {
         result: r,
         text: `${runId} attempt ${attempt}: ${r.outcome}${how}\n  run:     ${r.run_state}\n  report:  ${r.report_path}\n  verdict: ${r.verdict_path}`,
+      };
+    }
+    case "record-manual": {
+      const runId = need(arg, "run_id");
+      const r = await recordManual(db, runId, need(p.positional[1], "evidence_id"), need(p.positional[2], "pass or fail"), {
+        note: need(str(p, "--note"), "--note <text>"),
+        recorder: str(p, "--recorder"),
+        owner,
+        lockWaitMs: duration(db, p, "--lock-timeout", runId, (s) => s.lockTimeoutMs),
+      });
+      const state = r.resolved
+        ? `resolved: ${r.resolved} (report revision ${r.report_revision})`
+        : `${r.pending.length} manual check(s) still pending: ${r.pending.join(", ")}`;
+      return {
+        result: r,
+        text: `${runId} ${r.evidence_id}: ${r.outcome}${r.noop ? " (already recorded)" : ""}\n  ${state}\n  run:    ${r.run_state}\n  report: ${r.report_path}${r.refresh_pr ? `\n  PR #${r.pr_number} shows the old report: run factory pr '${runId}'` : ""}`,
       };
     }
     case "pr": {

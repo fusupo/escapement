@@ -32,7 +32,8 @@
     "test:factory-review": "node --import tsx test-factory-review.ts",
     "test:factory-authorization": "node --import tsx test-factory-authorization.ts",
     "test:factory-github": "node --import tsx test-factory-github.ts",
-    "test:factory-pr": "node --import tsx test-factory-pr.ts"
+    "test:factory-pr": "node --import tsx test-factory-pr.ts",
+    "test:factory-manual": "node --import tsx test-factory-manual.ts"
   },
   "dependencies": {
     "ajv": "^8.17.1",
