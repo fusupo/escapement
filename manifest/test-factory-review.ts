@@ -5,7 +5,9 @@ import { validateRun, type Report } from "./factory/validate.ts";
 import { parseContract } from "./factory/schemas.ts";
 import { requiredJudgments, exportSnapshot, snapshotDigest, reviewDir, reviewInput, recordReview, verdictDigest, type Bundle } from "./factory/review.ts";
 import { getRun, getAttempt, transitionAttempt } from "./factory/state.ts";
-import { schemaErrors } from "./factory/schemas.ts";
+import { schemaErrors, schemaPath } from "./factory/schemas.ts";
+import { promptPath } from "./factory/prompts.ts";
+import { fileURLToPath } from "node:url";
 import { assert, sh, tempDir, cleanup } from "./factory/testkit.ts";
 import { owner, SETTINGS, TEST_EV, TEST_FILE, project } from "./factory/fixtures.ts";
 
@@ -77,7 +79,7 @@ async function awaiting(criteria: typeof CRITERIA = CRITERIA) {
 }
 
 async function judgments() {
-  console.log("Required judgments\n");
+  console.log("\nRequired judgments\n");
   const { root, draft, contract } = await awaiting();
   const req = requiredJudgments({ worktree: root, contract, draft });
 
@@ -147,7 +149,8 @@ async function bundle() {
     assert(b.report.path.endsWith("report.json") && b.report.tier.actual === "sensitive", "the draft report, tier and flags");
     assert(b.logs.length > 0 && b.logs.every((l) => existsSync(l)) && b.results.length === 1 && existsSync(b.results[0]), "paths to every log and results file");
     assert(b.required.evidence.length === 3 && b.required.sensitive_paths.length === 2 && b.required.modified_assertions.length === 1, "the required judgments");
-    assert(b.verdict.schema.endsWith("schemas/factory/verdict.schema.json") && b.verdict.record.startsWith(`factory record-review ${run.run_id} 1 `), "where the verdict goes and how to record it");
+    assert(b.verdict.schema.endsWith("schemas/factory/verdict.schema.json") && b.verdict.record.includes(`record-review '${run.run_id}' 1 '`), "where the verdict goes and how to record it, run ID quoted");
+    assert(b.runner.path.endsWith("scripts/factory.sh") && b.runner.exec.endsWith(`exec '${run.run_id}' --`), "and how to run a command through the runner");
     assert(b.reviewer_prompt.endsWith("prompts/factory/validation-reviewer.md"), "and the reviewer prompt");
     assert(!r.reused_snapshot && getAttempt(db, run.run_id, 1).status === "awaiting_review", "the attempt still awaits review");
     const ev = db.prepare("SELECT detail_json FROM factory_events WHERE json_extract(detail_json, '$.entity') = 'review'").all() as { detail_json: string }[];
@@ -336,7 +339,33 @@ async function recovery() {
   }
 }
 
+function reviewerAsData() {
+  console.log("\nThe reviewer as data\n");
+  const prompt = readFileSync(promptPath("reviewer"), "utf-8");
+  const schema = readJson<{ required: string[]; properties: Record<string, { items?: { properties?: Record<string, { enum?: unknown[] }> } }> }>(schemaPath("verdict"));
+  const names = new Set<string>(schema.required);
+  const values = new Set<string>();
+  for (const prop of Object.values(schema.properties)) {
+    for (const [name, def] of Object.entries(prop.items?.properties ?? {})) {
+      names.add(name);
+      for (const v of def.enum ?? []) values.add(String(v));
+    }
+  }
+  const missing = [...names].filter((n) => !prompt.includes(`\`${n}\``) && !prompt.includes(`"${n}"`));
+  assert(missing.length === 0, `the reviewer prompt names every verdict field${missing.length ? ` (missing: ${missing.join(", ")})` : ""}`);
+  const missingValues = [...values].filter((v) => !prompt.includes(`\`${v}\``) && !prompt.includes(`"${v}"`));
+  assert(missingValues.length === 0, `and every allowed value${missingValues.length ? ` (missing: ${missingValues.join(", ")})` : ""}`);
+  const bundleFields = ["source.path", "source.digest", "required", "verdict.write_to", "verdict.schema", "verdict.record", "runner.exec", "contract.content", "diff"];
+  assert(bundleFields.every((f) => prompt.includes(`\`${f}\``)), "it names the bundle fields it relies on");
+
+  const agent = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "agents", "validation-reviewer.md"), "utf-8");
+  assert(/^---\nname: validation-reviewer\n/.test(agent), "the Claude Code agent is validation-reviewer");
+  assert(agent.includes("`reviewer_prompt`"), "it points at the prompt through the bundle's reviewer_prompt");
+  assert(!/supports_criterion|procedure_adequate|signoff|justified/.test(agent), "and doesn't restate the reviewer's instructions");
+}
+
 try {
+  reviewerAsData();
   await judgments();
   await sensitiveAtBase();
   await snapshot();

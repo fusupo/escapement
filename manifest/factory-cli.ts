@@ -12,6 +12,7 @@ import { currentOwner } from "./factory/owner.ts";
 import { FactoryError, parseDuration } from "./factory/util.ts";
 import { checkReadiness } from "./factory/readiness.ts";
 import { SCHEMA_NAMES, schemaPath, isSchemaName } from "./factory/schemas.ts";
+import { PROMPT_NAMES, promptPath, isPromptName } from "./factory/prompts.ts";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -54,6 +55,8 @@ Commands:
                                 questions (no run needed)
   schema [name]                 Path of a published JSON Schema (contract, report,
                                 verdict, readiness); --print for its content
+  prompt [name]                 Path of an agent prompt the factory ships
+                                (reviewer); --print for its content
 
 Options:
   --json                Print one JSON object (see docs/FACTORY_CLI.md)
@@ -74,7 +77,7 @@ Options:
                         how long to wait for locks
                         (default: lock-timeout setting, else ${SETTING_DEFAULTS["lock-timeout"]})
   --all                 status: include closed runs
-  --print               schema: print the schema instead of its path
+  --print               schema, prompt: print the content instead of the path
 
 Durations: 30s, 15m, 2h, 1d. Settings are read from the run's worktree
 CLAUDE.md, "## Escapement Settings" (docs/FACTORY_CLI.md).`;
@@ -160,7 +163,7 @@ function need(value: string | undefined, what: string): string {
 type Outcome = { result: unknown; text: string; exitCode?: number };
 
 /** Commands that don't touch the manifest database, so hosts can run them anywhere. */
-const NO_DB_COMMANDS = new Set(["check", "schema"]);
+const NO_DB_COMMANDS = new Set(["check", "schema", "prompt"]);
 
 function dispatchNoDb(command: string, p: Parsed): Outcome {
   const [arg] = p.positional;
@@ -193,6 +196,19 @@ function dispatchNoDb(command: string, p: Parsed): Outcome {
       if (p.flags.has("--print")) {
         const content = readFileSync(path, "utf-8");
         return { result: { name: arg, path, schema: JSON.parse(content) }, text: content.trimEnd() };
+      }
+      return { result: { name: arg, path }, text: path };
+    }
+    case "prompt": {
+      if (arg === undefined) {
+        const prompts = PROMPT_NAMES.map((name) => ({ name, path: promptPath(name) }));
+        return { result: { prompts }, text: prompts.map((x) => `${x.name.padEnd(10)} ${x.path}`).join("\n") };
+      }
+      if (!isPromptName(arg)) throw new FactoryError("usage", `unknown prompt ${arg} (use ${PROMPT_NAMES.join(", ")})`);
+      const path = promptPath(arg);
+      if (p.flags.has("--print")) {
+        const content = readFileSync(path, "utf-8");
+        return { result: { name: arg, path, content }, text: content.trimEnd() };
       }
       return { result: { name: arg, path }, text: path };
     }

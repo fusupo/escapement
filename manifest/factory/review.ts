@@ -2,7 +2,8 @@ import type { Database } from "better-sqlite3";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { FactoryError, atomicWrite, blocked, nowIso } from "./util.ts";
 import { attemptDir, verdictPath } from "./attempts.ts";
 import { changedFiles, identityHolds } from "./revision.ts";
@@ -182,9 +183,19 @@ export type Bundle = {
   logs: string[];
   results: string[];
   required: RequiredJudgments;
+  /** The verdict schema, where to write the verdict, and the command that records it. */
   verdict: { schema: string; write_to: string; record: string };
+  /** The runner wrapper, and the prefix for any command the reviewer runs (through `factory exec`, under the locks). */
+  runner: { path: string; exec: string };
   reviewer_prompt: string;
 };
+
+const FACTORY_SH = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "scripts", "factory.sh");
+
+/** Quote for a POSIX shell: run IDs such as `#42-r1` start a comment unquoted. */
+function shq(text: string): string {
+  return `'${text.replace(/'/g, `'\\''`)}'`;
+}
 
 export type ReviewInputResult = {
   run_id: string;
@@ -331,7 +342,12 @@ export async function reviewInput(
       logs: draft.invocations.map((i) => join(at, i.log)),
       results: draft.invocations.flatMap((i) => (i.results ?? []).map((r) => join(at, r.path))),
       required,
-      verdict: { schema: schemaPath("verdict"), write_to: writeTo, record: `factory record-review ${runId} ${attempt} ${writeTo}` },
+      verdict: {
+        schema: schemaPath("verdict"),
+        write_to: writeTo,
+        record: `bash ${shq(FACTORY_SH)} record-review ${shq(runId)} ${attempt} ${shq(writeTo)}`,
+      },
+      runner: { path: FACTORY_SH, exec: `bash ${shq(FACTORY_SH)} exec ${shq(runId)} --` },
       reviewer_prompt: promptPath("reviewer"),
     };
     const bundlePath = join(dir, "bundle.json");

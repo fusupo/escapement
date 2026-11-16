@@ -185,7 +185,7 @@ out="$(CWD="$vproject" f --json review-input '#9-r1' 1 --issue-file "$tmp/issue.
 status=$?
 bundle="$(jq -r .result.bundle_path <<<"$out")"
 if [[ $status -eq 0 && -f "$bundle" && "$(jq -r '.ok and .result.required.evidence == 1' <<<"$out")" == true ]]; then ok; else bad "review-input-json" "status=$status out=$out"; fi
-if [[ "$(jq -r '.issue.path' "$bundle")" != null && -f "$(jq -r .diff "$bundle")" && "$(jq -r .reviewer_prompt "$bundle")" == */prompts/factory/validation-reviewer.md ]]; then ok; else bad "review-input-bundle" "$(cat "$bundle")"; fi
+if [[ "$(jq -r '.issue.path' "$bundle")" != null && -f "$(jq -r .diff "$bundle")" && -f "$(jq -r .reviewer_prompt "$bundle")" ]]; then ok; else bad "review-input-bundle" "$(cat "$bundle")"; fi
 if [[ -z "$(git -C "$vproject" status --porcelain)" ]]; then ok; else bad "review-input-tree-clean" "$(git -C "$vproject" status --porcelain)"; fi
 
 # a verdict missing its evidence judgment is blocked; the attempt still awaits review
@@ -225,6 +225,14 @@ CWD="$fproject" f --json approve '#9-r2' --contract "$tmp/fcontract.json" >/dev/
 out="$(CWD="$fproject" f --json validate '#9-r2')"
 status=$?
 if [[ $status -eq 0 && "$(jq -r '.result.outcome == "fail" and .result.failed_phase == "evidence" and .result.run_state == "escalated"' <<<"$out")" == true ]]; then ok; else bad "validate-fail-json" "status=$status out=$out"; fi
+
+# prompt: the reviewer prompt ships as data, found through the runner
+out="$(f prompt reviewer)"
+if [[ "$out" == */prompts/factory/validation-reviewer.md && -f "$out" ]]; then ok; else bad "prompt-path" "$out"; fi
+out="$(f --json prompt reviewer --print)"
+if [[ "$(jq -r '.ok and (.result.content | contains("# Validation reviewer"))' <<<"$out")" == true ]]; then ok; else bad "prompt-print" "$out"; fi
+out="$(f --json prompt nope)"
+if [[ $? -eq 1 && "$(jq -r .error.code <<<"$out")" == usage ]]; then ok; else bad "prompt-unknown" "$out"; fi
 
 # Missing dependencies: a copy of the plugin layout without node_modules
 fake="$tmp/fake-plugin"
