@@ -1,6 +1,7 @@
 import type { Database } from "better-sqlite3";
-import { initManifest } from "./init.ts";
-import { projectContext, resolveWorktree, excludePatterns } from "./factory/context.ts";
+import { initManifest, resolveDbPath } from "./init.ts";
+import { projectContext, resolveWorktree, excludePatterns, mainRepoRoot, repoName, git } from "./factory/context.ts";
+import { matchAuthorization, noMatch, type AuthorizationMatch } from "./factory/authorization.ts";
 import { startRun, approveRun, revokeRun, runStatus, listRuns } from "./factory/runs.ts";
 import { getRun } from "./factory/state.ts";
 import { loadSettings, SETTING_DEFAULTS, type FactorySettings } from "./factory/settings.ts";
@@ -13,7 +14,7 @@ import { FactoryError, parseDuration } from "./factory/util.ts";
 import { checkReadiness } from "./factory/readiness.ts";
 import { SCHEMA_NAMES, schemaPath, isSchemaName } from "./factory/schemas.ts";
 import { PROMPT_NAMES, promptPath, isPromptName } from "./factory/prompts.ts";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 
 /**
@@ -61,11 +62,15 @@ Commands:
   exclude <pattern>...          Add .gitignore-style patterns for the host's
                                 working files to the repository's
                                 .git/info/exclude (no run needed)
+  authorization                 Does this worktree have a run whose active
+                                authorization lets skills act without asking?
+                                Prints matched or the reasons it isn't (exit 0
+                                either way; never creates the database)
 
 Options:
   --json                Print one JSON object (see docs/FACTORY_CLI.md)
   --data-dir <path>     Use {path}/manifest.db instead of the shared manifest
-  --project-root <path> start, check, exclude: the worktree
+  --project-root <path> start, check, exclude, authorization: the worktree
                         (default: git toplevel of the cwd)
   --artifact-dir <path> Put run artifacts in {path}/{run_id}/
   --issue <n>           start: issue number, when the work item isn't #N
@@ -234,6 +239,42 @@ function dispatchNoDb(command: string, p: Parsed): Outcome {
   }
 }
 
+/**
+ * The worktree, repo and branch `authorization` compares a run against.
+ * Not being in a repository, or on a branch, is an answer, not an error:
+ * skills call this everywhere and fall back to asking.
+ */
+function authorizationFor(db: Database | null, projectRoot: string | undefined): AuthorizationMatch {
+  let worktreePath: string;
+  try {
+    worktreePath = resolveWorktree(projectRoot);
+  } catch (err) {
+    if (err instanceof FactoryError && err.code === "not_a_repo") return noMatch("not_a_repo");
+    throw err;
+  }
+  let branch = "";
+  try {
+    branch = git(["branch", "--show-current"], worktreePath);
+  } catch {
+    // treated as detached below
+  }
+  if (!branch) return noMatch("detached_head");
+  if (!db) return noMatch("no_database");
+  return matchAuthorization(db, { worktreePath, repo: repoName(mainRepoRoot(worktreePath)), branch });
+}
+
+function describeMatch(r: AuthorizationMatch): string {
+  if (!r.matched) return `not matched: ${r.reasons.join(", ")}${r.run_id ? `\n  run: ${r.run_id} (${r.state})` : ""}`;
+  return [
+    `matched: ${r.run_id} (${r.state}), next: ${r.next}`,
+    `  branch:    ${r.branch} → ${r.target_ref}`,
+    `  contract:  ${r.contract_digest}`,
+    `  authorizes: ${r.authorizes.join(", ")}`,
+    `  deadline:  ${r.deadline_at ?? "-"}`,
+    ...(r.pr_number !== null ? [`  pr:        #${r.pr_number}`] : []),
+  ].join("\n");
+}
+
 async function dispatch(db: Database, command: string, p: Parsed, json: boolean): Promise<Outcome> {
   const owner = currentOwner(`factory ${command}`);
   const [arg] = p.positional;
@@ -371,6 +412,10 @@ async function dispatch(db: Database, command: string, p: Parsed, json: boolean)
       ];
       return { result: r, text: lines.join("\n") };
     }
+    case "authorization": {
+      const r = authorizationFor(db, str(p, "--project-root"));
+      return { result: r, text: describeMatch(r) };
+    }
     case "revoke": {
       const a = revokeRun(db, need(arg, "run_id"));
       return { result: { authorization: a }, text: `${a.run_id}: authorization ${a.contract_digest} revoked` };
@@ -415,6 +460,10 @@ async function main(argv: string[]): Promise<number> {
     let out: Outcome;
     if (NO_DB_COMMANDS.has(command)) {
       out = dispatchNoDb(command, parsed);
+    } else if (command === "authorization" && !existsSync(resolveDbPath({ dataDir: str(parsed, "--data-dir") }))) {
+      // Opening the manifest would create it; no database means no run.
+      const r = authorizationFor(null, str(parsed, "--project-root"));
+      out = { result: r, text: describeMatch(r) };
     } else {
       db = initManifest({ dataDir: str(parsed, "--data-dir") });
       db.pragma("busy_timeout = 10000");

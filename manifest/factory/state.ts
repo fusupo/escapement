@@ -96,6 +96,9 @@ export type RunRow = {
   contract_digest: string | null;
   policy_version: string | null;
   operator_action: string | null;
+  pr_number: number | null;
+  merge_sha: string | null;
+  archive_path: string | null;
   started_at: string;
   ended_at: string | null;
 };

@@ -49,6 +49,13 @@ if f --check >/dev/null 2>&1; then ok; else bad "check-installed"; fi
 f >/dev/null 2>&1
 if [[ $? -eq 1 ]]; then ok; else bad "no-command-exits-1"; fi
 
+# authorization before any run: no database yet, and asking doesn't create one
+out="$(f --json authorization)"
+status=$?
+if [[ $status -eq 0 && "$(jq -r '.ok and (.result.matched | not) and .result.reasons == ["no_database"]' <<<"$out")" == true && ! -e "$tmp/data" ]]; then ok; else bad "authorization-no-database" "status=$status out=$out"; fi
+out="$(CWD="$other" f --json authorization)"
+if [[ "$(jq -r '.result.reasons == ["not_a_repo"]' <<<"$out")" == true ]]; then ok; else bad "authorization-not-a-repo" "$out"; fi
+
 # start --json: one JSON object on stdout
 out="$(f --json start '#5')"
 if [[ "$(jq -r '.ok and .result.run_id == "#5-r1" and .result.state == "planned"' <<<"$out")" == true ]]; then ok; else bad "start-json" "$out"; fi
@@ -64,6 +71,10 @@ if [[ $status -eq 1 && "$(jq -r '.error.code == "bad_contract" and (.error.messa
 # approve with a contract path relative to the cwd
 out="$(f --json approve '#5-r1' --contract ../contract.json --run-budget 1h)"
 if [[ "$(jq -r '.ok and .result.run.state == "approved" and (.result.authorization.authorizes | index("commit") != null)' <<<"$out")" == true ]]; then ok; else bad "approve-json" "$out"; fi
+
+# the approved run matches this worktree; skills may act without asking
+out="$(f --json authorization)"
+if [[ "$(jq -r '.result.matched and .result.run_id == "#5-r1" and .result.next == "implement" and (.result.authorizes | index("open_pr") != null)' <<<"$out")" == true ]]; then ok; else bad "authorization-matched" "$out"; fi
 
 # exec (text mode): streams output, exits with the command's status
 out="$(f exec '#5-r1' -- sh -c 'echo hello; exit 3' 2>/dev/null)"
@@ -113,6 +124,11 @@ if [[ "$(jq -r '.ok and .result.authorization.status == "revoked"' <<<"$out")" =
 out="$(f --json exec '#5-r1' -- true)"
 status=$?
 if [[ $status -eq 2 && "$(jq -r '.ok == false and .error.kind == "blocked" and .error.code == "not_authorized"' <<<"$out")" == true ]]; then ok; else bad "blocked-exit-2" "status=$status out=$out"; fi
+
+# without an active authorization, authorization says so (still exit 0)
+out="$(f --json authorization)"
+status=$?
+if [[ $status -eq 0 && "$(jq -r '(.result.matched | not) and (.result.reasons | index("no_active_authorization") != null)' <<<"$out")" == true ]]; then ok; else bad "authorization-revoked" "status=$status out=$out"; fi
 
 # errors: exit 1 with kind "error"
 out="$(f --json status 'no-such-run')"
