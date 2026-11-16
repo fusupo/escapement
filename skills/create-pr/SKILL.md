@@ -197,15 +197,16 @@ Everything this phase does on GitHub acts as the AI agent's account, never the o
    ```
    It pushes the current branch, never forced, with `ESCAPEMENT_AGENT_GH_TOKEN` (environment or `~/.config/escapement/agent.env`). Never read or print that file. Route on `.error.code`:
    - **`.ok`:** the branch is on GitHub at `.result.sha`.
-   - **`no_agent_token`:** no agent identity is configured. Fall back to the operator's push and say so in one line:
+   - **`no_agent_token`** or **`not_github`:** the agent can't push here: no agent identity is configured, or origin isn't on github.com (the agent token is only ever sent to github.com). Fall back to the operator's push and say so in one line, with the reason:
      ```
      Pushing as the operator: no agent identity configured (put ESCAPEMENT_AGENT_GH_TOKEN in ~/.config/escapement/agent.env, chmod 600, or export it)
+     Pushing as the operator: origin isn't on github.com, and the agent token is only sent to github.com
      ```
      ```bash
      git push -u origin {branch-name}
      ```
    - **`agent_env_permissions`:** an identity is configured but the file is readable by others. Stop and show the message (`chmod 600 …`); don't fall back.
-   - **`push_base_branch`:** the current branch is the base branch, `main` or `master`. Stop: a PR needs a feature branch.
+   - **`push_base_branch`:** the current branch is the base branch, origin's default branch, `main` or `master`. Stop: a PR needs a feature branch.
    - **Anything else** (`push_failed`, `no_remote`, `detached_head`): report the code and message and stop. Never retry as the operator.
 
 2. **Create the PR with the GitHub MCP tools:**
@@ -340,6 +341,6 @@ Update it with `mcp__github__update_pull_request`.
 **Maintained By:** Escapement
 **Converted From:** commands/open-pr.md
 **Changelog:**
-- v1.3.0: Plain path acts on GitHub as the agent: `factory push` pushes the branch (operator push only when no agent identity is configured, with a notice), and the PR and labels go through the GitHub MCP tools, never the GitHub CLI (#80)
+- v1.3.0: Plain path acts on GitHub as the agent: `factory push` pushes the branch (operator push only when no agent identity is configured or origin isn't on github.com, with a notice), and the PR and labels go through the GitHub MCP tools, never the GitHub CLI (#80)
 - v1.2.0: Under authorization, a `factory pr` that dies without JSON is run again; the lookup records the PR it created (#65)
 - v1.1.0: Under a matching active factory authorization, open or update the PR through `factory pr` (as the AI agent, with the validation report), without confirmation; refuse without a passing report (#64)

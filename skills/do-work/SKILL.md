@@ -286,7 +286,7 @@ Throughout the session:
      ```
      📤 You have {N} unpushed commits. Push to remote?
      ```
-   - Push as the agent, the way create-pr's Phase 6 step 1 does: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/factory.sh" --json push`. Only on `no_agent_token` fall back to `git push -u origin {branch}`, saying in one line that the push is the operator's.
+   - Push as the agent, the way create-pr's Phase 6 step 1 does: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/factory.sh" --json push`. Only on `no_agent_token` or `not_github` (origin isn't on github.com) fall back to `git push -u origin {branch}`, saying in one line that the push is the operator's and why. On any other error, report it; never retry as the operator.
 
 2. **Progress Persistence:**
    - Keep scratchpad updated with running notes

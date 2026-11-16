@@ -68,7 +68,8 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/factory.sh" --check && bash "${CLAUDE_PLUGIN
 Never read or print `~/.config/escapement/agent.env` yourself.
 
 - **`.ok`:** note `.result.name` and `.result.email` as written. Phase 4 shows them as the author, and Phase 5 commits with them.
-- **`--check` fails, or `.error.code` is `no_agent_token`:** no agent identity is configured. Commit with the operator's own git identity, as before, and say so in one line: `Committing as the operator: no agent identity configured (put ESCAPEMENT_AGENT_GH_TOKEN, or ESCAPEMENT_AGENT_NAME and ESCAPEMENT_AGENT_EMAIL, in ~/.config/escapement/agent.env, chmod 600, or export it)`.
+- **`.error.code` is `no_agent_token`:** no agent identity is configured. Commit with the operator's own git identity, as before, and say so in one line: `Committing as the operator: no agent identity configured (put ESCAPEMENT_AGENT_GH_TOKEN, or ESCAPEMENT_AGENT_NAME and ESCAPEMENT_AGENT_EMAIL, in ~/.config/escapement/agent.env, chmod 600, or export it)`.
+- **`--check` fails:** the factory runner's dependencies aren't installed, so the identity can't be read, whether or not one is configured. Commit with the operator's own git identity and say so in one line: `Committing as the operator: the factory runner isn't installed, so the agent identity can't be read (run: npm ci --prefix {plugin root}/manifest)`.
 - **`agent_env_permissions`:** an identity is configured but the file is readable by others. Stop without committing and say what the message says: the file needs `chmod 600`. Don't fall back.
 - **Any other error** (such as `gh_failed` while looking up the token's account): report it and stop without committing. Never fall back to the operator for a configured identity that failed.
 
