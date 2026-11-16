@@ -38,12 +38,14 @@ const OUTCOME_LABEL: Record<string, string> = {
 /**
  * Text from a report (reviewer findings, criterion text, notes) made safe
  * for one table cell or list line: it can't close or forge a marker, break
- * the table, or run on.
+ * the table, or run on. `<` and `>` are escaped everywhere, not only in
+ * markers: GitHub drops anything that looks like an HTML tag, such as the
+ * `<ai@relica.io>` of a commit identity in a manual note (#65).
  */
 export function cell(text: string, max = 300): string {
   let t = String(text)
-    .replace(/<!--/g, "&lt;!--")
-    .replace(/-->/g, "--&gt;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
     .replace(/\|/g, "\\|")
     .replace(/\s+/g, " ")
     .trim();

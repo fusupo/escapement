@@ -80,6 +80,7 @@ function validated(db: Database, runId: string, outcome = "pass", extra: Record<
 async function run() {
   console.log("Report section\n");
   assert(cell("a | b\n c -->x <!-- y") === "a \\| b c --&gt;x &lt;!-- y", "cell text can't break the table or the markers");
+  assert(cell("committed as relica-ai <ai@relica.io>") === "committed as relica-ai &lt;ai@relica.io&gt;", "angle brackets are escaped, so GitHub doesn't drop them as a tag");
   assert(withSection("Narrative", "S") === "Narrative\n\nS\n", "the section is appended after the narrative");
   const once = withSection("Top\n\n" + SECTION_BEGIN + "\nold\n" + SECTION_END + "\nBottom", SECTION_BEGIN + "\nnew\n" + SECTION_END);
   assert(once.includes("new") && !once.includes("old") && once.startsWith("Top") && once.endsWith("Bottom"), "an existing section is replaced in place");
