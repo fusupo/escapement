@@ -258,7 +258,7 @@ Escapement works across all your projects simultaneously:
 ```bash
 # Global install (once)
 ~/.escapement/          # Generic workflow base
-~/.claude/            # Symlinks to muleteer
+~/.claude/            # Symlinks to escapement
 
 # Per-project customization
 ~/projects/project-a/
