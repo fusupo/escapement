@@ -55,7 +55,7 @@ bash "$FACTORY" --check && bash "$FACTORY" --json authorization
   Single-quote the run ID and title (a `'` in the title is written `'\''`). For `refresh_pr` the title is optional; the PR keeps its own unless you pass one.
   - **`.ok`:** report `.result.url`, `.result.pr_number` and `.result.action`: `created`, `updated`, or `recovered` (an earlier, interrupted call had created it). Running it again is safe: it finds the PR an earlier call created.
   - **`gh_failed` or `push_failed`** (exit 1): GitHub may have acted before the failure. Run the same command once more; it finds a PR an earlier call created. If it fails again, report it and stop.
-  - **Refused** (exit 2, `.error.code`): report the code and message and stop; under do-work, the caller decides whether to escalate. `head_moved` means commits came after validation, or the tree is dirty (validate again); `no_agent_token` means ESCAPEMENT_AGENT_GH_TOKEN isn't set; `run_deadline` means the run was escalated.
+  - **Refused** (exit 2, `.error.code`): report the code and message and stop; under do-work, the caller decides whether to escalate. `head_moved` means commits came after validation, or the tree is dirty (validate again); `no_agent_token` means ESCAPEMENT_AGENT_GH_TOKEN isn't set (environment or `~/.config/escapement/agent.env`); `run_deadline` means the run was escalated.
 
 ### Phase 1: Gather Context (Parallel)
 

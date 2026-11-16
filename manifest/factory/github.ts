@@ -1,4 +1,7 @@
 import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { git } from "./context.ts";
 import { FactoryError, blocked } from "./util.ts";
 
@@ -17,6 +20,12 @@ import { FactoryError, blocked } from "./util.ts";
  *   author for the agent's commits. Default: the token account's login and
  *   its GitHub noreply address, so GitHub links the commits to the account.
  *
+ * Each variable comes from the environment, or else from the user's
+ * `${XDG_CONFIG_HOME:-~/.config}/escapement/agent.env` (`KEY=value` lines;
+ * only these three keys are read). The identity belongs to the user, not a
+ * project, so it never comes from a project file. Like an ssh key, the file
+ * is refused (`agent_env_permissions`) when group or others can read it.
+ *
  * The runner calls the `gh` CLI (found on PATH) and never a skill or an agent.
  */
 
@@ -24,12 +33,55 @@ export const TOKEN_VAR = "ESCAPEMENT_AGENT_GH_TOKEN";
 export const NAME_VAR = "ESCAPEMENT_AGENT_NAME";
 export const EMAIL_VAR = "ESCAPEMENT_AGENT_EMAIL";
 
+const AGENT_KEYS = [TOKEN_VAR, NAME_VAR, EMAIL_VAR] as const;
+
+/** `${XDG_CONFIG_HOME:-~/.config}/escapement/agent.env`. */
+export function agentEnvPath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(env.XDG_CONFIG_HOME || join(env.HOME || homedir(), ".config"), "escapement", "agent.env");
+}
+
+/** Parse `KEY=value` lines (an optional `export `, matching quotes stripped, `#` comments); only the agent keys. */
+export function parseAgentEnv(text: string): Partial<Record<(typeof AGENT_KEYS)[number], string>> {
+  const out: Partial<Record<(typeof AGENT_KEYS)[number], string>> = {};
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const m = line.match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+    if (!m || !(AGENT_KEYS as readonly string[]).includes(m[1])) continue;
+    let value = m[2].trim();
+    const q = value[0];
+    if ((q === '"' || q === "'") && value.length >= 2 && value.endsWith(q)) value = value.slice(1, -1);
+    out[m[1] as (typeof AGENT_KEYS)[number]] = value;
+  }
+  return out;
+}
+
+/**
+ * The environment with each agent variable that isn't set filled in from
+ * agent.env. A variable set in the environment always wins. The file is
+ * read only when a variable is missing.
+ */
+export function withAgentEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  if (AGENT_KEYS.every((k) => env[k]?.trim())) return env;
+  const path = agentEnvPath(env);
+  if (!existsSync(path)) return env;
+  if ((statSync(path).mode & 0o077) !== 0) {
+    throw blocked("agent_env_permissions", `${path} can be read by other users; run: chmod 600 ${path}`);
+  }
+  const fromFile = parseAgentEnv(readFileSync(path, "utf-8"));
+  const merged: NodeJS.ProcessEnv = { ...env };
+  for (const k of AGENT_KEYS) {
+    if (!merged[k]?.trim() && fromFile[k]) merged[k] = fromFile[k];
+  }
+  return merged;
+}
+
 export function agentToken(env: NodeJS.ProcessEnv = process.env): string {
-  const token = env[TOKEN_VAR]?.trim();
+  const token = withAgentEnv(env)[TOKEN_VAR]?.trim();
   if (!token) {
     throw blocked(
       "no_agent_token",
-      `${TOKEN_VAR} is not set; the factory acts on GitHub only as the agent's identity (export the agent account's token)`,
+      `${TOKEN_VAR} is not set; the factory acts on GitHub only as the agent's identity (export it, or put it in ${agentEnvPath(env)})`,
     );
   }
   return token;
@@ -74,7 +126,8 @@ export function ghJson<T>(args: string[], opts: { token: string; cwd?: string; e
 export type AgentIdentity = { name: string; email: string; login: string | null; source: "env" | "github" };
 
 /** The commit author for the agent's commits. */
-export function agentIdentity(env: NodeJS.ProcessEnv = process.env): AgentIdentity {
+export function agentIdentity(env0: NodeJS.ProcessEnv = process.env): AgentIdentity {
+  const env = withAgentEnv(env0);
   const name = env[NAME_VAR]?.trim();
   const email = env[EMAIL_VAR]?.trim();
   if (name && email) return { name, email, login: null, source: "env" };

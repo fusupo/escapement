@@ -23,6 +23,13 @@ export function throws(fn: () => unknown, pattern: RegExp, msg: string): void {
 
 const tempDirs: string[] = [];
 
+// Tests never read the user's own agent identity (~/.config/escapement/agent.env).
+process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), "factory-config-"));
+tempDirs.push(process.env.XDG_CONFIG_HOME);
+delete process.env.ESCAPEMENT_AGENT_GH_TOKEN;
+delete process.env.ESCAPEMENT_AGENT_NAME;
+delete process.env.ESCAPEMENT_AGENT_EMAIL;
+
 export function tempDir(prefix = "factory-test-"): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   tempDirs.push(dir);

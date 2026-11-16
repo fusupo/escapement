@@ -1,15 +1,35 @@
-import { realpathSync, writeFileSync } from "node:fs";
+import { realpathSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { join } from "node:path";
-import { agentToken, agentIdentity, gh, remoteOf, pushBranch, TOKEN_VAR } from "./factory/github.ts";
+import { agentToken, agentIdentity, gh, remoteOf, pushBranch, TOKEN_VAR, agentEnvPath, parseAgentEnv } from "./factory/github.ts";
 import { assert, throws, cleanup, makeRepo, tempDir, sh, stubGh } from "./factory/testkit.ts";
 
 const TOKEN = "ghp_test_agent_token_123";
 
 async function run() {
   console.log("Agent token\n");
-  throws(() => agentToken({}), /no_agent_token/, "no token: blocked, never the operator's login");
-  throws(() => agentToken({ [TOKEN_VAR]: "  " }), /no_agent_token/, "a blank token counts as none");
-  assert(agentToken({ [TOKEN_VAR]: ` ${TOKEN} ` }) === TOKEN, "the token comes from the environment, trimmed");
+  const noFile = { XDG_CONFIG_HOME: tempDir() };
+  throws(() => agentToken(noFile), /no_agent_token[\s\S]*agent\.env/, "no token: blocked, never the operator's login; the message names agent.env");
+  throws(() => agentToken({ ...noFile, [TOKEN_VAR]: "  " }), /no_agent_token/, "a blank token counts as none");
+  assert(agentToken({ ...noFile, [TOKEN_VAR]: ` ${TOKEN} ` }) === TOKEN, "the token comes from the environment, trimmed");
+
+  console.log("\nagent.env\n");
+  const cfg = tempDir();
+  const fileEnv = { XDG_CONFIG_HOME: cfg };
+  const file = agentEnvPath(fileEnv);
+  assert(file === join(cfg, "escapement", "agent.env"), "the file is $XDG_CONFIG_HOME/escapement/agent.env");
+  assert(agentEnvPath({ HOME: "/h" }) === "/h/.config/escapement/agent.env", "else ~/.config/escapement/agent.env");
+  const parsed = parseAgentEnv(`# agent\nexport ESCAPEMENT_AGENT_GH_TOKEN="ghp_file"\nESCAPEMENT_AGENT_NAME='Escapement Agent'\nOTHER_SECRET=nope\n\nnot a line\n`);
+  assert(parsed.ESCAPEMENT_AGENT_GH_TOKEN === "ghp_file" && parsed.ESCAPEMENT_AGENT_NAME === "Escapement Agent", "KEY=value lines, export and quotes allowed");
+  assert(!("OTHER_SECRET" in parsed), "only the agent keys are read");
+  mkdirSync(join(cfg, "escapement"), { recursive: true });
+  writeFileSync(file, "ESCAPEMENT_AGENT_GH_TOKEN=ghp_from_file\nESCAPEMENT_AGENT_NAME=File Agent\nESCAPEMENT_AGENT_EMAIL=agent@example.invalid\n");
+  chmodSync(file, 0o644);
+  throws(() => agentToken(fileEnv), /agent_env_permissions[\s\S]*chmod 600/, "a file others can read is refused, like an ssh key");
+  chmodSync(file, 0o600);
+  assert(agentToken(fileEnv) === "ghp_from_file", "the token comes from the file when the environment has none");
+  assert(agentToken({ ...fileEnv, [TOKEN_VAR]: "ghp_env" }) === "ghp_env", "the environment wins over the file");
+  const fromFile = agentIdentity(fileEnv);
+  assert(fromFile.name === "File Agent" && fromFile.email === "agent@example.invalid" && fromFile.source === "env", "name and email from the file, without asking GitHub");
 
   console.log("\ngh as the agent\n");
   const stub = stubGh();
@@ -30,17 +50,17 @@ async function run() {
 
   console.log("\nAgent identity\n");
   const before = stub.calls().length;
-  let id = agentIdentity({ ESCAPEMENT_AGENT_NAME: "Bot", ESCAPEMENT_AGENT_EMAIL: "bot@example.invalid", PATH: stub.path });
+  let id = agentIdentity({ ...noFile, ESCAPEMENT_AGENT_NAME: "Bot", ESCAPEMENT_AGENT_EMAIL: "bot@example.invalid", PATH: stub.path });
   assert(id.name === "Bot" && id.email === "bot@example.invalid" && id.source === "env", "name and email from the environment");
   assert(stub.calls().length === before, "with both set, GitHub isn't asked");
-  id = agentIdentity({ [TOKEN_VAR]: TOKEN, PATH: stub.path });
+  id = agentIdentity({ ...noFile, [TOKEN_VAR]: TOKEN, PATH: stub.path });
   assert(
     id.name === "agent-bot" && id.email === "4242+agent-bot@users.noreply.github.com" && id.login === "agent-bot" && id.source === "github",
     "otherwise the token's account: login and noreply address",
   );
-  id = agentIdentity({ [TOKEN_VAR]: TOKEN, ESCAPEMENT_AGENT_NAME: "Escapement Agent", PATH: stub.path });
+  id = agentIdentity({ ...noFile, [TOKEN_VAR]: TOKEN, ESCAPEMENT_AGENT_NAME: "Escapement Agent", PATH: stub.path });
   assert(id.name === "Escapement Agent" && id.email.startsWith("4242+"), "a name alone overrides only the name");
-  throws(() => agentIdentity({ PATH: stub.path }), /no_agent_token/, "no identity and no token: blocked");
+  throws(() => agentIdentity({ ...noFile, PATH: stub.path }), /no_agent_token/, "no identity and no token: blocked");
 
   console.log("\nThe remote\n");
   const repo = realpathSync(makeRepo({ branch: "42-x", origin: "git@github.com:acme/w.git" }));

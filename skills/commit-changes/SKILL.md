@@ -43,7 +43,7 @@ bash "$FACTORY" --check && bash "$FACTORY" --json authorization
   ```bash
   bash "$FACTORY" --json agent
   ```
-  If it fails (`no_agent_token`), stop without committing: "Commits under factory run {run_id} carry the AI agent's identity: set ESCAPEMENT_AGENT_GH_TOKEN (or ESCAPEMENT_AGENT_NAME and ESCAPEMENT_AGENT_EMAIL)." Never fall back to the operator's identity. Otherwise note `.result.name` and `.result.email` as written.
+  If it fails (`no_agent_token`), stop without committing: "Commits under factory run {run_id} carry the AI agent's identity: put ESCAPEMENT_AGENT_GH_TOKEN (or ESCAPEMENT_AGENT_NAME and ESCAPEMENT_AGENT_EMAIL) in ~/.config/escapement/agent.env (chmod 600), or export it." On `agent_env_permissions`, say what the message says: the file needs `chmod 600`. Never fall back to the operator's identity. Otherwise note `.result.name` and `.result.email` as written.
 
 **Under authorization the approved plan stands in for the confirmations:**
 - **Phase 2:** several logical changes become several commits, in a sensible order, without asking which first.

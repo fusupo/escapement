@@ -108,7 +108,7 @@ Enables secure user login and session management.
 - Keep scratchpad updated with notes
 - If blocked, add to Questions/Blockers section
 
-**Authorized factory run:** when plan approval was **Approve + authorize run**, `do-work` asks no questions. It works through the tasks with builds and tests through `factory exec`, and commits each one as the AI agent. Then it validates (`validate-work`: the runner's checks, a fresh-context reviewer, the recorded verdict) and opens the PR (`create-pr` through `factory pr`, as the agent's GitHub account, with the validation report). If something stops it, it escalates the run, notifies you and stops. Your next touch is reviewing and merging the PR. This needs the agent's token in `ESCAPEMENT_AGENT_GH_TOKEN` (`docs/FACTORY_CLI.md`).
+**Authorized factory run:** when plan approval was **Approve + authorize run**, `do-work` asks no questions. It works through the tasks with builds and tests through `factory exec`, and commits each one as the AI agent. Then it validates (`validate-work`: the runner's checks, a fresh-context reviewer, the recorded verdict) and opens the PR (`create-pr` through `factory pr`, as the agent's GitHub account, with the validation report). If something stops it, it escalates the run, notifies you and stops. Your next touch is reviewing and merging the PR. This needs the agent's token as `ESCAPEMENT_AGENT_GH_TOKEN`, in `~/.config/escapement/agent.env` or the environment (`docs/FACTORY_CLI.md`).
 
 ---
 

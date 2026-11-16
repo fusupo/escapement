@@ -94,7 +94,7 @@ bash "$FACTORY" --check && bash "$FACTORY" --json authorization
   ```bash
   bash "$FACTORY" --json agent
   ```
-  If it fails (`no_agent_token`), stop before any work: "Factory run {run_id} commits and opens its PR as the AI agent: set ESCAPEMENT_AGENT_GH_TOKEN, then resume." Nothing is escalated; this is setup, not a failure of the run.
+  If it fails (`no_agent_token`, or `agent_env_permissions`), stop before any work: "Factory run {run_id} commits and opens its PR as the AI agent: put ESCAPEMENT_AGENT_GH_TOKEN in ~/.config/escapement/agent.env (chmod 600) or export it, then resume." Nothing is escalated; this is setup, not a failure of the run.
 
 **The authorized path.** Follow the Authorized Path section below instead of the confirmations in Phases 1–6. In short:
 
@@ -372,7 +372,7 @@ Invoke create-pr. It writes the title and description, and `factory pr` pushes t
 
 If `factory pr` fails, route on its code:
 - **`gh_failed`, `push_failed`:** possibly transient, and GitHub may have acted before the failure. Run the same `factory pr` command once more: it finds a PR an earlier call created instead of opening a second one. If it fails again, notify (step E) and stop *without* escalating; the run stays `validated`, and create-pr can be run again later.
-- **`no_agent_token`, `gh_missing`, `lock_timeout`:** setup, not the run. Notify with the fix and stop without escalating.
+- **`no_agent_token`, `agent_env_permissions`, `gh_missing`, `lock_timeout`:** setup, not the run. Notify with the fix and stop without escalating.
 - **Anything else** (`head_moved`, `pr_conflict`, `pr_not_open`, `contract_mismatch`, `not_validated`, `run_deadline`): escalate (step D).
 
 ### D. Escalate and stop

@@ -20,8 +20,9 @@ bad()  { fail=$((fail + 1)); echo "FAIL $1"; [[ -n "${2:-}" ]] && sed 's/^/    /
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 export ESCAPEMENT_MANIFEST_DIR="$tmp/data"
-# Never act as a real agent identity.
+# Never act as a real agent identity, from the environment or ~/.config/escapement/agent.env.
 unset ESCAPEMENT_AGENT_GH_TOKEN ESCAPEMENT_AGENT_NAME ESCAPEMENT_AGENT_EMAIL GH_TOKEN GITHUB_TOKEN
+export XDG_CONFIG_HOME="$tmp/config"
 
 # A project with no context-path, so artifacts go in .escapement/, and a
 # short command-timeout so exec's default timeout comes from settings.
@@ -57,6 +58,17 @@ if [[ "$(jq -r '.ok and .result.name == "Bot" and .result.email == "bot@example.
 out="$(f --json agent)"
 status=$?
 if [[ $status -eq 2 && "$(jq -r '.error.code == "no_agent_token"' <<<"$out")" == true ]]; then ok; else bad "agent-no-token" "status=$status out=$out"; fi
+# agent.env: the identity from the user's config file, refused unless only the user can read it
+mkdir -p "$tmp/config/escapement"
+printf 'ESCAPEMENT_AGENT_NAME="File Agent"\nESCAPEMENT_AGENT_EMAIL=file@example.invalid\n' > "$tmp/config/escapement/agent.env"
+chmod 644 "$tmp/config/escapement/agent.env"
+out="$(f --json agent)"
+status=$?
+if [[ $status -eq 2 && "$(jq -r '.error.code' <<<"$out")" == agent_env_permissions ]]; then ok; else bad "agent-env-permissions" "status=$status out=$out"; fi
+chmod 600 "$tmp/config/escapement/agent.env"
+out="$(f --json agent)"
+if [[ "$(jq -r '.result.name == "File Agent" and .result.email == "file@example.invalid"' <<<"$out")" == true ]]; then ok; else bad "agent-env-file" "$out"; fi
+rm "$tmp/config/escapement/agent.env"
 
 # authorization before any run: no database yet, and asking doesn't create one
 out="$(f --json authorization)"

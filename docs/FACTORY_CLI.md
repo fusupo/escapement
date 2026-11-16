@@ -348,9 +348,22 @@ Everything the factory does on GitHub runs as the AI agent's GitHub account, so 
 | `ESCAPEMENT_AGENT_GH_TOKEN` | Required for `pr`, and for `archive --close` with a PR. The agent account's token |
 | `ESCAPEMENT_AGENT_NAME`, `ESCAPEMENT_AGENT_EMAIL` | Optional. The agent's commit author. Default: the token account's login and its GitHub noreply address (`{id}+{login}@users.noreply.github.com`) |
 
+**Where they come from.** Each variable is read from the environment, or else from the user's `${XDG_CONFIG_HOME:-~/.config}/escapement/agent.env`, so nothing needs exporting before the host starts:
+
+```
+ESCAPEMENT_AGENT_GH_TOKEN=ghp_…
+ESCAPEMENT_AGENT_NAME=Escapement Agent        # optional
+ESCAPEMENT_AGENT_EMAIL=agent@example.com      # optional
+```
+
+- `KEY=value` lines; `export ` and matching quotes are allowed, `#` starts a comment. Only these three keys are read; anything else in the file is ignored.
+- A variable set in the environment wins over the file.
+- Like an ssh key, the file is refused (`agent_env_permissions`) while group or others can read it: `chmod 600` it.
+- The identity is the user's, not a project's, so the runner never reads a project's `.env`.
+
 - The token reaches `gh` as `GH_TOKEN` (`GITHUB_TOKEN` is dropped), and `git push` through a credential helper that reads the variable. It never appears in argv, URLs, logs, events or JSON output; errors redact it.
 - Without it, `pr` and `archive --close` are blocked with `no_agent_token`. The runner never falls back to the operator's own `gh` login.
-- Keep the variables out of any file a project commits. They have to be in the environment the host runs the runner in.
+- Keep the token out of any file a project commits.
 - `agent` prints the commit identity (`{name, email, login, source}`, `source` being `env` or `github`). Skills commit with it under an authorization: `git -c user.name=… -c user.email=… commit`.
 - The `gh` CLI must be on PATH (`gh_missing` otherwise).
 
@@ -490,7 +503,7 @@ Error codes:
 
 | kind | codes |
 |---|---|
-| `blocked` (exit 2) | from start `on_target_branch`; `run_deadline`, `not_authorized`, `run_halted`, `run_closed`, `lock_timeout`, `attempt_budget`; from validate also `attempt_open`, `bad_setting`, `contract_mismatch`, `not_configured`, `dirty_tree`, `no_target`, `no_merge_base`; from review-input and record-review also `contract_mismatch`, `not_issued`, `invalid_verdict`, `incomplete_verdict`, `verdict_conflict`; from pr `not_validated`, `no_report`, `stale_report`, `head_moved`, `pr_conflict`, `pr_not_open`, `no_agent_token`; from record-manual `no_report`, `not_pending_manual`, `already_resolved`, `stale_report`, `stale_contract`, `unknown_evidence`; from archive `pr_open`, `no_agent_token`; from agent `no_agent_token` |
+| `blocked` (exit 2) | from start `on_target_branch`; `run_deadline`, `not_authorized`, `run_halted`, `run_closed`, `lock_timeout`, `attempt_budget`; from validate also `attempt_open`, `bad_setting`, `contract_mismatch`, `not_configured`, `dirty_tree`, `no_target`, `no_merge_base`; from review-input and record-review also `contract_mismatch`, `not_issued`, `invalid_verdict`, `incomplete_verdict`, `verdict_conflict`; from pr `not_validated`, `no_report`, `stale_report`, `head_moved`, `pr_conflict`, `pr_not_open`, `no_agent_token`; from record-manual `no_report`, `not_pending_manual`, `already_resolved`, `stale_report`, `stale_contract`, `unknown_evidence`; from archive `pr_open`, `no_agent_token`; from agent `no_agent_token`; wherever the agent identity is read, `agent_env_permissions` |
 | `error` (exit 1) | `usage`, `no_such_run`, `run_exists`, `wrong_state`, `illegal_transition`, `no_contract`, `bad_contract`, `bad_setting`, `no_active_authorization`, `bad_duration`, `bad_work_item`, `bad_project_root`, `not_a_repo`, `detached_head`, `git_failed`, `no_such_attempt`, `revision_changed`, `snapshot_failed`, `unreadable`, `bad_pattern`, `gh_missing`, `gh_failed`, `push_failed`, `no_remote`, `internal` |
 
 ## Exit status
