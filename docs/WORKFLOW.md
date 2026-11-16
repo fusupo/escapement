@@ -40,6 +40,8 @@ The `setup-work` skill automatically:
    - Questions/blockers flagged upfront
 4. Creates feature branch: `{issue_number}-{description}`
 
+On projects set up for the factory (required checks configured in `## Escapement Settings`), it also checks readiness, proposes a risk tier and adds a Validation Contract to the scratchpad. Plan approval then offers **Approve + authorize run**, which checks out the branch and starts and approves a factory run for that contract (`docs/FACTORY_CLI.md`). Plain approval works as before.
+
 **Output:**
 - `SCRATCHPAD_42.md` - Your implementation roadmap
 - Feature branch ready for work

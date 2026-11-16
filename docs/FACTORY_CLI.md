@@ -4,7 +4,7 @@ The factory runner is a small deterministic CLI that owns a run's state, locks, 
 
 The Escapement skills are one client of the runner. Other hosts, such as Escapement Studio, can call it as a subprocess and read its `--json` output. The runner never invokes a skill or an agent. It only runs git and the commands you give it.
 
-First-release status: #59 provides `start`, `approve`, `exec`, `status`, `resume` and `revoke`. #60 adds contract validation, settings, `check` and `schema`. #61 adds `validate`. #62 adds `review-input`, `record-review` and `prompt`. `record-manual` and `pr` arrive in #64.
+First-release status: #59 provides `start`, `approve`, `exec`, `status`, `resume` and `revoke`. #60 adds contract validation, settings, `check` and `schema`. #61 adds `validate`. #62 adds `review-input`, `record-review` and `prompt`. #63 adds `exclude`, a settings-only `check`, and a `start` that refuses the target branch; `setup-work` drives `check`, `exclude`, `start` and `approve` (its factory path). `record-manual` and `pr` arrive in #64.
 
 ## Running it
 
@@ -53,13 +53,13 @@ attempts/{n}/review.json        reviewer verdict (#62)
 
 **Schemas.** The documents hosts exchange with the runner have published JSON Schemas in `schemas/factory/` (contract, report, verdict, readiness). `factory schema` prints their paths. See [schemas/factory/README.md](../schemas/factory/README.md).
 
-**Host obligation.** Validation requires a clean tree: no tracked changes and no untracked files that git doesn't ignore. Hosts that write their own working files into a worktree, such as scratchpads, session logs or constraint files, must list them in `.git/info/exclude` (shared by all of a repository's worktrees; the project's `.gitignore` stays untouched). Otherwise `validate` is blocked with `dirty_tree`, naming the files. A blocked validate uses no attempt, so the host can add the exclude and retry.
+**Host obligation.** Validation requires a clean tree: no tracked changes and no untracked files that git doesn't ignore. Hosts that write their own working files into a worktree, such as scratchpads, session logs or constraint files, must list them in `.git/info/exclude` (shared by all of a repository's worktrees; the project's `.gitignore` stays untouched). `factory exclude <pattern>…` does that. Otherwise `validate` is blocked with `dirty_tree`, naming the files. A blocked validate uses no attempt, so the host can add the exclude and retry.
 
 ## Commands
 
 | Command | Does | Allowed past the run deadline |
 |---|---|---|
-| `start <work-item>` | Create a run in `planned` and its artifact dir | n/a |
+| `start <work-item>` | Create a run in `planned` and its artifact dir. Refused on the target branch | n/a |
 | `approve <run_id> --contract <file>` | Store the contract and its digest, issue an active authorization, set the deadline on first approval; `planned` → `approved` | yes |
 | `exec <run_id> -- <cmd> [args…]` | Run a command under the worktree and build locks with a timeout | **no** |
 | `validate <run_id>` | Run the deterministic phases for a new attempt and write its draft report | **no** |
@@ -68,7 +68,8 @@ attempts/{n}/review.json        reviewer verdict (#62)
 | `status [run_id]` | List open runs (`--all` includes closed ones), or show one run | yes |
 | `resume <run_id>` | Reconcile an interrupted run (§4.7) | yes, reconciliation only |
 | `revoke <run_id>` | End the active authorization | yes |
-| `check --contract <file>` | Readiness: is the contract valid and runnable in this project? No run or database needed | n/a |
+| `check [--contract <file>]` | Readiness: is the contract valid and runnable in this project? Without `--contract`, only the settings are checked. No run or database needed | n/a |
+| `exclude <pattern>…` | Add the host's working-file patterns to the repository's `.git/info/exclude`. No run or database needed | n/a |
 | `schema [name]` | Path of a published JSON Schema, or its content with `--print`; no name lists them all. No database needed | n/a |
 | `prompt [name]` | Path of an agent prompt the factory ships (`reviewer`), or its content with `--print`. No database needed | n/a |
 
@@ -78,13 +79,13 @@ Options:
 |---|---|---|
 | `--json` | all | off |
 | `--data-dir <path>` | all | shared manifest |
-| `--project-root <path>` | start, check | git toplevel of the cwd |
+| `--project-root <path>` | start, check, exclude | git toplevel of the cwd |
 | `--artifact-dir <path>` | start | see Storage |
 | `--issue <n>` | start | parsed from `#N` or `owner/repo#N` |
 | `--manifest-id <id>` | start | none |
 | `--target-ref <ref>` | start | `base-branch` setting, else `develop` if `origin/develop` exists, else `main` |
 | `--work-type <type>` | start | none |
-| `--contract <file>` | approve, check | required |
+| `--contract <file>` | approve (required), check (optional) | none |
 | `--run-budget <dur>` | approve | `run-budget` setting, else `2h` |
 | `--timeout <dur>` | exec, validate (per command) | `command-timeout` setting, else `15m` |
 | `--issue-file <file>` | review-input | none |
@@ -118,6 +119,11 @@ The runner reads the factory keys of `## Escapement Settings` (FACTORY_DESIGN.md
 - `validate` reads `sensitive-paths`, `validation-files` and `test-files` at both the merge base and HEAD and uses both, so a branch can't hide a change by editing the pattern that would catch it. The other settings come from HEAD.
 
 **Run IDs.** A run ID is the work item made path-safe, followed by `-r{n}`. For example, `#42` gives `#42-r1`, and `fusupo/escapement#42` gives `fusupo-escapement#42-r1`. The work item can be any external identifier.
+
+### start
+
+- The run is bound to the worktree and the branch it is on. A worktree can have one open run at a time (`run_exists`).
+- Starting on the run's target branch is blocked with `on_target_branch` (exit 2): the authorization would cover commits to it. An `origin/` prefix on `--target-ref` is ignored in the comparison. Check out a feature branch first. A refused start creates no run and no artifact dir.
 
 ### approve
 
@@ -279,6 +285,16 @@ The commands in `verdict.record` and `runner.exec` carry no global options. A ho
 
 Whether the criteria capture the intent, and whether scope and dependencies are clear, is the planner's judgment; it adds those questions in the same shape. `check` exits 0 for both `ready` and `needs_human`; read `status`.
 
+Without `--contract`, `check` reports only the settings: a required check with no command, or an invalid setting. There are no contract questions and no `tier`. A host can run it before planning to see whether the project is set up for the factory at all; `setup-work` offers a run only when it is `ready`.
+
+The manifest mirrors a readiness document into a work item with `manifest.sh readiness <owner/repo> <issue> <file|->`: `needs_human` sets `meta.needs_human` and `meta.readiness_questions`, so the item leaves the frontier, and `ready` clears them. It does nothing when the issue has no work item.
+
+### exclude
+
+`exclude <pattern>…` appends each pattern to the repository's `info/exclude` (from `git rev-parse --git-path info/exclude`, shared by every worktree of the repository), unless an identical line is already there. Patterns use `.gitignore` syntax. Empty or multi-line patterns, comments (`#…`) and negations (`!…`) are refused with `bad_pattern`: none of them excludes anything, and a negation could make ignored files count as untracked. The project's `.gitignore` is never touched.
+
+The runner knows no host's file names. `setup-work` passes `'SCRATCHPAD_*' 'SESSION_LOG_*' AGENT_CONSTRAINTS.md`.
+
 ## Locks
 
 Locks are rows in `factory_locks`, not `flock`s. They only serialize factory commands; anything outside the factory ignores them.
@@ -337,6 +353,7 @@ With `--json`, every command prints exactly one JSON object on stdout.
 - **status** without one: `{runs: [run, …]}`
 - **resume:** `{run, deadline_passed, actions: [{attempt, found, action, detail?}], released_locks}`
 - **revoke:** `{authorization}`
+- **exclude:** `{path, added, present}`: the exclude file, the patterns appended, and those already there
 - **check:** a readiness document (`schemas/factory/readiness.schema.json`): `{version, status, questions: [{about, question, ref?}], tier?: {tier, reasons}, required_checks: [{name, command}], settings_digest}`
 - **schema:** `{schemas: [{name, path}]}`, or `{name, path}`, plus `schema` with `--print`
 - **prompt:** `{prompts: [{name, path}]}`, or `{name, path}`, plus `content` with `--print`
@@ -361,8 +378,8 @@ Error codes:
 
 | kind | codes |
 |---|---|
-| `blocked` (exit 2) | `run_deadline`, `not_authorized`, `run_halted`, `run_closed`, `lock_timeout`, `attempt_budget`; from validate also `attempt_open`, `bad_setting`, `contract_mismatch`, `not_configured`, `dirty_tree`, `no_target`, `no_merge_base`; from review-input and record-review also `contract_mismatch`, `not_issued`, `invalid_verdict`, `incomplete_verdict`, `verdict_conflict` |
-| `error` (exit 1) | `usage`, `no_such_run`, `run_exists`, `wrong_state`, `illegal_transition`, `no_contract`, `bad_contract`, `bad_setting`, `no_active_authorization`, `bad_duration`, `bad_work_item`, `bad_project_root`, `not_a_repo`, `detached_head`, `git_failed`, `no_such_attempt`, `revision_changed`, `snapshot_failed`, `unreadable`, `internal` |
+| `blocked` (exit 2) | from start `on_target_branch`; `run_deadline`, `not_authorized`, `run_halted`, `run_closed`, `lock_timeout`, `attempt_budget`; from validate also `attempt_open`, `bad_setting`, `contract_mismatch`, `not_configured`, `dirty_tree`, `no_target`, `no_merge_base`; from review-input and record-review also `contract_mismatch`, `not_issued`, `invalid_verdict`, `incomplete_verdict`, `verdict_conflict` |
+| `error` (exit 1) | `usage`, `no_such_run`, `run_exists`, `wrong_state`, `illegal_transition`, `no_contract`, `bad_contract`, `bad_setting`, `no_active_authorization`, `bad_duration`, `bad_work_item`, `bad_project_root`, `not_a_repo`, `detached_head`, `git_failed`, `no_such_attempt`, `revision_changed`, `snapshot_failed`, `unreadable`, `bad_pattern`, `internal` |
 
 ## Exit status
 

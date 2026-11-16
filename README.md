@@ -151,7 +151,7 @@ Skills are invoked automatically by Claude Code when relevant, or you can refere
 
 | Skill            | Triggers                            | Purpose                                        |
 | ---------------- | ----------------------------------- | ---------------------------------------------- |
-| `setup-work`     | "setup issue #X", "start issue #X"  | Fetch issue, create scratchpad, prepare branch |
+| `setup-work`     | "setup issue #X", "start issue #X"  | Fetch issue, create scratchpad, prepare branch; on projects set up for the factory, also draft a validation contract and offer to authorize a run |
 | `commit-changes` | "commit", "commit these changes"    | Smart commits with conventional format         |
 | `create-pr`      | "create a PR", "open pull request"  | Context-aware PR creation                      |
 | `review-pr`      | "review PR #X", "check this PR"     | Roadmap-aware code review                      |
@@ -466,9 +466,16 @@ fusupo
 
 ## Version
 
-**Current:** 3.10.0
+**Current:** 3.11.0
 
 **Changelog:**
+- 3.11.0 (2026-11-16): setup-work produces the validation contract and run authorization (#63)
+  - **Factory path in `setup-work`**, only for projects whose required checks are configured (otherwise it is unchanged): a readiness check before planning, relevant lore and related archives, a proposed risk tier, and a validation contract with evidence for every criterion, checked with `factory check` and written into the scratchpad
+  - **"Approve + authorize run"** next to plain "Approve" at plan approval. It checks out the branch, excludes the working files, starts a factory run, writes the contract into it and approves it, then confirms the authorization's digest matches the stored contract. Plain approval creates no run
+  - **`factory.sh exclude <pattern>…`** adds a host's working-file patterns to the repository's `.git/info/exclude`, once each
+  - **`factory.sh check`** without `--contract` checks only the project's settings, so a host can tell whether a project is set up for the factory before planning
+  - **`factory.sh start`** refuses to start a run on its target branch (`on_target_branch`)
+  - **`manifest.sh readiness <owner/repo> <issue> <file|->`** mirrors a readiness check into the issue's work item: `needs_human` takes it off the frontier until the questions are answered
 - 3.10.0 (2026-11-16): Factory reviewer with runner-enforced completeness (#62)
   - **`factory.sh review-input <run_id> <attempt>`** writes the reviewer's bundle. It holds the issue text the host passes with `--issue-file`, the approved contract, the exact diff, the draft report, every log and results path, a read-only snapshot of the validated revision with its digest, and the list of judgments a complete verdict needs
   - **`factory.sh record-review <run_id> <attempt> <file>`** rejects a verdict that misses or repeats an evidence judgment, a sensitive or policy sign-off or a justification, or names the wrong snapshot. A rejected verdict changes nothing. An accepted one finalizes the report: `fail` on any negative judgment, concern or blocking finding, otherwise `pass` or `pending_manual`. Recording the same verdict again is a no-op, and a different one for a finished attempt is refused

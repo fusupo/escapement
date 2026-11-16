@@ -155,6 +155,8 @@ issue
 
 Are acceptance criteria present or derivable? Unresolved questions about intent, scope, or dependencies? Output `ready` | `needs_human` with a minimal list of specific questions; mirror into manifest `meta.needs_human`/`meta.ambiguities` if applicable. A criterion that can't be given evidence is a readiness failure.
 
+*As built (#63):* `setup-work` takes the factory path only when a settings-only `factory check` (no `--contract`) is `ready`, meaning every required check has a command; otherwise it is unchanged. It asks its judgment questions (intent, scope, dependencies, criteria without evidence) before planning, runs `factory check` on the drafted contract, and mirrors the final readiness with `manifest.sh readiness <owner/repo> <issue>`. The questions go in `meta.readiness_questions` rather than `meta.ambiguities`, which `manifest-bootstrap` uses for dependency questions, so a `ready` result never clears those. The manifest is read only if it already exists.
+
 ### 3.2 Context gathering
 
 Relevant `PROJECT_LORE.md` entries, archives of related prior work (manifest `archive_path`), and similar implementations (scratchpad-planner already does the last).
@@ -202,6 +204,8 @@ Approval creates a run (§4.7) and an authorization recorded in the manifest DB:
 
 - Skills check for an `active` authorization matching repo, branch, and contract digest before skipping confirmations. Without one, existing interactive behavior is unchanged.
 - **Ends** when the run reaches a terminal state (§4.7). **Revoked** by `factory revoke <run_id>` or by any contract change (re-approval issues a new authorization on the same run).
+
+*As built (#63):* approval offers "Approve + authorize run" next to plain "Approve", which creates no run. The run is created only on that choice, so a rejected plan leaves nothing behind: the contract is drafted in the scratchpad with `run_id: "pending"`. On approval `setup-work` checks out the feature branch (`factory start` now refuses the target branch, `on_target_branch`), runs `factory exclude` for its working files, starts the run, writes the contract with the real `run_id` to `{artifact_dir}/contract.draft.json`, checks and approves it, and confirms that the authorization's digest equals that of the stored `contract.json`. Reference: [FACTORY_CLI.md](FACTORY_CLI.md#start), `skills/setup-work/SKILL.md` Phase 4.5.
 
 ---
 
@@ -741,8 +745,8 @@ Status as of 2026-11-16; tracked in #66.
 4. **#60 Contract + settings + readiness + tiers** — schema, evidence types, settings parsing. **Done.** Published JSON Schemas in `schemas/factory/`, `factory check` (readiness) and `factory schema`; contracts name no commands (§5.2).
 5. **#61 `factory validate`** — identity (clean tree + HEAD), setup policy, static + evidence phases, fresh results dirs, single structured test run, change classification, actual-diff tier, draft reports. **Done.** Blocked preconditions use no attempt (§4.3); the classification baseline comes from git (§4.6); new `test-files` setting (§8).
 6. **#62 Reviewer** — `validation-reviewer` agent, bundle, `record-review` completeness checks and idempotency. **Done.** The reviewer is a prompt plus the verdict schema, with the Claude Code agent as a thin wrapper; policy changes need a sign-off; `pending_manual` validates the run (§4.9, §5.5).
-7. **#63 `setup-work`** produces contract + authorization. **Next.**
-8. **#64 Authorized path** — `do-work`, `commit-changes`, `create-pr`, `factory pr`, `record-manual`. Open.
+7. **#63 `setup-work`** produces contract + authorization. **Done.** Offered at plan approval only when the project's required checks are configured; the run is created on approval; new `factory exclude`, settings-only `factory check`, `manifest.sh readiness` (§3.1, §3.6).
+8. **#64 Authorized path** — `do-work`, `commit-changes`, `create-pr`, `factory pr`, `record-manual`. **Next.**
 9. **#65 Release acceptance test** — a real issue end to end, plus deliberate interruptions at each boundary: during checks, between checks and review, during finalization, and between PR creation and recording. The first release is complete only when this passes; fix what breaks before moving on. Open. → *first release complete*
 
 **Host-agnostic interface (added 2026-11-15 to #59–#62).** The factory must be usable by hosts other than the Escapement skills, for example Escapement Studio calling it as a subprocess. Requirements: `--json` output on every command; external work-item IDs (no required manifest `work_items` row; `manifest_id` optional in the contract); storage passed explicitly (`--project-root`, optional artifact-dir override); invocation through a plugin-root wrapper (`scripts/factory.sh`) with no skill calls from the runner; contract, report and verdict schemas published as standalone JSON Schema; the `.git/info/exclude` obligation for hosts documented and tested; the reviewer defined as a prompt plus verdict schema, with the Claude Code agent as a thin wrapper.
