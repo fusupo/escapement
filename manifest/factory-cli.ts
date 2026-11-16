@@ -12,6 +12,7 @@ import { validateRun } from "./factory/validate.ts";
 import { reviewInput, recordReview } from "./factory/review.ts";
 import { openPr } from "./factory/pr.ts";
 import { recordManual } from "./factory/manual.ts";
+import { archiveRun } from "./factory/archive.ts";
 import { currentOwner } from "./factory/owner.ts";
 import { FactoryError, parseDuration } from "./factory/util.ts";
 import { checkReadiness } from "./factory/readiness.ts";
@@ -59,6 +60,10 @@ Commands:
                                 Push the branch and open or update the run's PR
                                 as the agent (idempotent; needs a validated run
                                 and ESCAPEMENT_AGENT_GH_TOKEN)
+  archive <run_id> --path <dir> [--close] [--abandon]
+                                Record where the run's artifacts were archived;
+                                --close closes the run (merged or abandoned,
+                                from its PR), --abandon without asking GitHub
   status [run_id]               List open runs (--all: include closed), or show one
   resume <run_id>               Reconcile an interrupted run
   revoke <run_id>               End the run's active authorization
@@ -101,7 +106,7 @@ Options:
                         (default: command-timeout setting, else ${SETTING_DEFAULTS["command-timeout"]})
   --issue-file <file>   review-input: the issue text to put in the bundle
   --lock-timeout <dur>  exec, validate, review-input, record-review, resume, pr,
-                        record-manual:
+                        record-manual, archive:
                         how long to wait for locks
                         (default: lock-timeout setting, else ${SETTING_DEFAULTS["lock-timeout"]})
   --reason <text>       escalate: why the run needs a human
@@ -110,6 +115,9 @@ Options:
   --title <text>        pr: the PR title (needed to create it)
   --body-file <file>    pr: the host's PR description; the runner adds its
                         report section (on update, only the section changes)
+  --path <dir>          archive: where the host archived the run's artifacts
+  --close               archive: close the run, from its PR's state
+  --abandon             archive: close the run as abandoned
   --all                 status: include closed runs
   --print               schema, prompt: print the content instead of the path
 
@@ -134,8 +142,9 @@ const VALUE_FLAGS = new Set([
   "--body-file",
   "--note",
   "--recorder",
+  "--path",
 ]);
-const BOOL_FLAGS = new Set(["--json", "--all", "--print", "--help", "-h"]);
+const BOOL_FLAGS = new Set(["--json", "--all", "--print", "--close", "--abandon", "--help", "-h"]);
 
 type Parsed = { flags: Map<string, string | true>; positional: string[]; rest: string[] };
 
@@ -424,6 +433,20 @@ async function dispatch(db: Database, command: string, p: Parsed, json: boolean)
       return {
         result: r,
         text: `${runId} ${r.evidence_id}: ${r.outcome}${r.noop ? " (already recorded)" : ""}\n  ${state}\n  run:    ${r.run_state}\n  report: ${r.report_path}${r.refresh_pr ? `\n  PR #${r.pr_number} shows the old report: run factory pr '${runId}'` : ""}`,
+      };
+    }
+    case "archive": {
+      const runId = need(arg, "run_id");
+      const r = await archiveRun(db, runId, {
+        path: need(str(p, "--path"), "--path <dir>"),
+        close: p.flags.has("--close"),
+        abandon: p.flags.has("--abandon"),
+        owner,
+        lockWaitMs: duration(db, p, "--lock-timeout", runId, (s) => s.lockTimeoutMs),
+      });
+      return {
+        result: r,
+        text: `${runId}: archived at ${r.archive_path}${r.changed ? "" : " (unchanged)"}\n  run: ${r.state}${r.closed ? ` (${r.closed})` : ""}`,
       };
     }
     case "pr": {

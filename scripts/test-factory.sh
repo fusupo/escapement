@@ -278,6 +278,7 @@ case "$1 $2" in
       '. + [{number: $n, url: ("https://github.com/o/r/pull/" + ($n | tostring)), headRefName: $h, baseRefName: $base, title: $t, body: $b, state: "OPEN", headRepositoryOwner: null}]' \
       "$state" > "$state.tmp" && mv "$state.tmp" "$state"
     echo "https://github.com/o/r/pull/$n" ;;
+  "pr view") jq -c --argjson n "$3" '.[] | select(.number == $n) | {state, mergedAt: (.mergedAt // null)}' "$state" ;;
   "pr edit")
     jq --argjson n "$3" --rawfile b "$(flag --body-file "$@")" 'map(if .number == $n then .body = $b else . end)' "$state" > "$state.tmp" && mv "$state.tmp" "$state" ;;
   *) echo "stub gh: unsupported: $*" >&2; exit 2 ;;
@@ -308,6 +309,16 @@ if [[ "$(jq -r '.result.matched and .result.state == "pr_open" and .result.next 
 out="$(CWD="$vproject" f --json record-manual '#9-r1' AC-1.e1 pass --note 'looked')"
 status=$?
 if [[ $status -eq 2 && "$(jq -r '.error.code' <<<"$out")" == not_pending_manual ]]; then ok; else bad "record-manual-not-pending" "status=$status out=$out"; fi
+
+# archive: --close refuses while the PR is open; once merged it closes the run
+out="$(ghf --json archive '#9-r1' --path "$tmp/archive/9" --close)"
+status=$?
+if [[ $status -eq 2 && "$(jq -r '.error.code' <<<"$out")" == pr_open ]]; then ok; else bad "archive-pr-open" "status=$status out=$out"; fi
+jq 'map(.state = "MERGED")' "$tmp/prs.json" > "$tmp/prs.tmp" && mv "$tmp/prs.tmp" "$tmp/prs.json"
+out="$(ghf --json archive '#9-r1' --path "$tmp/archive/9" --close)"
+if [[ "$(jq -r --arg p "$tmp/archive/9" '.ok and .result.closed == "merged" and .result.state == "closed" and .result.archive_path == $p' <<<"$out")" == true ]]; then ok; else bad "archive-close-merged" "$out"; fi
+out="$(CWD="$vproject" f --json authorization)"
+if [[ "$(jq -r '.result.reasons == ["no_run"]' <<<"$out")" == true ]]; then ok; else bad "archive-closed-no-run" "$out"; fi
 
 # a failing attempt still exits 0; the outcome is in the JSON
 fproject="$tmp/fproject"
