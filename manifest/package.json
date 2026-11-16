@@ -14,7 +14,8 @@
     "test:init": "node --import tsx test-init.ts",
     "test:cli": "node --import tsx test-cli.ts",
     "test:check": "node --import tsx test-check.ts",
-    "test:migrate": "node --import tsx test-migrate.ts"
+    "test:migrate": "node --import tsx test-migrate.ts",
+    "test:factory-context": "node --import tsx test-factory-context.ts"
   },
   "dependencies": {
     "better-sqlite3": "^11.0.0"
