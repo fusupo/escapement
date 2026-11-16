@@ -1,6 +1,6 @@
 import type { Database } from "better-sqlite3";
 import { existsSync } from "node:fs";
-import { git } from "./context.ts";
+import { identityHolds } from "./revision.ts";
 import { tx, getRun, transitionRun, transitionAttempt, type AttemptRow, type RunRow, type RunState } from "./state.ts";
 import { deadlinePassed } from "./runs.ts";
 import { withLocks, listLocks, worktreeLock, BUILD_LOCK } from "./locks.ts";
@@ -52,21 +52,6 @@ export function runStateForOutcome(outcome: string | null): RunState {
   if (outcome === "pass") return "validated";
   if (outcome === "blocked") return "blocked";
   return "escalated";
-}
-
-/** HEAD still equals the attempt's head_sha and the tree is clean (§4.3). */
-export function identityHolds(worktreePath: string, headSha: string): { ok: boolean; detail: string } {
-  let head: string;
-  let status: string;
-  try {
-    head = git(["rev-parse", "HEAD"], worktreePath);
-    status = git(["status", "--porcelain"], worktreePath);
-  } catch (err) {
-    return { ok: false, detail: String((err as Error).message) };
-  }
-  if (head !== headSha) return { ok: false, detail: `HEAD is ${head}, attempt validated ${headSha}` };
-  if (status !== "") return { ok: false, detail: "worktree has uncommitted changes" };
-  return { ok: true, detail: "" };
 }
 
 function ownerAlive(a: AttemptRow): boolean {

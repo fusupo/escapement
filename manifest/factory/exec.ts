@@ -1,8 +1,8 @@
 import type { Database } from "better-sqlite3";
-import { spawn } from "node:child_process";
-import { createWriteStream, mkdirSync, readdirSync } from "node:fs";
+import { mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { FactoryError, atomicWrite, nowIso } from "./util.ts";
+import { FactoryError, atomicWrite } from "./util.ts";
+import { runProcess } from "./process.ts";
 import { requireExecutable, deadlinePassed } from "./runs.ts";
 import { transitionRun, getRun } from "./state.ts";
 import { withLocks, worktreeLock, BUILD_LOCK } from "./locks.ts";
@@ -17,7 +17,7 @@ export type ExecResult = {
   signal: string | null;
   /** pass: exit 0; fail: non-zero exit; error: killed by the runner. */
   outcome: "pass" | "fail" | "error";
-  /** Why the runner killed it: `timeout`, `run_deadline` or `interrupted`. */
+  /** Why the runner killed it: `timeout`, `run_deadline`, `interrupted` or `spawn_failed`. */
   reason: string | null;
   started_at: string;
   ended_at: string;
@@ -27,14 +27,6 @@ export type ExecResult = {
 
 /** Exit status the CLI uses when the runner killed the command (as timeout(1) does). */
 export const KILLED_EXIT = 124;
-
-function killGroup(pid: number, signal: NodeJS.Signals): void {
-  try {
-    process.kill(-pid, signal);
-  } catch {
-    // ESRCH: the group is already gone.
-  }
-}
 
 function nextSeq(dir: string): number {
   mkdirSync(dir, { recursive: true });
@@ -52,13 +44,10 @@ function nextSeq(dir: string): number {
  *    active authorization.
  * 2. Take the worktree lock, then the build lock, waiting up to
  *    `lockWaitMs` (capped by the run deadline).
- * 3. Start the command in its own process group in the run's worktree,
- *    logging stdout and stderr to `{artifact_dir}/exec/{seq}.log`.
- * 4. On timeout (capped by the run deadline) or a SIGINT/SIGTERM to the
- *    runner, SIGTERM the whole group, then SIGKILL it after `graceMs`.
- *    When the command exits, anything it left running in its group is
- *    killed too.
- * 5. Release the locks and write `{artifact_dir}/exec/{seq}.json`.
+ * 3. Run it with runProcess in the run's worktree (own process group,
+ *    timeout capped by the run deadline, group cleanup), logging to
+ *    `{artifact_dir}/exec/{seq}.log`.
+ * 4. Release the locks and write `{artifact_dir}/exec/{seq}.json`.
  *
  * The first exec after approval moves the run from approved to implementing.
  */
@@ -96,83 +85,21 @@ export async function execCommand(
 
       const dir = join(run.artifact_dir, "exec");
       const seq = nextSeq(dir);
-      const logPath = join(dir, `${seq}.log`);
-      const log = createWriteStream(logPath);
-      const startedAt = new Date();
       const deadlineCap = remaining();
       const limit = Math.min(opts.timeoutMs, deadlineCap);
-      const reasonIfTimeout = limit < opts.timeoutMs ? "run_deadline" : "timeout";
-
-      const child = spawn(argv[0], argv.slice(1), {
-        cwd: run.worktree_path,
-        detached: true, // own process group, so the whole tree can be killed
-        stdio: ["ignore", "pipe", "pipe"],
-        env: { ...process.env, FACTORY_RUN_ID: runId },
-      });
-
-      let reason: string | null = null;
-      let killTimer: NodeJS.Timeout | undefined;
-      const stop = (why: string) => {
-        if (reason || child.pid === undefined) return;
-        reason = why;
-        killGroup(child.pid, "SIGTERM");
-        killTimer = setTimeout(() => killGroup(child.pid!, "SIGKILL"), opts.graceMs ?? 5000);
-      };
-      const timer = setTimeout(() => stop(reasonIfTimeout), Math.max(limit, 0));
-      const onSignal = () => stop("interrupted");
-      process.on("SIGINT", onSignal);
-      process.on("SIGTERM", onSignal);
-
-      child.stdout.on("data", (b: Buffer) => {
-        log.write(b);
-        if (opts.echo) process.stdout.write(b);
-      });
-      child.stderr.on("data", (b: Buffer) => {
-        log.write(b);
-        if (opts.echo) process.stderr.write(b);
-      });
-
-      // Listen for "close" now: it can fire in the same tick as "exit".
-      const closed = new Promise<void>((r) => child.on("close", () => r()));
-      let spawnError: Error | null = null;
-      const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolveExit) => {
-        child.on("error", (err) => {
-          spawnError = err;
-          resolveExit({ code: null, signal: null });
-        });
-        child.on("exit", (code, signal) => {
-          // Clean up anything the command left behind in its group; it would
-          // otherwise keep running (and keep our pipes open).
-          if (child.pid !== undefined) killGroup(child.pid, "SIGKILL");
-          resolveExit({ code, signal });
-        });
-      });
-      if (!spawnError) await closed;
-
-      clearTimeout(timer);
-      clearTimeout(killTimer);
-      process.off("SIGINT", onSignal);
-      process.off("SIGTERM", onSignal);
-      if (spawnError) log.write(`factory: failed to start ${argv[0]}: ${(spawnError as Error).message}\n`);
-      await new Promise<void>((r) => log.end(r));
-
-      const endedAt = new Date();
-      const result: ExecResult = {
-        run_id: runId,
-        seq,
+      const p = await runProcess({
         command: argv,
         cwd: run.worktree_path,
-        exit_code: exit.code,
-        signal: exit.signal,
-        outcome: reason || spawnError ? "error" : exit.code === 0 ? "pass" : "fail",
-        reason: reason ?? (spawnError ? "spawn_failed" : null),
-        started_at: nowIso(startedAt),
-        ended_at: nowIso(endedAt),
-        duration_ms: endedAt.getTime() - startedAt.getTime(),
-        log_path: logPath,
-      };
+        env: { ...process.env, FACTORY_RUN_ID: runId },
+        timeoutMs: limit,
+        timeoutReason: limit < opts.timeoutMs ? "run_deadline" : "timeout",
+        logPath: join(dir, `${seq}.log`),
+        graceMs: opts.graceMs,
+        echo: opts.echo,
+      });
+      const result: ExecResult = { run_id: runId, seq, command: argv, cwd: run.worktree_path, ...p };
       atomicWrite(join(dir, `${seq}.json`), JSON.stringify(result, null, 2) + "\n");
-      if (reason === "run_deadline" || deadlinePassed(getRun(db, runId))) {
+      if (result.reason === "run_deadline" || deadlinePassed(getRun(db, runId))) {
         // Escalate now rather than at the next command.
         try {
           requireExecutable(db, runId, opts.owner);

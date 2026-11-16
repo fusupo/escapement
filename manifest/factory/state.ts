@@ -91,7 +91,10 @@ export type RunRow = {
   work_type: string | null;
   state: RunState;
   state_reason: string | null;
+  tier_proposed: string | null;
+  tier_actual: string | null;
   contract_digest: string | null;
+  policy_version: string | null;
   operator_action: string | null;
   started_at: string;
   ended_at: string | null;

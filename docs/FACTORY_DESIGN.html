@@ -523,6 +523,7 @@ ul.tight li{margin:.3rem 0}
         <li>A zero exit with missing results, or results that report <b>zero executed tests</b>, is an <code>error</code>, never a <code>pass</code>.</li>
         <li>Each results file is recorded with its digest, invocation and command.</li>
       </ul>
+      <p><i>As built (#61):</i> a failed precondition, such as a stray untracked scratchpad, is <code>blocked</code> before any attempt exists: no attempt is used and the run keeps its state, so the host can add the file to <code>.git/info/exclude</code> and retry. Each report lists its <code>invocations</code>, binding every log and results file (with its digest) to its command. A test that <code>verify</code> doesn't run is <code>not_found</code>: contracts name no commands, so the runner can't run one test on its own yet. See <code>docs/FACTORY_CLI.md</code>.</p>
 
       <h3>Where run artifacts live</h3>
       <p>Nothing the runner writes goes into the worktree, so validation can demand a clean tree and committing never changes what a report describes. Scratchpads, session logs and constraint files are hidden through <code>.git/info/exclude</code>, without touching the project's <code>.gitignore</code>.</p>
@@ -536,7 +537,8 @@ ul.tight li{margin:.3rem 0}
   attempts/{n}/review.json    the reviewer's verdict</pre>
 
       <h3>Test and policy changes are classified, not banned</h3>
-      <p>At approval the runner records a baseline: existing tests and the project's <code>validation-files</code>. Validation classifies every change in the full diff against it.</p>
+      <p>The baseline is the merge base: the tests and <code>validation-files</code> as they were where the branch split off. Validation classifies every change in the full diff against it.</p>
+      <p><i>As built (#61):</i> the baseline isn't stored at approval. <code>validate</code> reads it from git, so a rebase is classified against the new merge base. Test files are those matching the new <code>test-files</code> setting, or named by a contract selector. The patterns are read at both revisions, so a branch can't hide a change by editing the pattern that would catch it. Only a hunk that purely adds a new test block counts as new evidence.</p>
       <div class="tbl-wrap"><table>
         <thead><tr><th>Change</th><th>Class</th><th>Treatment</th></tr></thead>
         <tbody>
@@ -574,7 +576,7 @@ ul.tight li{margin:.3rem 0}
         <thead><tr><th>Command</th><th>Does</th></tr></thead>
         <tbody>
           <tr><td><code>start &lt;issue&gt;</code></td><td>Creates the run and its artifact directory. State <code>planned</code>.</td></tr>
-          <tr><td><code>approve &lt;run&gt;</code></td><td>Records contract digest, test baseline and authorization; sets the deadline. State <code>approved</code>.</td></tr>
+          <tr><td><code>approve &lt;run&gt;</code></td><td>Records contract digest and authorization; sets the deadline. State <code>approved</code>.</td></tr>
           <tr><td><code>exec &lt;run&gt; -- &lt;cmd&gt;</code></td><td>Runs a build or test command under the lock, with a deadline and process-group cleanup; logs to the artifact directory.</td></tr>
           <tr><td><code>validate &lt;run&gt;</code></td><td>Allocates an attempt, runs the deterministic phases, writes the draft report.</td></tr>
           <tr><td><code>review-input</code> / <code>record-review</code></td><td>Issues the reviewer bundle; checks and records the verdict, then finalizes the report.</td></tr>
@@ -826,7 +828,7 @@ const STEPS=[
   cmd:"factory start 42",
   side:{"Writes":"<span class='chip'>runs/esc#42-r1/contract.json</span>","Tier":"<span class='state s-neutral'>standard</span> proposed","Worktree":"scratchpad hidden via .git/info/exclude"}},
  {t:"You approve",short:"Approve",a:"human",state:"approved",touch:"Touch 1 of 2",
-  body:"You approve the plan and the contract together. The runner records the contract digest, a baseline of existing tests and validation files, and an absolute deadline, then issues the run authorization.",
+  body:"You approve the plan and the contract together. The runner records the contract digest and an absolute deadline, then issues the run authorization. The test baseline is the merge base, read from git when validating.",
   cmd:"factory approve esc#42-r1",
   side:{"Authorization":"<span class='state s-pass'>active</span>","Authorizes":"commit · push_branch · open_pr · run_validation","Deadline":"approved_at + run-budget (2h)"}},
  {t:"Implement",short:"Implement",a:"agent",state:"implementing",
@@ -1011,7 +1013,7 @@ function gate(){const miss=GATE.filter(([k])=>!$("#g-"+k).checked).map(g=>g[1]);
 $$("#gateList input").forEach(i=>i.onchange=gate); gate();
 
 /* config */
-const CFG=[["context-path","../myproject-ctx","Where run artifacts and archives live."],["base-branch","develop","Target for branches and PRs."],["setup","npm ci","Run under the lock when the lockfile digest changes."],["static","npm run typecheck && npm run lint","Phase 1. Required."],["verify","npx jest --runInBand --reporters=default --reporters=jest-junit","Phase 2, run once. Required."],["test-results","junit:$FACTORY_RESULTS_DIR/junit.xml","Where structured results land. Should use the fresh results directory."],["required-checks","static, verify","Always run in full; contracts name no commands, so they can't narrow them."],["sensitive-paths","src/auth/**, migrations/**, .github/**","Touching these makes a run sensitive."],["validation-files","jest.config.*, tsconfig*.json, package.json","Changing these is an execution-policy change."],["max-attempts","3","Fix-loop cap (next)."],["command-timeout","15m","Per-command deadline; process group killed on expiry."],["lock-timeout","30m","Longest wait for the build lock."],["run-budget","2h","Sets the enforced run deadline."],["exec-hook","off","Optional enforcement of factory exec."],["gate-mode","report-only","How the gate behaves."]];
+const CFG=[["context-path","../myproject-ctx","Where run artifacts and archives live."],["base-branch","develop","Target for branches and PRs."],["setup","npm ci","Run under the lock when the lockfile digest changes."],["static","npm run typecheck && npm run lint","Phase 1. Required."],["verify","npx jest --runInBand --reporters=default --reporters=jest-junit","Phase 2, run once. Required."],["test-results","junit:$FACTORY_RESULTS_DIR/junit.xml","Where structured results land. Should use the fresh results directory."],["required-checks","static, verify","Always run in full; contracts name no commands, so they can't narrow them."],["sensitive-paths","src/auth/**, migrations/**, .github/**","Touching these makes a run sensitive."],["validation-files","jest.config.*, tsconfig*.json, package.json","Changing these is an execution-policy change."],["test-files","*.test.*, *.spec.*, tests/","Which files are tests, for change classification. Common defaults."],["max-attempts","3","Fix-loop cap (next)."],["command-timeout","15m","Per-command deadline; process group killed on expiry."],["lock-timeout","30m","Longest wait for the build lock."],["run-budget","2h","Sets the enforced run deadline."],["exec-hook","off","Optional enforcement of factory exec."],["gate-mode","report-only","How the gate behaves."]];
 $("#cfgRows").innerHTML=CFG.map(([k,v,d])=>`<tr><td><code>${k}</code></td><td class="mono" style="font-size:.78rem;word-break:break-word">${esc(v)}</td><td>${esc(d)}</td></tr>`).join("");
 
 /* build order */
@@ -1020,8 +1022,8 @@ const BUILD=[
  [2,"#58","Shared manifest location and versioned schema","One per-user manifest independent of plugin location; ordered migrations.","done"],
  [3,"#59","factory CLI core","Run, attempt and authorization tables; state machines; start, approve, exec, status, resume, revoke; locks; deadlines; cleanup.","done"],
  [4,"#60","Contract, settings, readiness, tiers","Published JSON Schemas, evidence types, settings parsing, factory check and factory schema.","done"],
- [5,"#61","factory validate","Identity, setup policy, static and evidence phases, fresh results, classification, actual tier, draft reports.","next"],
- [6,"#62","Reviewer","validation-reviewer, bundle, record-review completeness and idempotency.","open"],
+ [5,"#61","factory validate","Identity, setup policy, static and evidence phases, fresh results, classification, actual tier, draft reports.","done"],
+ [6,"#62","Reviewer","validation-reviewer, bundle, record-review completeness and idempotency.","next"],
  [7,"#63","setup-work produces the contract","Readiness, tier, contract and authorization.","open"],
  [8,"#64","Authorized path","do-work, commit-changes, create-pr, factory pr, record-manual.","open"],
  [9,"#65","Release acceptance test","A real issue end to end, interrupted on purpose during checks, between checks and review, during finalization, and between PR creation and recording.","open"]

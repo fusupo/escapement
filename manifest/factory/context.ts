@@ -77,7 +77,7 @@ export function currentBranch(worktreePath: string): string {
   return branch;
 }
 
-/** `develop` when origin has it, otherwise `main`. #60's base-branch setting replaces this. */
+/** `develop` when origin has it, otherwise `main`: the target when neither --target-ref nor base-branch names one. */
 export function defaultTargetRef(worktreePath: string): string {
   return gitOrNull(["rev-parse", "--verify", "--quiet", "refs/remotes/origin/develop"], worktreePath)
     ? "develop"

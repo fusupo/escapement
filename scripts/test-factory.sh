@@ -137,6 +137,59 @@ if [[ "$(jq -r '.result.schema.title' <<<"$out")" == *"verdict"* ]]; then ok; el
 f schema nonsense >/dev/null 2>&1
 if [[ $? -eq 1 ]]; then ok; else bad "schema-unknown"; fi
 
+# validate: a project with static and verify checks. verify copies a JUnit
+# file into $FACTORY_RESULTS_DIR; ci/verify-exit sets its exit status.
+make_vproject() {
+  local dir="$1" verify_exit="$2"
+  mkdir -p "$dir/ci" &&
+    (
+      cd "$dir" &&
+        git init -q -b main &&
+        printf '## Escapement Settings\n\n- **static**: true\n- **verify**: sh ci/verify.sh\n- **test-results**: junit:$FACTORY_RESULTS_DIR/junit.xml\n' > CLAUDE.md &&
+        printf 'cp ci/junit.xml "$FACTORY_RESULTS_DIR/junit.xml"\nexit "$(cat ci/verify-exit)"\n' > ci/verify.sh &&
+        echo "$verify_exit" > ci/verify-exit &&
+        echo '<testsuites><testsuite name="s"><testcase name="works" file="t.ts"/></testsuite></testsuites>' > ci/junit.xml &&
+        git add -A &&
+        git -c user.name=t -c user.email=t@example.invalid commit -q -m init &&
+        git checkout -q -b 9-validate &&
+        echo change > change.txt &&
+        git add -A &&
+        git -c user.name=t -c user.email=t@example.invalid commit -q -m work
+    )
+}
+vproject="$tmp/vproject"
+make_vproject "$vproject" 0
+sed 's/#5-r1/#9-r1/' "$project/../contract.json" > "$tmp/vcontract.json"
+CWD="$vproject" f --json start '#9' --target-ref main >/dev/null
+CWD="$vproject" f --json approve '#9-r1' --contract "$tmp/vcontract.json" >/dev/null
+
+# an untracked scratchpad blocks validate (exit 2) and uses no attempt
+echo notes > "$vproject/SCRATCHPAD_9.md"
+out="$(CWD="$vproject" f --json validate '#9-r1')"
+status=$?
+if [[ $status -eq 2 && "$(jq -r '.error.kind == "blocked" and .error.code == "dirty_tree" and (.error.message | contains("SCRATCHPAD_9.md") and contains(".git/info/exclude"))' <<<"$out")" == true ]]; then ok; else bad "validate-blocked-scratchpad" "status=$status out=$out"; fi
+out="$(CWD="$vproject" f --json status '#9-r1')"
+if [[ "$(jq -r '(.result.attempts | length) == 0 and .result.run.state == "approved"' <<<"$out")" == true ]]; then ok; else bad "validate-blocked-no-attempt" "$out"; fi
+
+# listed in .git/info/exclude, it validates; --json gives the outcome and report path
+echo 'SCRATCHPAD_*.md' >> "$vproject/.git/info/exclude"
+out="$(CWD="$vproject" f --json validate '#9-r1')"
+status=$?
+if [[ $status -eq 0 && "$(jq -r '.ok and .result.status == "awaiting_review" and .result.outcome == null and .result.attempt == 1' <<<"$out")" == true ]]; then ok; else bad "validate-json" "status=$status out=$out"; fi
+report="$(jq -r .result.report_path <<<"$out")"
+if [[ -f "$report" && "$(jq -r '.evidence[0].executed' "$report")" == passed ]]; then ok; else bad "validate-report" "$report"; fi
+
+# a failing attempt still exits 0; the outcome is in the JSON
+fproject="$tmp/fproject"
+make_vproject "$fproject" 1
+# Run IDs are unique across the database, so this run of #9 is r2.
+sed 's/#5-r1/#9-r2/' "$project/../contract.json" > "$tmp/fcontract.json"
+CWD="$fproject" f --json start '#9' --target-ref main >/dev/null
+CWD="$fproject" f --json approve '#9-r2' --contract "$tmp/fcontract.json" >/dev/null
+out="$(CWD="$fproject" f --json validate '#9-r2')"
+status=$?
+if [[ $status -eq 0 && "$(jq -r '.result.outcome == "fail" and .result.failed_phase == "evidence" and .result.run_state == "escalated"' <<<"$out")" == true ]]; then ok; else bad "validate-fail-json" "status=$status out=$out"; fi
+
 # Missing dependencies: a copy of the plugin layout without node_modules
 fake="$tmp/fake-plugin"
 mkdir -p "$fake/scripts" "$fake/manifest"
