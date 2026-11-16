@@ -66,6 +66,12 @@ export function startRun(db: Database, opts: StartOptions): RunRow & { artifact_
   const base = runIdBase(opts.workItem);
   const targetRef =
     opts.targetRef ?? readSettings(opts.ctx.worktreePath).settings.baseBranch ?? defaultTargetRef(opts.ctx.worktreePath);
+  if (opts.ctx.branch === targetRef.replace(/^origin\//, "")) {
+    throw blocked(
+      "on_target_branch",
+      `worktree ${opts.ctx.worktreePath} is on ${opts.ctx.branch}, the run's target branch; check out a feature branch first`,
+    );
+  }
   let source: ArtifactSource = "flag";
   const run = tx(db, () => {
     const open = db

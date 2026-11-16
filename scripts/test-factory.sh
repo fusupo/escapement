@@ -98,6 +98,11 @@ if [[ "$(jq -r '.ok and .result.run.state == "implementing" and .result.authoriz
 out="$(CWD="$other" f --json start --project-root "$project" '#6' 2>&1)"
 if [[ "$(jq -r '.ok == false and .error.code == "run_exists"' <<<"$out")" == true ]]; then ok; else bad "project-root-from-elsewhere" "$out"; fi
 
+# start on the target branch is blocked (exit 2) and creates no run
+out="$(CWD="$other" f --json start --project-root "$project" --target-ref 5-thing '#7')"
+status=$?
+if [[ $status -eq 2 && "$(jq -r '.error.kind == "blocked" and .error.code == "on_target_branch"' <<<"$out")" == true ]]; then ok; else bad "start-on-target-branch" "status=$status out=$out"; fi
+
 # resume
 out="$(f --json resume '#5-r1')"
 if [[ "$(jq -r '.ok and (.result.actions | length) == 0' <<<"$out")" == true ]]; then ok; else bad "resume-json" "$out"; fi

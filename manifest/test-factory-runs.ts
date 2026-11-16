@@ -64,6 +64,21 @@ async function run() {
   const db2 = await memDb();
   const rb = startRun(db2, { workItem: "#5", ctx: projectContext(based), artifactDir: tempDir() });
   assert(rb.target_ref === "trunk", "without --target-ref, the base-branch setting is the target");
+
+  const onMain = realpathSync(makeRepo({ branch: "main" }));
+  const art = tempDir();
+  throws(
+    () => startRun(db2, { workItem: "#6", ctx: projectContext(onMain), artifactDir: art }),
+    /on_target_branch/,
+    "start refuses when the worktree is on the target branch (default target)",
+  );
+  throws(
+    () => startRun(db2, { workItem: "#6", ctx: projectContext(based), artifactDir: art, targetRef: "origin/1-work" }),
+    /on_target_branch/,
+    "and when --target-ref names the current branch through origin/",
+  );
+  const refused = db2.prepare("SELECT COUNT(*) AS n FROM factory_runs WHERE work_item = '#6'").get() as { n: number };
+  assert(refused.n === 0 && !existsSync(join(art, "#6-r1")), "a refused start creates no run and no artifact dir");
   db2.close();
 
   console.log("\napprove\n");
