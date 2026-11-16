@@ -69,8 +69,8 @@ The manifest database lives at `{context-path}/manifest/manifest.db`.
 Confirm the manifest CLI and database exist:
 
 ```bash
-# Check CLI exists
-ls manifest/manifest-cli.ts
+# Check the CLI and its dependencies are installed (prints the install command if not)
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" --check
 
 # Check database exists
 ls {context-path}/manifest/manifest.db
@@ -110,7 +110,7 @@ Determine which work item to sync. Resolution order:
 Query the manifest to confirm the item exists and check its current state:
 
 ```bash
-node --import tsx manifest/manifest-cli.ts query "SELECT id, name, state, predicted_files, actual_files, archive_path FROM work_items WHERE id = '{item_id}'"
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" query "SELECT id, name, state, predicted_files, actual_files, archive_path FROM work_items WHERE id = '{item_id}'"
 ```
 
 If state is already `done`:
@@ -153,7 +153,7 @@ WHERE id = '{item_id}';
 Apply via the manifest CLI:
 
 ```bash
-node --import tsx manifest/manifest-cli.ts query "UPDATE work_items SET state = 'done', updated_at = now() WHERE id = '{item_id}'"
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" query "UPDATE work_items SET state = 'done', updated_at = now() WHERE id = '{item_id}'"
 ```
 
 ### 1.2 Confirm
@@ -212,7 +212,7 @@ AskUserQuestion:
 ### 2.2 Apply Actual Files
 
 ```bash
-node --import tsx manifest/manifest-cli.ts query "UPDATE work_items SET actual_files = ARRAY['{file1}', '{file2}'], updated_at = now() WHERE id = '{item_id}'"
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" query "UPDATE work_items SET actual_files = ARRAY['{file1}', '{file2}'], updated_at = now() WHERE id = '{item_id}'"
 ```
 
 **SQL Safety:** Escape single quotes in file paths.
@@ -222,7 +222,7 @@ node --import tsx manifest/manifest-cli.ts query "UPDATE work_items SET actual_f
 Compare `predicted_files` with `actual_files`:
 
 ```bash
-node --import tsx manifest/manifest-cli.ts query "SELECT predicted_files, actual_files FROM work_items WHERE id = '{item_id}'"
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" query "SELECT predicted_files, actual_files FROM work_items WHERE id = '{item_id}'"
 ```
 
 Compute:
@@ -319,7 +319,7 @@ AskUserQuestion:
 ### 3.3 Apply Archive Path
 
 ```bash
-node --import tsx manifest/manifest-cli.ts query "UPDATE work_items SET archive_path = '{archive_path}', updated_at = now() WHERE id = '{item_id}'"
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" query "UPDATE work_items SET archive_path = '{archive_path}', updated_at = now() WHERE id = '{item_id}'"
 ```
 
 **Archive Integration Contract (V2 Section 13.3):**
@@ -342,7 +342,7 @@ Those responsibilities belong to `archive-work`.
 Remove `needs_human`, `ambiguity_questions`, `ambiguities`, and `bootstrap_status` from the meta JSONB field:
 
 ```bash
-node --import tsx manifest/manifest-cli.ts query "UPDATE work_items SET meta = meta - 'needs_human' - 'ambiguity_questions' - 'ambiguities' - 'bootstrap_status', updated_at = now() WHERE id = '{item_id}'"
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" query "UPDATE work_items SET meta = meta - 'needs_human' - 'ambiguity_questions' - 'ambiguities' - 'bootstrap_status', updated_at = now() WHERE id = '{item_id}'"
 ```
 
 ### 4.2 Clean Up Resolved Edges
@@ -350,7 +350,7 @@ node --import tsx manifest/manifest-cli.ts query "UPDATE work_items SET meta = m
 If there were ambiguous edges involving this item, upgrade their confidence:
 
 ```bash
-node --import tsx manifest/manifest-cli.ts query "UPDATE edges SET confidence = 'certain' WHERE (from_id = '{item_id}' OR to_id = '{item_id}') AND confidence = 'ambiguous'"
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" query "UPDATE edges SET confidence = 'certain' WHERE (from_id = '{item_id}' OR to_id = '{item_id}') AND confidence = 'ambiguous'"
 ```
 
 ---
@@ -364,7 +364,7 @@ node --import tsx manifest/manifest-cli.ts query "UPDATE edges SET confidence = 
 Query for items that depended on the just-completed work and now have all dependencies satisfied:
 
 ```bash
-node --import tsx manifest/manifest-cli.ts query "
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" query "
   SELECT wi.id, wi.name
   FROM edges e
   JOIN work_items wi ON wi.id = e.from_id
@@ -386,13 +386,13 @@ node --import tsx manifest/manifest-cli.ts query "
 Run the frontier query (V2 Section 9.2):
 
 ```bash
-node --import tsx manifest/manifest-cli.ts frontier
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" frontier
 ```
 
 If the CLI does not have a `frontier` command, run the query directly:
 
 ```bash
-node --import tsx manifest/manifest-cli.ts query "
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" query "
   SELECT w.id, w.name, w.kind, w.repo, w.scope_hint, w.predicted_files
   FROM work_items w
   WHERE w.kind IN ('issue', 'capability')
@@ -413,7 +413,7 @@ node --import tsx manifest/manifest-cli.ts query "
 If multiple items entered the frontier, check for file overlap:
 
 ```bash
-node --import tsx manifest/manifest-cli.ts query "
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" query "
   WITH frontier AS (
     SELECT id, predicted_files
     FROM work_items
@@ -539,8 +539,9 @@ If `manifest-cli.ts query` fails:
 
 ---
 
-**Version:** 1.0.1
+**Version:** 1.0.2
 **Last Updated:** 2026-11-15
 **Maintained By:** Escapement
 **Changelog:**
+- v1.0.2: Run the manifest CLI through scripts/manifest.sh from the plugin root, so it works from any project directory (#67)
 - v1.0.1: Read context-path with scripts/get-context-path.sh instead of grep, which also matched documentation examples (#57)

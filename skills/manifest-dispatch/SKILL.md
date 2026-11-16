@@ -51,21 +51,15 @@ It reads only the `## Escapement Settings` section of `CLAUDE.md` and ignores fe
 ### 0.2 Verify manifest CLI
 
 ```bash
-ls manifest/manifest-cli.ts
-ls manifest/node_modules/.package-lock.json  # or node_modules exists
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" --check
 ```
 
-If `manifest/node_modules` is missing:
-
-```
-Warning: manifest dependencies not installed.
-Run: cd manifest && npm install
-```
+If the check fails, show the user the install command it prints and stop. Run the CLI through `scripts/manifest.sh` from the project root, and never `cd` into `manifest/` (#67).
 
 ### 0.3 Verify SQLite database
 
 ```bash
-node --import tsx manifest/manifest-cli.ts status
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" status
 ```
 
 If this errors, the database hasn't been initialized. Direct the user to run `manifest-bootstrap` first.
@@ -73,7 +67,7 @@ If this errors, the database hasn't been initialized. Direct the user to run `ma
 ### 0.4 Verify frontier has dispatchable items
 
 ```bash
-node --import tsx manifest/manifest-cli.ts frontier
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" frontier
 ```
 
 If frontier is empty, report:
@@ -91,7 +85,7 @@ No dispatchable items on the frontier. Nothing to dispatch.
 ### 1.1 Generate the plan
 
 ```bash
-node --import tsx manifest/manifest-cli.ts plan
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" plan
 ```
 
 Capture the full output. The plan contains:
@@ -343,13 +337,13 @@ After worktrees, scratchpads, and constraint blocks are all in place:
 
 ```bash
 # For each dispatched node
-node --import tsx manifest/manifest-cli.ts in-progress "{item_id}" "{branch-name}"
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" in-progress "{item_id}" "{branch-name}"
 ```
 
 Verify with:
 
 ```bash
-node --import tsx manifest/manifest-cli.ts query "SELECT id, state, branch FROM work_items WHERE state = 'in_progress'"
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" query "SELECT id, state, branch FROM work_items WHERE state = 'in_progress'"
 ```
 
 ---
@@ -522,8 +516,9 @@ You can manually start work:
 
 ---
 
-**Version:** 1.0.1
+**Version:** 1.0.2
 **Last Updated:** 2026-11-15
 **Maintained By:** Escapement
 **Changelog:**
+- v1.0.2: Run the manifest CLI through scripts/manifest.sh from the plugin root, so it works from any project directory (#67)
 - v1.0.1: Read context-path with scripts/get-context-path.sh instead of grep, which also matched documentation examples (#57)

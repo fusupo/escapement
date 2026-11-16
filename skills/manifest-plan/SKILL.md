@@ -3,6 +3,7 @@ name: manifest-plan
 description: Generate a dispatch plan from the manifest frontier. Queries dispatchable work items, detects file overlaps, classifies conflicts, and outputs parallel dispatch groups. Invoke when user says "plan the manifest", "generate dispatch plan", "what can run in parallel", "manifest plan", or "plan work dispatch".
 tools:
   - Bash:node *
+  - Bash:bash *
   - Read
   - Write
   - Glob
@@ -36,7 +37,7 @@ Reference: `docs/MANIFEST_SYSTEM_DESIGN_V2.md` Section 11
 Confirm the manifest CLI and database are operational:
 
 ```bash
-node --import tsx manifest/manifest-cli.ts status
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" status
 ```
 
 If this fails, report:
@@ -60,7 +61,7 @@ No work items in the manifest. Run `manifest-bootstrap` to populate it.
 Use the manifest CLI to generate the dispatch plan:
 
 ```bash
-node --import tsx manifest/manifest-cli.ts plan
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" plan
 ```
 
 This command:
@@ -260,6 +261,8 @@ This is the simplest case -- every item gets its own parallel group.
 
 ---
 
-**Version:** 1.0.0
-**Last Updated:** 2026-03-31
+**Version:** 1.0.1
+**Last Updated:** 2026-11-15
 **Maintained By:** Escapement
+**Changelog:**
+- v1.0.1: Run the manifest CLI through scripts/manifest.sh from the plugin root, so it works from any project directory (#67)
