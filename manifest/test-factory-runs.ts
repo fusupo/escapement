@@ -13,7 +13,7 @@ import {
   contractDigest,
 } from "./factory/runs.ts";
 import { getRun, transitionRun } from "./factory/state.ts";
-import { assert, throws, tempDir, cleanup, makeRepo, memDb } from "./factory/testkit.ts";
+import { assert, throws, tempDir, cleanup, makeRepo, memDb, contractJson, contractFor } from "./factory/testkit.ts";
 
 const HOUR = 3_600_000;
 
@@ -62,20 +62,21 @@ async function run() {
 
   console.log("\napprove\n");
   const contract = join(tempDir(), "contract.json");
-  writeFileSync(contract, '{"criteria":["a"]}');
+  const first = contractJson(r1.run_id);
+  writeFileSync(contract, first);
   const before = Date.now();
   const a1 = approveRun(db, r1.run_id, { contractFile: contract, budgetMs: 2 * HOUR });
   assert(a1.run.state === "approved" && a1.changed, "approve moves planned to approved");
-  assert(a1.authorization.status === "active" && a1.authorization.contract_digest === contractDigest('{"criteria":["a"]}'), "an active authorization holds the contract digest");
+  assert(a1.authorization.status === "active" && a1.authorization.contract_digest === contractDigest(first), "an active authorization holds the contract digest");
   assert(JSON.parse(a1.authorization.authorizes_json).includes("commit"), "the authorization lists what it allows");
-  assert(readFileSync(join(r1.artifact_dir, "contract.json"), "utf-8") === '{"criteria":["a"]}', "the contract is copied to the artifact dir");
+  assert(readFileSync(join(r1.artifact_dir, "contract.json"), "utf-8") === first, "the contract is copied to the artifact dir");
   const deadline = Date.parse(a1.run.deadline_at!);
   assert(deadline >= before + 2 * HOUR && deadline <= Date.now() + 2 * HOUR, "deadline_at is approved_at plus the budget");
 
   const again = approveRun(db, r1.run_id, { contractFile: contract, budgetMs: 2 * HOUR });
   assert(!again.changed && auths(db, r1.run_id).length === 1, "re-approving the same contract changes nothing");
 
-  writeFileSync(contract, '{"criteria":["a","b"]}');
+  writeFileSync(contract, contractJson(r1.run_id, { predicted_files: ["src/a.ts"] }));
   const a2 = approveRun(db, r1.run_id, { contractFile: contract, budgetMs: 10 * HOUR });
   const statuses = auths(db, r1.run_id).map((a) => a.status).sort().join(",");
   assert(a2.changed && a2.superseded === a1.authorization.contract_digest, "a changed contract supersedes the old authorization");
@@ -83,6 +84,15 @@ async function run() {
   assert(getRun(db, r1.run_id).deadline_at === a1.run.deadline_at, "re-approval doesn't move the deadline");
   assert(getRun(db, r1.run_id).contract_digest === a2.authorization.contract_digest, "the run records the current contract digest");
   throws(() => approveRun(db, r1.run_id, { contractFile: "/no/such/file", budgetMs: HOUR }), /no_contract/, "a missing contract file is an error");
+  throws(() => approveRun(db, r1.run_id, { contractFile: contractFor("#42-r9"), budgetMs: HOUR }), /bad_contract.*not acme-w#42-r1/, "a contract for another run is rejected");
+  throws(() => approveRun(db, r1.run_id, { contractFile: contractFor(r1.run_id, { issue: 7 }), budgetMs: HOUR }), /bad_contract.*issue 7/, "a contract naming another issue is rejected");
+  const invalid = join(tempDir(), "bad.json");
+  writeFileSync(invalid, JSON.stringify({ version: 1, run_id: r1.run_id, risk_tier_proposed: "standard", criteria: [], commands: { verify: "true" } }));
+  throws(() => approveRun(db, r1.run_id, { contractFile: invalid, budgetMs: HOUR }), /bad_contract(?=[\s\S]*\/criteria)(?=[\s\S]*"commands")/, "an invalid contract is rejected with every problem");
+  assert(auths(db, r1.run_id).filter((a) => a.status === "active").length === 1, "a rejected contract leaves the authorization alone");
+  const nulls = contractFor(r1.run_id, { issue: null, manifest_id: null });
+  assert(approveRun(db, r1.run_id, { contractFile: nulls, budgetMs: HOUR }).changed, "issue and manifest_id may be null");
+  approveRun(db, r1.run_id, { contractFile: contract, budgetMs: HOUR });
 
   console.log("\nrevoke and the authorization lifecycle\n");
   const rev = revokeRun(db, r1.run_id);
@@ -93,13 +103,13 @@ async function run() {
   assert(requireExecutable(db, r1.run_id).authorization.status === "active", "re-approval restores an active authorization");
   transitionRun(db, r1.run_id, "closed", { action: "abandoned" });
   const final = auths(db, r1.run_id).map((a) => a.status).sort().join(",");
-  assert(final === "ended,superseded", "closing the run ends the authorization (active → ended)");
+  assert(final === "ended,superseded,superseded", "closing the run ends the authorization (active → ended)");
   throws(() => approveRun(db, r1.run_id, { contractFile: contract, budgetMs: HOUR }), /wrong_state/, "a closed run can't be approved");
 
   console.log("\nrun deadline\n");
   const r2 = startRun(db, { workItem: "#42", ctx });
   assert(r2.run_id === "#42-r1", "after closing, the worktree can start a new run");
-  approveRun(db, r2.run_id, { contractFile: contract, budgetMs: HOUR });
+  approveRun(db, r2.run_id, { contractFile: contractFor(r2.run_id), budgetMs: HOUR });
   db.prepare("UPDATE factory_runs SET deadline_at = ? WHERE run_id = ?").run(new Date(Date.now() - 1000).toISOString(), r2.run_id);
   throws(() => requireExecutable(db, r2.run_id), /run_deadline/, "past the deadline, execution is blocked");
   assert(getRun(db, r2.run_id).state === "escalated", "the run is escalated with reason run_deadline");

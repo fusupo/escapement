@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/fusupo/escapement/schemas/factory/verdict.schema.json",
+  "title": "Escapement factory reviewer verdict",
+  "description": "The reviewer's structured response to a review bundle (docs/FACTORY_DESIGN.md §4.9). This schema checks shape only; the runner also checks completeness against the attempt (every evidence ID judged once, every sensitive path signed off, every modified assertion justified, matching source_digest).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "source_digest", "evidence", "sensitive_paths", "modified_assertions", "findings"],
+  "properties": {
+    "version": { "const": 1 },
+    "source_digest": {
+      "description": "Digest of the source snapshot the reviewer read, as issued by `factory review-input`.",
+      "$ref": "#/$defs/digest"
+    },
+    "evidence": {
+      "description": "One judgment per contract evidence item: supports_criterion for test and command evidence, procedure_adequate for manual evidence.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "rationale"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "supports_criterion": { "enum": ["yes", "no", "partial"] },
+          "procedure_adequate": { "enum": ["yes", "no"] },
+          "rationale": { "type": "string", "minLength": 1 }
+        },
+        "oneOf": [
+          { "required": ["supports_criterion"], "not": { "required": ["procedure_adequate"] } },
+          { "required": ["procedure_adequate"], "not": { "required": ["supports_criterion"] } }
+        ]
+      }
+    },
+    "sensitive_paths": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "signoff", "rationale"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "signoff": { "enum": ["approve", "concern"] },
+          "rationale": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "modified_assertions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["location", "justified", "rationale"],
+        "properties": {
+          "location": { "type": "string", "minLength": 1 },
+          "justified": { "type": "boolean" },
+          "rationale": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["severity", "detail"],
+        "properties": {
+          "severity": { "enum": ["blocking", "advisory"] },
+          "detail": { "type": "string", "minLength": 1 },
+          "location": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  }
+}

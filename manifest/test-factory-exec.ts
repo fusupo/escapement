@@ -10,7 +10,7 @@ import { execCommand, execExitCode } from "./factory/exec.ts";
 import { getRun } from "./factory/state.ts";
 import { tryAcquire, listLocks, BUILD_LOCK } from "./factory/locks.ts";
 import { currentOwner } from "./factory/owner.ts";
-import { assert, tempDir, cleanup, makeRepo, sh } from "./factory/testkit.ts";
+import { assert, tempDir, cleanup, makeRepo, sh, contractFor } from "./factory/testkit.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const tsx = resolve(__dirname, "node_modules/tsx/dist/esm/index.mjs");
@@ -51,15 +51,13 @@ async function run() {
   db.pragma("journal_mode = WAL");
   migrate(db);
   const owner = currentOwner("exec");
-  const contract = join(work, "contract.json");
-  writeFileSync(contract, "{}");
 
   const root = realpathSync(makeRepo({ branch: "1-a" }));
   const runA = startRun(db, { workItem: "#1", ctx: projectContext(root), artifactDir: join(work, "art") });
   const opts = { owner, timeoutMs: 10_000, lockWaitMs: 5_000, graceMs: 300 };
 
   await rejects(execCommand(db, runA.run_id, ["true"], opts), /not_authorized/, "exec without an authorization is blocked");
-  approveRun(db, runA.run_id, { contractFile: contract, budgetMs: HOUR });
+  approveRun(db, runA.run_id, { contractFile: contractFor(runA.run_id), budgetMs: HOUR });
 
   {
     const r = await execCommand(db, runA.run_id, ["sh", "-c", "echo out; echo err >&2; pwd"], opts);
@@ -134,7 +132,7 @@ async function run() {
     sh("git", ["worktree", "add", "-q", "-b", "3-c", wtC], root);
     const runs = [wtB, wtC].map((wt, i) => {
       const r = startRun(db, { workItem: `#${i + 2}`, ctx: projectContext(wt), artifactDir: join(work, "art") });
-      approveRun(db, r.run_id, { contractFile: contract, budgetMs: HOUR });
+      approveRun(db, r.run_id, { contractFile: contractFor(r.run_id), budgetMs: HOUR });
       return r.run_id;
     });
     const spans = join(work, "spans.jsonl");

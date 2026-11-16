@@ -21,17 +21,24 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 export ESCAPEMENT_MANIFEST_DIR="$tmp/data"
 
-# A project with no context-path, so artifacts go in .escapement/.
+# A project with no context-path, so artifacts go in .escapement/, and a
+# short command-timeout so exec's default timeout comes from settings.
 project="$tmp/project"
 mkdir -p "$project"
 (
   cd "$project" &&
     git init -q -b 5-thing &&
     echo test > README.md &&
+    printf '## Escapement Settings\n\n- **command-timeout**: 2s\n' > CLAUDE.md &&
     git add -A &&
     git -c user.name=t -c user.email=t@example.invalid commit -q -m init
 )
-echo '{"criteria":[]}' > "$project/../contract.json"
+cat > "$project/../contract.json" <<'JSON'
+{"version": 1, "run_id": "#5-r1", "risk_tier_proposed": "standard",
+ "criteria": [{"id": "AC-1", "text": "It works",
+   "evidence": [{"id": "AC-1.e1", "type": "test", "kind": "new_behavior", "selector": "t.ts::works"}]}]}
+JSON
+echo '{"version": 1, "run_id": "#5-r1", "criteria": []}' > "$project/../bad-contract.json"
 other="$tmp/other"
 mkdir -p "$other"
 
@@ -48,6 +55,11 @@ if [[ "$(jq -r '.ok and .result.run_id == "#5-r1" and .result.state == "planned"
 art="$(jq -r .result.artifact_dir <<<"$out")"
 if [[ "$art" == "$project/.escapement/runs/5-thing/#5-r1" && -d "$art" ]]; then ok; else bad "artifact-dir-in-repo" "$art"; fi
 if [[ -z "$(git -C "$project" status --porcelain)" ]]; then ok; else bad "tree-stays-clean" "$(git -C "$project" status --porcelain)"; fi
+
+# an invalid contract is rejected with every problem listed
+out="$(f --json approve '#5-r1' --contract ../bad-contract.json)"
+status=$?
+if [[ $status -eq 1 && "$(jq -r '.error.code == "bad_contract" and (.error.message | contains("risk_tier_proposed") and contains("/criteria"))' <<<"$out")" == true ]]; then ok; else bad "approve-bad-contract" "status=$status out=$out"; fi
 
 # approve with a contract path relative to the cwd
 out="$(f --json approve '#5-r1' --contract ../contract.json --run-budget 1h)"
@@ -71,6 +83,12 @@ if [[ "$out" == "--json" ]]; then ok; else bad "json-after-separator" "$out"; fi
 # timeout: the runner kills the command and exits 124
 f --json exec --timeout 1s '#5-r1' -- sleep 10 >/dev/null
 if [[ $? -eq 124 ]]; then ok; else bad "exec-timeout-124"; fi
+
+# without --timeout, exec uses the project's command-timeout setting (2s)
+start=$SECONDS
+f --json exec '#5-r1' -- sleep 10 >/dev/null
+status=$?
+if [[ $status -eq 124 && $((SECONDS - start)) -lt 8 ]]; then ok; else bad "exec-timeout-from-settings" "status=$status"; fi
 
 # status from another directory, with --project-root for start elsewhere
 out="$(CWD="$other" f --json status)"
@@ -99,6 +117,25 @@ out="$(f --json frobnicate)"
 if [[ $? -eq 1 && "$(jq -r '.error.code' <<<"$out")" == "usage" ]]; then ok; else bad "unknown-command" "$out"; fi
 err="$(f approve '#5-r1' 2>&1 >/dev/null)"
 if [[ "$err" == *"missing --contract"* && "$err" == *"Usage: factory"* ]]; then ok; else bad "usage-text" "$err"; fi
+
+# check: readiness without a run or a database. The project sets no static
+# or verify command, and the contract has test evidence but no test-results.
+out="$(ESCAPEMENT_MANIFEST_DIR="$tmp/nodb" f --json check --contract ../contract.json)"
+status=$?
+if [[ $status -eq 0 && "$(jq -r '.ok and .result.status == "needs_human" and ([.result.questions[].ref] == ["static", "verify", "test-results"])' <<<"$out")" == true ]]; then ok; else bad "check-needs-human" "status=$status out=$out"; fi
+if [[ ! -e "$tmp/nodb" ]]; then ok; else bad "check-opens-no-db"; fi
+out="$(f check --contract ../bad-contract.json)"
+if [[ $? -eq 0 && "$out" == needs_human* && "$out" == *"[criterion]"* ]]; then ok; else bad "check-text" "$out"; fi
+
+# schema: published JSON Schema paths, or content with --print
+out="$(ESCAPEMENT_MANIFEST_DIR="$tmp/nodb" f --json schema)"
+if [[ "$(jq -r '[.result.schemas[].name] == ["contract", "report", "verdict", "readiness"]' <<<"$out")" == true && ! -e "$tmp/nodb" ]]; then ok; else bad "schema-list" "$out"; fi
+path="$(f schema contract)"
+if [[ -f "$path" && "$(jq -r '."$id"' "$path")" == *"/contract.schema.json" ]]; then ok; else bad "schema-path" "$path"; fi
+out="$(f --json schema verdict --print)"
+if [[ "$(jq -r '.result.schema.title' <<<"$out")" == *"verdict"* ]]; then ok; else bad "schema-print" "$out"; fi
+f schema nonsense >/dev/null 2>&1
+if [[ $? -eq 1 ]]; then ok; else bad "schema-unknown"; fi
 
 # Missing dependencies: a copy of the plugin layout without node_modules
 fake="$tmp/fake-plugin"

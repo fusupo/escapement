@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/fusupo/escapement/schemas/factory/contract.schema.json",
+  "title": "Escapement factory validation contract",
+  "description": "What a run must demonstrate: acceptance criteria and the evidence for each (docs/FACTORY_DESIGN.md §5.1, §5.2). Contracts name no commands; every check comes from project settings, so required-checks can't be narrowed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "run_id", "risk_tier_proposed", "criteria"],
+  "properties": {
+    "version": { "const": 1 },
+    "run_id": {
+      "description": "The run this contract is for, as returned by `factory start`. Any work-item ID scheme is allowed.",
+      "type": "string",
+      "minLength": 1
+    },
+    "issue": {
+      "description": "GitHub issue number, when the work item is one.",
+      "type": ["integer", "null"],
+      "minimum": 1
+    },
+    "manifest_id": {
+      "description": "Escapement manifest work-item ID, when there is one. Hosts without a manifest leave it out.",
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "risk_tier_proposed": { "$ref": "#/$defs/tier" },
+    "risk_reasons": {
+      "description": "Why the planner proposed this tier, e.g. a public API or auth change.",
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "criteria": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/criterion" }
+    },
+    "predicted_files": {
+      "description": "Repository-relative paths the plan expects to change.",
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "$defs": {
+    "tier": { "enum": ["standard", "sensitive"] },
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+    "criterion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "text", "evidence"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "text": { "type": "string", "minLength": 1 },
+        "evidence": {
+          "description": "At least one item; a criterion that can't be given evidence is a readiness failure (§3.1).",
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/evidence" }
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["id", "type", "kind"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "type": { "enum": ["test", "command", "manual"] },
+        "kind": {
+          "description": "new_behavior: should fail without the change. regression: expected to pass already.",
+          "enum": ["new_behavior", "regression"]
+        },
+        "selector": {
+          "description": "test: file and test name or pattern, e.g. tests/auth/refresh.test.ts::rejects expired token",
+          "type": "string",
+          "minLength": 1
+        },
+        "run": { "description": "command: the shell command to run.", "type": "string", "minLength": 1 },
+        "cwd": { "description": "Working directory relative to the repository root.", "type": "string", "minLength": 1 },
+        "timeout_s": { "type": "integer", "minimum": 1 },
+        "expect": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["exit_code"],
+          "properties": {
+            "exit_code": { "type": "integer", "minimum": 0, "maximum": 255 },
+            "stdout_matches": { "description": "JavaScript regular expression.", "type": "string", "minLength": 1 },
+            "stdout_not_matches": { "description": "JavaScript regular expression.", "type": "string", "minLength": 1 }
+          }
+        },
+        "instructions": { "description": "manual: what a human checks.", "type": "string", "minLength": 1 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "test" } }, "required": ["type"] },
+          "then": {
+            "required": ["selector"],
+            "propertyNames": { "enum": ["id", "type", "kind", "selector", "cwd", "timeout_s"] }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "command" } }, "required": ["type"] },
+          "then": {
+            "required": ["run", "expect"],
+            "propertyNames": { "enum": ["id", "type", "kind", "run", "cwd", "timeout_s", "expect"] }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "manual" } }, "required": ["type"] },
+          "then": {
+            "required": ["instructions"],
+            "propertyNames": { "enum": ["id", "type", "kind", "instructions"] }
+          }
+        }
+      ]
+    }
+  }
+}

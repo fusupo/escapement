@@ -1,0 +1,319 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/fusupo/escapement/schemas/factory/report.schema.json",
+  "title": "Escapement factory validation report",
+  "description": "One attempt's validation report, attempts/{n}/report.json (docs/FACTORY_DESIGN.md §5.3, outcomes §5.4). Written by the runner; a report applies only while the branch head equals head_sha and the contract digest is the approved one.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "run_id",
+    "attempt",
+    "status",
+    "outcome",
+    "validation_scope",
+    "head_sha",
+    "merge_base_sha",
+    "target_ref",
+    "target_sha",
+    "contract_digest",
+    "policy_version",
+    "tree_clean_after",
+    "tier",
+    "changes",
+    "phases",
+    "evidence",
+    "findings",
+    "flags"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "status": {
+      "description": "Attempt state when the report was written. Drafts are written before review.",
+      "enum": [
+        "checks_running",
+        "awaiting_review",
+        "finalizing",
+        "complete",
+        "interrupted"
+      ]
+    },
+    "outcome": {
+      "description": "Null in a draft; set once the attempt completes.",
+      "enum": [
+        "pass",
+        "fail",
+        "blocked",
+        "error",
+        "pending_manual",
+        "interrupted",
+        null
+      ]
+    },
+    "validation_scope": {
+      "enum": [
+        "branch",
+        "merge_result"
+      ]
+    },
+    "head_sha": {
+      "$ref": "#/$defs/sha"
+    },
+    "merge_base_sha": {
+      "$ref": "#/$defs/sha"
+    },
+    "target_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "target_sha": {
+      "$ref": "#/$defs/sha"
+    },
+    "contract_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "policy_version": {
+      "description": "Runner version plus the digest of the project's factory settings, e.g. factory@1.0.0+settings:sha256:…",
+      "type": "string",
+      "minLength": 1
+    },
+    "lockfile_digest": {
+      "description": "Digest of the dependency lockfile(s), or null when the project has none.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "tree_clean_after": {
+      "type": "boolean"
+    },
+    "tier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "proposed",
+        "actual",
+        "reasons"
+      ],
+      "properties": {
+        "proposed": {
+          "$ref": "#/$defs/tier"
+        },
+        "actual": {
+          "$ref": "#/$defs/tier"
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "changes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "new_evidence",
+        "modified_assertions",
+        "execution_policy"
+      ],
+      "properties": {
+        "new_evidence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "modified_assertions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "execution_policy": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "phases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "outcome"
+        ],
+        "properties": {
+          "name": {
+            "enum": [
+              "static",
+              "evidence",
+              "review",
+              "scenarios"
+            ]
+          },
+          "outcome": {
+            "enum": [
+              "pass",
+              "fail",
+              "blocked",
+              "error",
+              "pending_manual"
+            ]
+          },
+          "duration_s": {
+            "type": "number",
+            "minimum": 0
+          },
+          "log": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "executed",
+          "supports_criterion"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "executed": {
+            "description": "The runner's deterministic result. not_run: an earlier phase stopped the attempt.",
+            "enum": [
+              "passed",
+              "failed",
+              "skipped",
+              "not_found",
+              "error",
+              "not_run",
+              "pending_manual"
+            ]
+          },
+          "supports_criterion": {
+            "description": "The reviewer's judgment; null until review.",
+            "enum": [
+              "yes",
+              "no",
+              "partial",
+              null
+            ]
+          },
+          "procedure_adequate": {
+            "enum": [
+              "yes",
+              "no",
+              null
+            ]
+          },
+          "exit_code": {
+            "type": "integer"
+          },
+          "log": {
+            "type": "string"
+          },
+          "excerpt": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "severity",
+          "detail"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "severity": {
+            "enum": [
+              "blocking",
+              "advisory"
+            ]
+          },
+          "detail": {
+            "type": "string",
+            "minLength": 1
+          },
+          "location": {
+            "type": "string"
+          },
+          "evidence_digest": {
+            "description": "Digest of normalized failure output, so the fix loop can tell a different failure from no change.",
+            "$ref": "#/$defs/digest"
+          }
+        }
+      }
+    },
+    "flags": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "attempts_used": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "wall_clock_s": {
+          "type": "number",
+          "minimum": 0
+        },
+        "tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        }
+      }
+    }
+  },
+  "$defs": {
+    "tier": {
+      "enum": [
+        "standard",
+        "sensitive"
+      ]
+    },
+    "sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

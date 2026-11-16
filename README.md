@@ -240,7 +240,7 @@ escapement/
 ├── manifest/                 # Manifest and factory CLIs (TypeScript, SQLite)
 │   ├── manifest-cli.ts       # Manifest entry point; run it through scripts/manifest.sh
 │   ├── factory-cli.ts        # Factory runner entry point; run it through scripts/factory.sh
-│   ├── factory/              # Runs, authorizations, attempts, locks, exec, resume
+│   ├── factory/              # Runs, locks, exec, resume, settings, tiers, schemas, readiness
 │   ├── init.ts               # Database setup and context-path resolution
 │   ├── plan.ts               # Dispatch plan generation
 │   ├── migrations.ts         # Ordered schema migrations (PRAGMA user_version)
@@ -255,6 +255,7 @@ escapement/
 │   ├── factory.sh             # Runs the factory CLI from any project directory
 │   ├── migrate-archives.py    # Migrate in-repo archives to context-path
 │   └── slice-session-log.sh   # Transcript slicing with a per-session cursor
+├── schemas/factory/          # Published JSON Schemas: contract, report, verdict, readiness
 ├── agents/                   # Specialized subagents
 │   └── scratchpad-planner.md # Codebase analysis for setup-work
 ├── docs/                     # Extended documentation
@@ -452,9 +453,14 @@ fusupo
 
 ## Version
 
-**Current:** 3.7.0
+**Current:** 3.8.0
 
 **Changelog:**
+- 3.8.0 (2026-11-16): Factory contract, settings, readiness and risk tiers (#60)
+  - **Published schemas**: `schemas/factory/` holds JSON Schemas for the contract, report, reviewer verdict and readiness documents, so other hosts can produce and check them. The runner validates against the same files. `factory.sh schema` prints their paths
+  - **Contract validation**: `factory approve` rejects an invalid contract, listing every problem. Contracts name no commands, so they can't skip or narrow a project's required checks
+  - **Settings**: the factory reads `base-branch`, `setup`, `static`, `verify`, `test-results`, `required-checks`, `sensitive-paths`, `validation-files`, `max-attempts`, the timeouts, `run-budget`, `exec-hook` and `gate-mode` from `## Escapement Settings`. `exec`, `approve` and `resume` take their default limits from them
+  - **Readiness**: `factory.sh check --contract <file>` reports `ready`, or `needs_human` with questions, and the proposed risk tier (`standard` or `sensitive`, from `sensitive-paths` and `validation-files`)
 - 3.7.0 (2026-11-15): Factory runner core (#59)
   - **`scripts/factory.sh`**: `start`, `approve`, `exec`, `status`, `resume` and `revoke` for factory runs. Every command takes `--json`, and runs accept any external work-item ID, so hosts other than the skills can call it. See `docs/FACTORY_CLI.md`
   - **Locks and deadlines**: `exec` runs build and test commands one at a time across all worktrees, under a per-command timeout and the run's deadline, and kills the whole process group when either runs out

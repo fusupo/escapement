@@ -44,6 +44,7 @@ escapement/
 │   ├── manifest.sh             # Runs the manifest CLI from any cwd (skills call this, never manifest-cli.ts directly)
 │   ├── factory.sh              # Runs the factory runner CLI from any cwd (docs/FACTORY_CLI.md)
 │   └── slice-session-log.sh    # Writes the transcript part no earlier session log covers
+├── schemas/factory/     # Published JSON Schemas for factory documents (contract, report, verdict, readiness)
 ├── agents/              # Future: specialized subagents
 ├── docs/                # Extended documentation
 │   ├── WORKFLOW.md      # Workflow explanation
