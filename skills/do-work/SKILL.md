@@ -366,7 +366,12 @@ After the last task:
 
 ### C. Open the PR
 
-Invoke create-pr. It writes the title and description, and `factory pr` pushes the branch and opens the PR as the agent, with the validation report. On success, update the scratchpad's Work Log and notify (step E) with the PR URL. Merging is the operator's: never merge. If create-pr is refused, escalate (step D).
+Invoke create-pr. It writes the title and description, and `factory pr` pushes the branch and opens the PR as the agent, with the validation report. On success, update the scratchpad's Work Log and notify (step E) with the PR URL. Merging is the operator's: never merge.
+
+If `factory pr` fails, route on its code:
+- **`gh_failed`, `push_failed`:** possibly transient, and GitHub may have acted before the failure. Run the same `factory pr` command once more: it finds a PR an earlier call created instead of opening a second one. If it fails again, notify (step E) and stop *without* escalating; the run stays `validated`, and create-pr can be run again later.
+- **`no_agent_token`, `gh_missing`, `lock_timeout`:** setup, not the run. Notify with the fix and stop without escalating.
+- **Anything else** (`head_moved`, `pr_conflict`, `pr_not_open`, `contract_mismatch`, `not_validated`, `run_deadline`): escalate (step D).
 
 ### D. Escalate and stop
 
