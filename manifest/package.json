@@ -13,7 +13,8 @@
     "test:plan": "node --import tsx test-plan.ts",
     "test:init": "node --import tsx test-init.ts",
     "test:cli": "node --import tsx test-cli.ts",
-    "test:check": "node --import tsx test-check.ts"
+    "test:check": "node --import tsx test-check.ts",
+    "test:migrate": "node --import tsx test-migrate.ts"
   },
   "dependencies": {
     "better-sqlite3": "^11.0.0"

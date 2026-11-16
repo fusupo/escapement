@@ -4,9 +4,9 @@ import { readFileSync, existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdirSync } from "node:fs";
+import { migrate } from "./migrations.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const SCHEMA_PATH = resolve(__dirname, "schema.sql");
 
 const SETTINGS_HEADING_RE = /^##[ \t]+Escapement Settings[ \t]*$/;
 const HEADING_RE = /^##?[ \t]/;
@@ -127,38 +127,25 @@ export function getDb(dataDir?: string): DatabaseType {
 }
 
 /**
- * Apply the V2 schema to a SQLite instance.
- * Safe to call on a fresh database. Will error if tables already exist
- * (use ensureSchema for idempotent setup).
+ * Bring a SQLite instance up to the latest schema by running any pending
+ * migrations (see migrations.ts). Idempotent, so it is safe on fresh and
+ * existing databases alike.
  */
 export function applySchema(db: DatabaseType): void {
-  const sql = readFileSync(SCHEMA_PATH, "utf-8");
-  db.exec(sql);
-}
-
-/**
- * Idempotent schema setup: only applies if work_items table doesn't exist.
- */
-export function ensureSchema(db: DatabaseType): boolean {
-  const row = db
-    .prepare(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name='work_items'"
-    )
-    .get() as { name: string } | undefined;
-
-  if (row) {
-    return false;
-  }
-  applySchema(db);
-  return true;
+  migrate(db);
 }
 
 /**
  * Initialize the manifest database: create/open the SQLite instance
- * and ensure the schema is applied.
+ * and run any pending schema migrations.
  */
 export function initManifest(dataDir?: string): DatabaseType {
   const db = getDb(dataDir);
-  ensureSchema(db);
+  try {
+    migrate(db);
+  } catch (err) {
+    db.close();
+    throw err;
+  }
   return db;
 }
