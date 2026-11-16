@@ -182,7 +182,25 @@ function run() {
     "create-pr opens the PR with the GitHub MCP tools and pushes with factory push",
   );
   const doWork = read("skills/do-work/SKILL.md");
-  assert(/scripts\/factory\.sh" --json push/.test(section(doWork, "Phase 4: Continuous Sync")), "do-work's push reminder pushes with factory push");
+  const sync = section(doWork, "Phase 4: Continuous Sync");
+  assert(/scripts\/factory\.sh" --json push/.test(sync), "do-work's push reminder pushes with factory push");
+
+  // The operator's git push is a fallback for exactly two refusals: no agent
+  // identity, and an origin off github.com. Anything else is reported.
+  const bullets = phase6.split(/\n(?=\s*- \*\*)/);
+  const fallback = bullets.filter((b) => b.includes("git push"));
+  const doWorkPush = sync.split("\n").filter((l) => l.includes("git push"));
+  assert(
+    fallback.length === 1 &&
+      fallback[0].includes("`no_agent_token`") &&
+      fallback[0].includes("`not_github`") &&
+      /Never retry as the operator/.test(phase6) &&
+      doWorkPush.length === 1 &&
+      doWorkPush[0].includes("`no_agent_token`") &&
+      doWorkPush[0].includes("`not_github`") &&
+      /never retry as the operator/.test(doWorkPush[0]),
+    "create-pr and do-work fall back to the operator's push only without an agent token or off github.com",
+  );
   assert(
     /mcp__github__list_pull_requests/.test(read("skills/manifest-sync/SKILL.md")) &&
       /mcp__github__pull_request_read\(method: "get_files"/.test(read("skills/manifest-sync/SKILL.md")) &&
@@ -198,6 +216,7 @@ function run() {
       identity.includes("`no_agent_token`") &&
       identity.includes("Committing as the operator") &&
       identity.includes("`agent_env_permissions`") &&
+      identity.includes("the factory runner isn't installed") &&
       execute.includes('git -c user.name="{name}" -c user.email="{email}" commit'),
     "commit-changes commits with the factory agent identity when one is configured",
   );
@@ -212,6 +231,9 @@ function run() {
       rule.includes("`factory push`") &&
       rule.includes("`factory agent`") &&
       rule.includes("`no_agent_token`") &&
+      rule.includes("`not_github`") &&
+      cli.includes("`not_github`") &&
+      design.includes("`not_github`") &&
       rule.includes("runner") &&
       design.includes("*As built (#80)") &&
       design.includes("`factory push`") &&
