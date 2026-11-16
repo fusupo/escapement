@@ -30,7 +30,8 @@
     "test:factory-junit": "node --import tsx test-factory-junit.ts",
     "test:factory-validate": "node --import tsx test-factory-validate.ts",
     "test:factory-review": "node --import tsx test-factory-review.ts",
-    "test:factory-authorization": "node --import tsx test-factory-authorization.ts"
+    "test:factory-authorization": "node --import tsx test-factory-authorization.ts",
+    "test:factory-github": "node --import tsx test-factory-github.ts"
   },
   "dependencies": {
     "ajv": "^8.17.1",

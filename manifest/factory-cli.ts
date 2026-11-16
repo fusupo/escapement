@@ -1,6 +1,7 @@
 import type { Database } from "better-sqlite3";
 import { initManifest, resolveDbPath } from "./init.ts";
 import { projectContext, resolveWorktree, excludePatterns, mainRepoRoot, repoName, git } from "./factory/context.ts";
+import { agentIdentity, TOKEN_VAR, NAME_VAR, EMAIL_VAR } from "./factory/github.ts";
 import { matchAuthorization, noMatch, type AuthorizationMatch } from "./factory/authorization.ts";
 import { startRun, approveRun, revokeRun, escalateRun, runStatus, listRuns } from "./factory/runs.ts";
 import { getRun } from "./factory/state.ts";
@@ -65,6 +66,9 @@ Commands:
   exclude <pattern>...          Add .gitignore-style patterns for the host's
                                 working files to the repository's
                                 .git/info/exclude (no run needed)
+  agent                         The AI agent's commit identity (name, email),
+                                from ${NAME_VAR}/${EMAIL_VAR}, else
+                                the account of ${TOKEN_VAR}
   authorization                 Does this worktree have a run whose active
                                 authorization lets skills act without asking?
                                 Prints matched or the reasons it isn't (exit 0
@@ -178,7 +182,7 @@ function need(value: string | undefined, what: string): string {
 type Outcome = { result: unknown; text: string; exitCode?: number };
 
 /** Commands that don't touch the manifest database, so hosts can run them anywhere. */
-const NO_DB_COMMANDS = new Set(["check", "schema", "prompt", "exclude"]);
+const NO_DB_COMMANDS = new Set(["check", "schema", "prompt", "exclude", "agent"]);
 
 function dispatchNoDb(command: string, p: Parsed): Outcome {
   const [arg] = p.positional;
@@ -212,6 +216,10 @@ function dispatchNoDb(command: string, p: Parsed): Outcome {
         `  in ${r.path}`,
       ];
       return { result: r, text: lines.join("\n") };
+    }
+    case "agent": {
+      const a = agentIdentity();
+      return { result: a, text: `${a.name} <${a.email}>${a.login ? `  (GitHub: ${a.login})` : ""}` };
     }
     case "schema": {
       if (arg === undefined) {

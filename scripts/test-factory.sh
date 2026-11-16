@@ -20,6 +20,8 @@ bad()  { fail=$((fail + 1)); echo "FAIL $1"; [[ -n "${2:-}" ]] && sed 's/^/    /
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 export ESCAPEMENT_MANIFEST_DIR="$tmp/data"
+# Never act as a real agent identity.
+unset ESCAPEMENT_AGENT_GH_TOKEN ESCAPEMENT_AGENT_NAME ESCAPEMENT_AGENT_EMAIL GH_TOKEN GITHUB_TOKEN
 
 # A project with no context-path, so artifacts go in .escapement/, and a
 # short command-timeout so exec's default timeout comes from settings.
@@ -48,6 +50,13 @@ f() { (cd "${CWD:-$project}" && bash "$wrapper" "$@"); }
 if f --check >/dev/null 2>&1; then ok; else bad "check-installed"; fi
 f >/dev/null 2>&1
 if [[ $? -eq 1 ]]; then ok; else bad "no-command-exits-1"; fi
+
+# agent: the commit identity from the environment; without one, blocked
+out="$(ESCAPEMENT_AGENT_NAME=Bot ESCAPEMENT_AGENT_EMAIL=bot@example.invalid f --json agent)"
+if [[ "$(jq -r '.ok and .result.name == "Bot" and .result.email == "bot@example.invalid" and .result.source == "env"' <<<"$out")" == true ]]; then ok; else bad "agent-env" "$out"; fi
+out="$(f --json agent)"
+status=$?
+if [[ $status -eq 2 && "$(jq -r '.error.code == "no_agent_token"' <<<"$out")" == true ]]; then ok; else bad "agent-no-token" "status=$status out=$out"; fi
 
 # authorization before any run: no database yet, and asking doesn't create one
 out="$(f --json authorization)"
