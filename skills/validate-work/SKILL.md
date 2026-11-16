@@ -53,7 +53,7 @@ To record a manual outcome, go to **Recording a Manual Check**. Otherwise route 
 | `implement` | no attempt is waiting | Phase 2 |
 | `resume` | an attempt's checks were interrupted | run `factory resume '{run_id}'`, then Phase 1 again (once) |
 | `review` | `latest_attempt` awaits review | Phase 3, with `latest_attempt.attempt` |
-| `pr`, `refresh_pr` | already validated | Phase 4, with `latest_attempt` |
+| `pr`, `refresh_pr`, `await_merge` | already validated | Phase 4, with `latest_attempt` |
 
 ### Phase 2: Validate
 
@@ -74,7 +74,7 @@ bash "$FACTORY" --json validate '{run_id}'
    bash "$FACTORY" --json review-input '{run_id}' {attempt} --issue-file '{artifact_dir}/issue.md'
    ```
    Note `.result.bundle_path`. Read the bundle and note `.verdict.write_to`.
-3. **The reviewer**, in a fresh context. Give it the bundle path and nothing else: no summary of the work and no opinion about it, so its judgment stays independent.
+3. **The reviewer**, in a fresh context. Give it the bundle path and nothing else: no summary of the work and no opinion about it, so its judgment stays independent. Run it in the foreground and wait until it has finished: a verdict file appearing doesn't mean the reviewer is done writing it.
    ```
    Agent:
      subagent_type: escapement:validation-reviewer
@@ -97,7 +97,8 @@ Read the report (`report_path`, or for a resumed run `{artifact_dir}/attempts/{n
    Report: {report_path}
    Run:    {run_state}
    {for fail or error: the blocking findings and the failed phase}
-   {for pending_manual: each manual evidence ID with its instructions, and how to record it}
+   {for pending_manual: each evidence item with `executed: "pending_manual"`, its instructions (from the contract), and how to record it}
+   {advisory findings, listed: they don't block}
 ```
 
 Return the outcome and report path to the caller. `pass` and `pending_manual` mean the run is `validated` and create-pr can open its PR. `fail`, `error` and `blocked` mean the run waits on a human. The fix loop, where the implementer retries on findings, comes in a later release.

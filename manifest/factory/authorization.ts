@@ -2,6 +2,7 @@ import type { Database } from "better-sqlite3";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { activeAuthorization, contractDigest, deadlinePassed } from "./runs.ts";
+import { currentReport } from "./attempts.ts";
 import type { RunRow, RunState } from "./state.ts";
 
 /**
@@ -37,7 +38,7 @@ export const AUTH_REASONS = [
 export type AuthReason = (typeof AUTH_REASONS)[number];
 
 /** What the host should do next for a matched run. Advisory; the runner still checks each command. */
-export type NextStep = "implement" | "resume" | "review" | "pr" | "refresh_pr";
+export type NextStep = "implement" | "resume" | "review" | "pr" | "refresh_pr" | "await_merge";
 
 export type LatestAttempt = { attempt: number; status: string; outcome: string | null; head_sha: string };
 
@@ -70,12 +71,35 @@ export function noMatch(reason: AuthReason, run: RunRow | null = null): Authoriz
   return { matched: false, reasons: [reason], run_id: run?.run_id ?? null, state: run?.state ?? null };
 }
 
-export function nextStep(state: RunState, latest: LatestAttempt | null): NextStep {
+/**
+ * `prCurrent`: the open PR already shows the current report (same attempt
+ * and revision as when `factory pr` last wrote it), so there's nothing to
+ * refresh and the run waits for the operator's merge.
+ */
+export function nextStep(state: RunState, latest: LatestAttempt | null, prCurrent = false): NextStep {
   if (latest && (latest.status === "awaiting_review" || latest.status === "finalizing")) return "review";
   if (latest && latest.status === "checks_running") return "resume";
   if (state === "validated") return "pr";
-  if (state === "pr_open") return "refresh_pr";
+  if (state === "pr_open") return prCurrent ? "await_merge" : "refresh_pr";
   return "implement";
+}
+
+/** Whether the run's PR was last written from its current report. */
+function prShowsCurrentReport(db: Database, run: RunRow): boolean {
+  const last = db
+    .prepare(
+      "SELECT detail_json FROM factory_events WHERE run_id = ? AND kind = 'state_change' AND json_extract(detail_json, '$.entity') = 'pr' ORDER BY id DESC LIMIT 1",
+    )
+    .get(run.run_id) as { detail_json: string } | undefined;
+  if (!last) return false;
+  const written = JSON.parse(last.detail_json) as { attempt?: number; report_revision?: number };
+  let current;
+  try {
+    current = currentReport(db, run);
+  } catch {
+    return false;
+  }
+  return current !== null && written.attempt === current.attempt && written.report_revision === current.revision;
 }
 
 export function matchAuthorization(
@@ -130,6 +154,6 @@ export function matchAuthorization(
     issue_number: run.issue_number,
     pr_number: run.pr_number,
     latest_attempt: latest,
-    next: nextStep(run.state, latest),
+    next: nextStep(run.state, latest, run.state === "pr_open" && prShowsCurrentReport(db, run)),
   };
 }

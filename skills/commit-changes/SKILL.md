@@ -97,6 +97,8 @@ Execute these in parallel for efficiency:
 
 ### Phase 3: Craft Commit Message
 
+When the project's CLAUDE.md defines its own commit format, use that format instead of the default below; its module emojis and scopes come from there too.
+
 **Format:**
 ```
 {module emoji}{change type emoji} {type}({scope}): {description}

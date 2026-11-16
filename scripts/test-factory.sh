@@ -65,6 +65,15 @@ if [[ $status -eq 0 && "$(jq -r '.ok and (.result.matched | not) and .result.rea
 out="$(CWD="$other" f --json authorization)"
 if [[ "$(jq -r '.result.reasons == ["not_a_repo"]' <<<"$out")" == true ]]; then ok; else bad "authorization-not-a-repo" "$out"; fi
 
+# without a database, only start creates one: other commands answer "no such run"
+out="$(f --json exec 'x#1-r1' -- true)"
+status=$?
+if [[ $status -eq 1 && "$(jq -r '.error.code' <<<"$out")" == no_such_run && ! -e "$tmp/data" ]]; then ok; else bad "no-database-exec" "status=$status out=$out"; fi
+out="$(f --json status)"
+if [[ "$(jq -r '.ok and .result.runs == []' <<<"$out")" == true && ! -e "$tmp/data" ]]; then ok; else bad "no-database-status" "$out"; fi
+f --json archive 'x#1-r1' --path /tmp/nowhere >/dev/null
+if [[ ! -e "$tmp/data" ]]; then ok; else bad "no-database-archive-creates-nothing"; fi
+
 # start --json: one JSON object on stdout
 out="$(f --json start '#5')"
 if [[ "$(jq -r '.ok and .result.run_id == "#5-r1" and .result.state == "planned"' <<<"$out")" == true ]]; then ok; else bad "start-json" "$out"; fi
@@ -238,6 +247,8 @@ bundle="$(jq -r .result.bundle_path <<<"$out")"
 if [[ $status -eq 0 && -f "$bundle" && "$(jq -r '.ok and .result.required.evidence == 1' <<<"$out")" == true ]]; then ok; else bad "review-input-json" "status=$status out=$out"; fi
 if [[ "$(jq -r '.issue.path' "$bundle")" != null && -f "$(jq -r .diff "$bundle")" && -f "$(jq -r .reviewer_prompt "$bundle")" ]]; then ok; else bad "review-input-bundle" "$(cat "$bundle")"; fi
 if [[ -z "$(git -C "$vproject" status --porcelain)" ]]; then ok; else bad "review-input-tree-clean" "$(git -C "$vproject" status --porcelain)"; fi
+# the bundle's commands name the database, so they work from a shell without ESCAPEMENT_MANIFEST_DIR
+if [[ "$(jq -r '.runner.exec' "$bundle")" == *"--data-dir"*"$tmp/data"*" exec "* && "$(jq -r '.verdict.record' "$bundle")" == *"--data-dir"*"$tmp/data"*" record-review "* ]]; then ok; else bad "review-input-commands-name-db" "$(jq -c '{exec: .runner.exec, record: .verdict.record}' "$bundle")"; fi
 
 # a verdict missing its evidence judgment is blocked; the attempt still awaits review
 jq '{version: 1, source_digest: .source.digest, evidence: [], sensitive_paths: [], modified_assertions: [], findings: []}' "$bundle" > "$tmp/incomplete.json"
@@ -308,7 +319,7 @@ if [[ "$(cut -f1 "$tmp/prs.json.log" | sort -u)" == agent-token ]]; then ok; els
 out="$(ghf --json pr '#9-r1')"
 if [[ "$(jq -r '.result.action == "updated" and .result.pr_number == 1' <<<"$out")" == true && "$(jq length "$tmp/prs.json")" == 1 ]]; then ok; else bad "pr-idempotent" "$out"; fi
 out="$(CWD="$vproject" f --json authorization)"
-if [[ "$(jq -r '.result.matched and .result.state == "pr_open" and .result.next == "refresh_pr" and .result.pr_number == 1' <<<"$out")" == true ]]; then ok; else bad "pr-authorization-next" "$out"; fi
+if [[ "$(jq -r '.result.matched and .result.state == "pr_open" and .result.next == "await_merge" and .result.pr_number == 1' <<<"$out")" == true ]]; then ok; else bad "pr-authorization-next" "$out"; fi
 
 # record-manual: this report has no manual evidence, so nothing awaits a human (exit 2)
 out="$(CWD="$vproject" f --json record-manual '#9-r1' AC-1.e1 pass --note 'looked')"

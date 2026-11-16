@@ -20,7 +20,7 @@ import { checkReadiness } from "./factory/readiness.ts";
 import { SCHEMA_NAMES, schemaPath, isSchemaName } from "./factory/schemas.ts";
 import { PROMPT_NAMES, promptPath, isPromptName } from "./factory/prompts.ts";
 import { readFileSync, existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { resolve, dirname } from "node:path";
 
 /**
  * The factory runner CLI (docs/FACTORY_CLI.md). Hosts call it through
@@ -225,6 +225,24 @@ const GUARD_SYNC_COMMANDS = new Set([
   "resume",
 ]);
 
+/** Every command that uses the manifest database. */
+const KNOWN_DB_COMMANDS = new Set([
+  "start",
+  "approve",
+  "exec",
+  "validate",
+  "review-input",
+  "record-review",
+  "status",
+  "resume",
+  "revoke",
+  "escalate",
+  "authorization",
+  "pr",
+  "record-manual",
+  "archive",
+]);
+
 /** Commands that don't touch the manifest database, so hosts can run them anywhere. */
 const NO_DB_COMMANDS = new Set(["check", "schema", "prompt", "exclude", "agent"]);
 
@@ -406,6 +424,7 @@ async function dispatch(db: Database, command: string, p: Parsed, json: boolean)
         owner,
         lockWaitMs: duration(db, p, "--lock-timeout", runId, (s) => s.lockTimeoutMs),
         issueFile: issueFile === undefined ? undefined : resolve(issueFile),
+        dataDir: dirname(resolveDbPath({ dataDir: str(p, "--data-dir") })),
       });
       const n = r.required;
       return {
@@ -542,6 +561,20 @@ async function dispatch(db: Database, command: string, p: Parsed, json: boolean)
   }
 }
 
+/** A command other than start when the manifest database doesn't exist yet. */
+function withoutDatabase(command: string, p: Parsed): Outcome {
+  const where = resolveDbPath({ dataDir: str(p, "--data-dir") });
+  if (command === "authorization") {
+    const r = authorizationFor(null, str(p, "--project-root"));
+    return { result: r, text: describeMatch(r) };
+  }
+  if (command === "status" && p.positional.length === 0) return { result: { runs: [] }, text: "No open runs." };
+  if (!KNOWN_DB_COMMANDS.has(command)) throw new FactoryError("usage", `unknown command ${command}`);
+  const runId = p.positional[0];
+  if (!runId) throw new FactoryError("usage", "missing run_id");
+  throw new FactoryError("no_such_run", `no run ${runId} (no factory database at ${where})`);
+}
+
 async function main(argv: string[]): Promise<number> {
   let parsed: Parsed;
   const sep = argv.indexOf("--");
@@ -577,10 +610,10 @@ async function main(argv: string[]): Promise<number> {
     let out: Outcome;
     if (NO_DB_COMMANDS.has(command)) {
       out = dispatchNoDb(command, parsed);
-    } else if (command === "authorization" && !existsSync(resolveDbPath({ dataDir: str(parsed, "--data-dir") }))) {
-      // Opening the manifest would create it; no database means no run.
-      const r = authorizationFor(null, str(parsed, "--project-root"));
-      out = { result: r, text: describeMatch(r) };
+    } else if (command !== "start" && !existsSync(resolveDbPath({ dataDir: str(parsed, "--data-dir") }))) {
+      // Opening the manifest would create it. Only start creates runs, so
+      // without a database there is no run: answer that, and create nothing.
+      out = withoutDatabase(command, parsed);
     } else {
       db = initManifest({ dataDir: str(parsed, "--data-dir") });
       db.pragma("busy_timeout = 10000");

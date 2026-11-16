@@ -103,6 +103,7 @@ bash "$FACTORY" --check && bash "$FACTORY" --json authorization
 | `implement` | work through the unchecked tasks, then validate |
 | `resume`, `review` | validate (validate-work picks up where the attempt stopped) |
 | `pr`, `refresh_pr` | open or refresh the PR (create-pr) |
+| `await_merge` | nothing: the PR is open and shows the current report. Report its number and stop |
 
 ### Phase 1: Validate Setup
 
@@ -123,7 +124,7 @@ bash "$FACTORY" --check && bash "$FACTORY" --json authorization
          - "No, stay on current branch"
      ```
 
-4. **Resume Detection:**
+3. **Resume Detection:**
    - Check Work Log for previous session
    - Identify last task in progress
    - Offer to resume or start fresh
@@ -299,7 +300,7 @@ Throughout the session:
 
 ### Phase 5: Completion Check
 
-When all Implementation Tasks are complete (under an authorized run, run the quality checks through `factory exec`, then go on with the Authorized Path, step B):
+When all Implementation Tasks are complete (under an authorized run, skip running the checks here: validate-work runs the project's `static` and `verify` in step B, and its report decides. Go on with the Authorized Path, step B):
 
 1. **Quality Checks:**
    - Run through Quality Checks section of scratchpad
@@ -367,7 +368,7 @@ After the last task:
 
 ### C. Open the PR
 
-Invoke create-pr. It writes the title and description, and `factory pr` pushes the branch and opens the PR as the agent, with the validation report. On success, update the scratchpad's Work Log and notify (step E) with the PR URL. Merging is the operator's: never merge.
+Invoke create-pr. It writes the title and description, and `factory pr` pushes the branch and opens the PR as the agent, with the validation report. On success, tick the scratchpad's Quality Checks and the acceptance criteria the report shows as demonstrated (manual ones stay open until recorded), update the Work Log and notify (step E) with the PR URL. Merging is the operator's: never merge. Advisory findings don't block: list them in the summary. Don't change code after validation to address them, since that needs a new attempt.
 
 If `factory pr` fails, route on its code:
 - **`gh_failed`, `push_failed`:** possibly transient, and GitHub may have acted before the failure. Run the same `factory pr` command once more: it finds a PR an earlier call created instead of opening a second one. If it fails again, notify (step E) and stop *without* escalating; the run stays `validated`, and create-pr can be run again later.

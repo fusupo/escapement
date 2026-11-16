@@ -6,6 +6,7 @@ import { startRun, approveRun } from "./factory/runs.ts";
 import { getRun, transitionRun } from "./factory/state.ts";
 import { openPr } from "./factory/pr.ts";
 import { currentOwner } from "./factory/owner.ts";
+import { matchAuthorization } from "./factory/authorization.ts";
 import { renderSection, withSection, cell, SECTION_BEGIN, SECTION_END } from "./factory/report-section.ts";
 import { assert, cleanup, makeRepo, memDb, tempDir, sh, stubGh, contractFor } from "./factory/testkit.ts";
 
@@ -142,6 +143,13 @@ async function run() {
   assert(calls.every((c) => c.token === TOKEN) && calls.every((c) => !c.args.join(" ").includes(TOKEN)), "every gh call ran as the agent, token never in argv");
   assert(calls.slice(-2).map((c) => c.args[1]).join(",") === "list,create", "looked up first, then created");
 
+  const here = { worktreePath: a.root, repo: getRun(db, a.run.run_id).repo, branch: "42-x" };
+  let m = matchAuthorization(db, here);
+  assert(m.matched && m.next === "await_merge", "the PR shows the current report: next is await_merge");
+  const attemptDir = join(a.run.artifact_dir, "attempts", "1");
+  writeFileSync(join(attemptDir, "report.r2.json"), readFileSync(join(attemptDir, "report.json")));
+  m = matchAuthorization(db, here);
+  assert(m.matched && m.next === "refresh_pr", "a newer report revision: next is refresh_pr");
   r = await openPr(db, a.run.run_id, { ...o, narrative: "## Summary\nRewritten.\n" });
   let now = stub.state().prs;
   assert(r.action === "updated" && r.pr_number === 101 && now.length === 1, "again: the same PR is updated, none created");
@@ -149,6 +157,8 @@ async function run() {
   r = await openPr(db, a.run.run_id, o);
   now = stub.state().prs;
   assert(r.action === "updated" && now[0].body.startsWith("## Summary\nRewritten.") && count(now[0].body, SECTION_END) === 1, "without --body-file the PR's own narrative is kept");
+  m = matchAuthorization(db, here);
+  assert(r.report_revision === 2 && m.matched && m.next === "await_merge", "refreshed from revision 2: await_merge again");
 
   console.log("\nCrash between create and record (AC-3)\n");
   const b = setup(db, "acme/w#43", "43-y");
@@ -161,7 +171,7 @@ async function run() {
   stub.setState({ crashAfter: null });
   r = await openPr(db, b.run.run_id, { ...o, title: "feat: y (#43)" });
   const ys = stub.state().prs.filter((p) => p.headRefName === "43-y");
-  assert(r.action === "updated" && ys.length === 1 && r.pr_number === ys[0].number, "the rerun finds that PR and records it: no duplicate");
+  assert(r.action === "recovered" && ys.length === 1 && r.pr_number === ys[0].number, "the rerun finds that PR and records it (recovered): no duplicate");
   assert(getRun(db, b.run.run_id).state === "pr_open" && ys[0].body.includes("awaiting a human"), "pending manual checks open the PR and show as awaiting");
 
   console.log("\nConflicts\n");

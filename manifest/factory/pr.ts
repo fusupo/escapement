@@ -35,7 +35,8 @@ export type PrResult = {
   run_id: string;
   pr_number: number;
   url: string;
-  action: "created" | "updated";
+  /** created; updated (the recorded PR); recovered (an unrecorded PR an earlier, interrupted call created, now recorded). */
+  action: "created" | "updated" | "recovered";
   state: RunState;
   head_sha: string;
   attempt: number;
@@ -157,7 +158,7 @@ export async function openPr(
       number = Number(m[1]);
     }
 
-    const action = existing ? "updated" : "created";
+    const action = !existing ? "created" : run.pr_number === null ? "recovered" : "updated";
     const updated = tx(db, () => {
       db.prepare("UPDATE factory_runs SET pr_number = ? WHERE run_id = ?").run(number, runId);
       recordEvent(db, runId, "state_change", {

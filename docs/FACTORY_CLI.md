@@ -20,7 +20,7 @@ The working directory matters:
 
 ## Storage
 
-**Database.** The factory uses the shared per-user manifest database (`manifest.sh db-path`). It lives at `${XDG_DATA_HOME:-~/.local/share}/escapement/manifest.db`, or under `$ESCAPEMENT_MANIFEST_DIR`, or under `--data-dir`. Its tables come from schema migration 2:
+**Database.** The factory uses the shared per-user manifest database (`manifest.sh db-path`). Only `start` creates it. Every other command answers without creating it when it doesn't exist: `authorization` says `no_database`, `status` lists no runs, and a command naming a run fails with `no_such_run`. It lives at `${XDG_DATA_HOME:-~/.local/share}/escapement/manifest.db`, or under `$ESCAPEMENT_MANIFEST_DIR`, or under `--data-dir`. Its tables come from schema migration 2:
 - `factory_runs`
 - `factory_authorizations`
 - `factory_attempts`
@@ -251,7 +251,7 @@ Calling it again for the same attempt, for example when `resume` reports `reissu
 | `runner` | `{path, exec}`: `scripts/factory.sh`, and the shell-quoted prefix for any command the reviewer runs |
 | `reviewer_prompt` | Path of `prompts/factory/validation-reviewer.md` |
 
-The commands in `verdict.record` and `runner.exec` carry no global options. A host that uses `--data-dir` adds it.
+The commands in `verdict.record` and `runner.exec` carry `--data-dir` naming the database the bundle was written from, so they work from a shell whose environment lacks `ESCAPEMENT_MANIFEST_DIR`.
 
 **Required judgments** (`required`), computed the same way by `record-review`:
 - `evidence`: every contract evidence ID with its criterion, type, the draft's `executed` result, its selector, command or instructions, and the judgment it takes: `supports_criterion` for test and command evidence, `procedure_adequate` for manual evidence.
@@ -330,7 +330,8 @@ A matched answer carries the run, what the authorization allows (`authorizes`) a
 | `resume` | the latest attempt's checks are running, or crashed |
 | `review` | the latest attempt awaits review, or its finalization was interrupted |
 | `pr` | the run is `validated` |
-| `refresh_pr` | the run is `pr_open` |
+| `refresh_pr` | the run is `pr_open`, and its report changed since `pr` last wrote the description (a manual outcome resolved it) |
+| `await_merge` | the run is `pr_open` and the PR shows the current report: nothing to do until the operator merges |
 
 The runner still checks every command on its own; `next` only tells a host where to pick up.
 
@@ -368,7 +369,7 @@ Everything the factory does on GitHub runs as the AI agent's GitHub account, so 
 
 **The description** is the host's narrative (`--body-file`; on update without it, the PR's current description) plus the runner's report section, between `<!-- escapement:factory-report:begin -->` and `<!-- escapement:factory-report:end -->`. Updates replace only the section. It shows the outcome, the run and attempt (and report revision), the actual and proposed tier with reasons, what was validated (the branch, not the merge result), the contract digest, a table of every criterion's evidence with its result and judgment, manual checks (pending or recorded), findings and flags. Text from reports is escaped, so it can't break the table or forge a marker. The final description is kept at `{artifact_dir}/pr/body.md`.
 
-**Crashes.** Running `pr` again after a crash at any step is safe: the lookup finds a PR an earlier call created, and the same number is recorded once. Recovery is "run the command again"; `resume` doesn't touch PRs.
+**Crashes.** Running `pr` again after a crash at any step is safe: the lookup finds a PR an earlier call created, and the same number is recorded once. Its `action` is then `recovered`. Recovery is "run the command again"; `resume` doesn't touch PRs.
 
 Updating an existing PR is bookkeeping: it works past the deadline, and for an `escalated` run with a PR, so its description stops showing a stale report.
 
@@ -460,7 +461,7 @@ With `--json`, every command prints exactly one JSON object on stdout.
 - **escalate:** `{run, changed}`
 - **authorization:** `{matched: false, reasons, run_id, state}`, or `{matched: true, reasons: [], run_id, state, repo, branch, target_ref, worktree_path, artifact_dir, contract_path, contract_digest, authorizes, approved_at, deadline_at, issue_number, pr_number, latest_attempt: {attempt, status, outcome, head_sha} | null, next}`
 - **agent:** `{name, email, login, source}`
-- **pr:** `{run_id, pr_number, url, action, state, head_sha, attempt, report_revision, outcome, body_path}`; `action` is `created` or `updated`
+- **pr:** `{run_id, pr_number, url, action, state, head_sha, attempt, report_revision, outcome, body_path}`; `action` is `created`, `updated` (the recorded PR) or `recovered` (an unrecorded PR an earlier, interrupted call created)
 - **record-manual:** `{run_id, attempt, evidence_id, outcome, noop, recorded: [{evidence_id, outcome}], pending, resolved, report_path, report_revision, run_state, pr_number, refresh_pr}`; `resolved` is null until the report resolves
 - **archive:** `{run_id, archive_path, changed, closed, pr_state, state}`; `closed` is `merged`, `abandoned` or null
 - **exclude:** `{path, added, present}`: the exclude file, the patterns appended, and those already there
