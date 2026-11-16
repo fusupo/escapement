@@ -489,13 +489,18 @@ fusupo
 
 ## Version
 
-**Current:** 3.13.1
+**Current:** 4.0.0
 
 **Changelog:**
-- 3.13.1 (2026-11-16): Fixes from the factory's first-release acceptance run (#65). The factory's first release is complete
-  - **`factory pr` updates PRs through the REST API.** `gh pr edit` fails in repositories where classic Projects are deprecated, so a PR created before a crash couldn't be recorded, and a PR couldn't be refreshed after a manual check
-  - **`factory check` works on a detached HEAD**, so setup-work offers a factory run in a `git worktree add --detach` worktree
-  - **The PR's report section escapes `<` and `>`**, so GitHub no longer drops text such as an email address in a manual note
+- 4.0.0 (2026-11-16): The factory's first release is complete, and Escapement acts on GitHub as the AI agent (#65, #80)
+  - **Factory first release.** An issue goes from `setup-work` to a PR with a validation report, and the operator touches only plan approval and merge. Interrupted runs resume correctly. The acceptance test (#65) ran a real Escapement issue end to end with every crash boundary interrupted; the findings are fixed below
+  - **Behaviour change: skills act on GitHub as the agent (#80).** When an agent identity is configured (`ESCAPEMENT_AGENT_GH_TOKEN` in `~/.config/escapement/agent.env`, or exported), plain `commit-changes` commits with the agent's name and email, and plain `create-pr` pushes with the agent's token. Before, they used your own git identity and credentials. Without an agent identity, or off github.com, they fall back to yours and say so
+  - **Skills use the GitHub MCP tools only (#80).** No skill calls the `gh` CLI any more, which is logged in as you. create-pr, manifest-sync, validate-work, create-issue, review-pr, setup-work and manifest-dispatch use the MCP server's current tools. `manifest/test-skills-github.ts` keeps it that way
+  - **New `factory.sh push` (#80)** pushes the current branch as the agent, outside a run. It's never forced, and it never pushes the base branch, origin's default branch, `main` or `master`. It sets the branch's upstream
+  - **The agent token goes to github.com only (#80).** `factory push` and the run's own push refuse any other origin host (`not_github`) before the token is used
+  - **`factory pr` updates PRs through the REST API (#65).** `gh pr edit` fails in repositories where classic Projects are deprecated, so a PR created before a crash couldn't be recorded, and a PR couldn't be refreshed after a manual check
+  - **`factory check` works on a detached HEAD (#65)**, so setup-work offers a factory run in a `git worktree add --detach` worktree
+  - **The PR's report section escapes `<` and `>` (#65)**, so GitHub no longer drops text such as an email address in a manual note
 - 3.13.0 (2026-11-16): Crash recovery for the factory, and Escapement as a factory project (#65)
   - **Crash tests:** `ESCAPEMENT_FACTORY_FAULT` (testing only) makes the runner die at a named point: during checks, after checks, after the review is issued, while the review is recorded, after the PR is created. `scripts/test-factory.sh` crashes it at each one and checks that the run resumes
   - **A crashed check no longer keeps running:** its process group is killed by `factory resume`, or by the next command that takes over the dead runner's lock
