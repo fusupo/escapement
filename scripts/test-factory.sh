@@ -23,6 +23,8 @@ export ESCAPEMENT_MANIFEST_DIR="$tmp/data"
 # Never act as a real agent identity, from the environment or ~/.config/escapement/agent.env.
 unset ESCAPEMENT_AGENT_GH_TOKEN ESCAPEMENT_AGENT_NAME ESCAPEMENT_AGENT_EMAIL GH_TOKEN GITHUB_TOKEN
 export XDG_CONFIG_HOME="$tmp/config"
+# Faults are armed per command below, never inherited from a factory run.
+unset ESCAPEMENT_FACTORY_FAULT ESCAPEMENT_FACTORY_FAULT_DIR
 
 # A project with no context-path, so artifacts go in .escapement/, and a
 # short command-timeout so exec's default timeout comes from settings.

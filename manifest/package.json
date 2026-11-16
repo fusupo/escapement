@@ -36,7 +36,8 @@
     "test:factory-manual": "node --import tsx test-factory-manual.ts",
     "test:factory-archive": "node --import tsx test-factory-archive.ts",
     "test:factory-guard": "node --import tsx test-factory-guard.ts",
-    "test:factory-fault": "node --import tsx test-factory-fault.ts"
+    "test:factory-fault": "node --import tsx test-factory-fault.ts",
+    "test:run-suites": "node --import tsx test-run-suites.ts"
   },
   "dependencies": {
     "ajv": "^8.17.1",
