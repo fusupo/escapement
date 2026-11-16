@@ -38,7 +38,7 @@ FACTORY="${CLAUDE_PLUGIN_ROOT}/scripts/factory.sh"
 bash "$FACTORY" --check && bash "$FACTORY" --json authorization
 ```
 
-- **`--check` fails, `.result.matched` is false, or `.result.authorizes` lacks `commit`:** not authorized. Skip this phase; everything below runs exactly as written, with every confirmation.
+- **`--check` fails, `.result.matched` is false, or `.result.authorizes` lacks `commit`:** not authorized. Go to Phase 0.5 for the commit identity; everything else below runs exactly as written, with every confirmation.
 - **Matched, with `commit`:** authorized. Note `.result.run_id`, then get the agent's commit identity:
   ```bash
   bash "$FACTORY" --json agent
@@ -56,6 +56,22 @@ bash "$FACTORY" --check && bash "$FACTORY" --json authorization
   )"
   ```
 - **Never** push (`factory pr` does that), amend or rewrite a commit already made, or commit a file that doesn't belong to the work: an untracked file you didn't create, or anything that looks like a secret. Leave it, report it and stop; the caller (do-work) escalates the run.
+
+### Phase 0.5: Commit Identity (plain path)
+
+Outside an authorized run, commits still carry the AI agent's identity when one is configured, so Escapement's work is visibly the agent's, not the operator's (docs/FACTORY_DESIGN.md §4.8). Ask the runner for it:
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/factory.sh" --check && bash "${CLAUDE_PLUGIN_ROOT}/scripts/factory.sh" --json agent
+```
+
+Never read or print `~/.config/escapement/agent.env` yourself.
+
+- **`.ok`:** note `.result.name` and `.result.email` as written. Phase 4 shows them as the author, and Phase 5 commits with them.
+- **`.error.code` is `no_agent_token`:** no agent identity is configured. Commit with the operator's own git identity, as before, and say so in one line: `Committing as the operator: no agent identity configured (put ESCAPEMENT_AGENT_GH_TOKEN, or ESCAPEMENT_AGENT_NAME and ESCAPEMENT_AGENT_EMAIL, in ~/.config/escapement/agent.env, chmod 600, or export it)`.
+- **`--check` fails:** the factory runner's dependencies aren't installed, so the identity can't be read, whether or not one is configured. Commit with the operator's own git identity and say so in one line: `Committing as the operator: the factory runner isn't installed, so the agent identity can't be read (run: npm ci --prefix {plugin root}/manifest)`.
+- **`agent_env_permissions`:** an identity is configured but the file is readable by others. Stop without committing and say what the message says: the file needs `chmod 600`. Don't fall back.
+- **Any other error** (such as `gh_failed` while looking up the token's account): report it and stop without committing. Never fall back to the operator for a configured identity that failed.
 
 ### Phase 1: Gather Context (Parallel)
 
@@ -165,7 +181,7 @@ AskUserQuestion:
       description: "Don't commit right now"
 ```
 
-Display the proposed commit message clearly before asking.
+Display the proposed commit message clearly before asking, with the author it will carry: the agent's `{name} <{email}>`, or "the operator (no agent identity configured)".
 
 ### Phase 5: Execute Commit
 
@@ -174,15 +190,16 @@ Display the proposed commit message clearly before asking.
    git add <files>
    ```
 
-2. **Create commit** using HEREDOC for proper formatting:
+2. **Create commit** using HEREDOC for proper formatting. With the agent identity from Phase 0.5, commit as the agent, author and committer both:
    ```bash
-   git commit -m "$(cat <<'EOF'
+   git -c user.name="{name}" -c user.email="{email}" commit -m "$(cat <<'EOF'
    {module emoji}{type emoji} {type}({scope}): {description}
 
    {body if present}
    EOF
    )"
    ```
+   Without one (`no_agent_token`), the same command without the two `-c` options, so the operator's git identity applies.
 
    **IMPORTANT:** Do NOT add Claude attribution (e.g., "Co-Authored-By: Claude") to commit messages.
 
@@ -260,7 +277,7 @@ If in detached HEAD state:
 - User directly via natural language
 
 **Calls:**
-- `scripts/factory.sh` `authorization` and `agent` (Phase 0; docs/FACTORY_CLI.md)
+- `scripts/factory.sh` `authorization` (Phase 0) and `agent` (Phases 0 and 0.5; docs/FACTORY_CLI.md)
 
 **Works with:**
 - Project CLAUDE.md - Module emojis and conventions
@@ -303,9 +320,10 @@ This skill would then use 🌐 for api changes, 🎨 for frontend changes, etc.
 
 ---
 
-**Version:** 1.1.0
+**Version:** 1.2.0
 **Last Updated:** 2026-11-16
 **Maintained By:** Escapement
 **Converted From:** commands/commit.md
 **Changelog:**
+- v1.2.0: Plain path commits as the agent too, with the `factory agent` identity; as the operator only when no identity is configured, with a notice (#80)
 - v1.1.0: Under a matching active factory authorization, commit without confirmations, as the AI agent's identity (#64)

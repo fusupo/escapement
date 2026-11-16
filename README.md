@@ -109,6 +109,24 @@ Operator involvement is typically focused on decision-making and judgment rather
 
 ![Review phase subdiagram](./workflow_review.png)
 
+### GitHub as the AI Agent
+
+Escapement keeps its automated work visibly separate from yours: on GitHub, it acts as an AI agent account.
+
+- **Issues, PRs, comments and reviews** go through the GitHub MCP tools, so connect the GitHub MCP server with the agent account's credentials. Skills never use the `gh` CLI, which is logged in as you.
+- **Pushes** go through `factory push`, with the agent's token, which is only ever sent to github.com. In a project hosted elsewhere, pushes stay yours.
+- **Commits** carry the agent's name and email (`factory agent`).
+
+Configure the agent identity once, in `~/.config/escapement/agent.env` (`chmod 600`), or export the variables:
+
+```
+ESCAPEMENT_AGENT_GH_TOKEN=ghp_…              # the agent account's token
+ESCAPEMENT_AGENT_NAME=Escapement Agent       # optional commit name
+ESCAPEMENT_AGENT_EMAIL=agent@example.com     # optional commit email
+```
+
+Without it, `commit-changes` and `create-pr` commit and push as you, as before, and say so. An authorized factory run requires it. See [FACTORY_CLI.md](docs/FACTORY_CLI.md#github-and-the-agent-identity).
+
 ### Archive (`archive-work`, hooks)
 
 After merge, the scratchpad is archived.
@@ -152,8 +170,8 @@ Skills are invoked automatically by Claude Code when relevant, or you can refere
 | Skill            | Triggers                            | Purpose                                        |
 | ---------------- | ----------------------------------- | ---------------------------------------------- |
 | `setup-work`     | "setup issue #X", "start issue #X"  | Fetch issue, create scratchpad, prepare branch; on projects set up for the factory, also draft a validation contract and offer to authorize a run |
-| `commit-changes` | "commit", "commit these changes"    | Smart commits with conventional format; under an authorized factory run, without asking, as the AI agent |
-| `create-pr`      | "create a PR", "open pull request"  | Context-aware PR creation; under an authorized run, through `factory pr` with the validation report |
+| `commit-changes` | "commit", "commit these changes"    | Smart commits with conventional format, as the AI agent when one is configured; under an authorized factory run, without asking |
+| `create-pr`      | "create a PR", "open pull request"  | Context-aware PR creation as the AI agent (`factory push`, GitHub MCP tools); under an authorized run, through `factory pr` with the validation report |
 | `review-pr`      | "review PR #X", "check this PR"     | Roadmap-aware code review                      |
 | `do-work`        | "start working", "continue work"    | Execute tasks from scratchpad; under an authorized run, from approved plan to open PR with no questions |
 | `validate-work`  | "validate this work", "record the manual check" | Validate a factory run: checks, fresh-context reviewer, recorded verdict; manual outcomes |

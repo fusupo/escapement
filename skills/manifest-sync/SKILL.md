@@ -175,15 +175,17 @@ Detect actual files from one of these sources (in priority order):
 **Option A — Merged PR:**
 If a PR number is known (from argument or branch):
 
-```bash
-# Find merged PR for this branch
-gh pr list --head "{branch_name}" --state merged --json number,mergedAt --limit 1
+Use the GitHub MCP tools (they act as the agent account):
+
+```
+# Find the merged PR for this branch: closed PRs from the branch, keep the one with merged_at set
+mcp__github__list_pull_requests(owner, repo, head: "{owner}:{branch_name}", state: "closed")
 ```
 
 If found:
-```bash
-# Get files changed in the PR
-gh pr diff {pr_number} --name-only
+```
+# Files changed in the PR (paginate with page/perPage when it changed more than one page)
+mcp__github__pull_request_read(method: "get_files", owner, repo, pullNumber: {pr_number})
 ```
 
 **Option B — Git diff against base branch:**
@@ -526,7 +528,7 @@ If `manifest-cli.ts query` fails:
 - `manifest-cli.ts query` — apply SQL updates
 - `manifest-cli.ts frontier` — recompute dispatchable items
 - `manifest-cli.ts status` — overall manifest state
-- `gh pr` — read PR file changes
+- GitHub MCP tools `list_pull_requests` and `pull_request_read` — read PR file changes
 
 **Invoked after:**
 - `archive-work` — once work is archived, sync the manifest
@@ -539,10 +541,11 @@ If `manifest-cli.ts query` fails:
 
 ---
 
-**Version:** 1.0.3
-**Last Updated:** 2026-11-15
+**Version:** 1.0.4
+**Last Updated:** 2026-11-16
 **Maintained By:** Escapement
 **Changelog:**
+- v1.0.4: Read the merged PR and its files with the GitHub MCP tools instead of the GitHub CLI (#80)
 - v1.0.3: The manifest database is one per-user file shared by all projects, found with `manifest.sh db-path` instead of under context-path (#58)
 - v1.0.2: Run the manifest CLI through scripts/manifest.sh from the plugin root, so it works from any project directory (#67)
 - v1.0.1: Read context-path with scripts/get-context-path.sh instead of grep, which also matched documentation examples (#57)

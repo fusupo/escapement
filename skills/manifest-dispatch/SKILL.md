@@ -2,6 +2,7 @@
 name: manifest-dispatch
 description: Dispatch parallel work from a manifest plan. Creates worktrees, branches, constraint blocks, and launches agent sessions. Invoke when user says "dispatch work", "launch parallel agents", "dispatch the plan", "run the dispatch", or "dispatch the frontier".
 tools:
+  - mcp__github__*
   - Bash:git *
   - Bash:node *
   - Bash:bash *
@@ -212,7 +213,7 @@ Generate scratchpads for all dispatched items in one pass, then present a single
 
 For each node, collect:
 - Issue number and title (from manifest work item)
-- Issue body (from GitHub via `mcp__github__get_issue` if available, or from manifest `meta`)
+- Issue body (from GitHub via `mcp__github__issue_read` with method `get`; from manifest `meta` only when the issue can't be fetched)
 - Predicted files (from manifest)
 - Dependencies (from manifest edges)
 
@@ -516,9 +517,10 @@ You can manually start work:
 
 ---
 
-**Version:** 1.0.2
-**Last Updated:** 2026-11-15
+**Version:** 1.0.3
+**Last Updated:** 2026-11-16
 **Maintained By:** Escapement
 **Changelog:**
+- v1.0.3: Fetch the issue body with the GitHub MCP tools (`issue_read`), now listed in its tools (#80)
 - v1.0.2: Run the manifest CLI through scripts/manifest.sh from the plugin root, so it works from any project directory (#67)
 - v1.0.1: Read context-path with scripts/get-context-path.sh instead of grep, which also matched documentation examples (#57)

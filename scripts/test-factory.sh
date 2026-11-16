@@ -72,6 +72,31 @@ out="$(f --json agent)"
 if [[ "$(jq -r '.result.name == "File Agent" and .result.email == "file@example.invalid"' <<<"$out")" == true ]]; then ok; else bad "agent-env-file" "$out"; fi
 rm "$tmp/config/escapement/agent.env"
 
+# push: the current branch as the agent, with no run and no database
+pushproj="$tmp/pushproj"
+git init -q --bare "$tmp/push-origin.git"
+(
+  mkdir -p "$pushproj" && cd "$pushproj" &&
+    git init -q -b 7-feature &&
+    git remote add origin "$tmp/push-origin.git" &&
+    echo test > README.md && git add -A &&
+    git -c user.name=t -c user.email=t@example.invalid commit -q -m init
+)
+out="$(CWD="$pushproj" f --json push)"
+status=$?
+if [[ $status -eq 2 && "$(jq -r '.error.code' <<<"$out")" == no_agent_token && -z "$(git -C "$tmp/push-origin.git" for-each-ref)" ]]; then ok; else bad "push-no-token" "status=$status out=$out"; fi
+out="$(CWD="$pushproj" ESCAPEMENT_AGENT_GH_TOKEN=ghp_fake f --json push)"
+status=$?
+if [[ $status -eq 0 && "$(jq -r '.ok and .result.branch == "7-feature"' <<<"$out")" == true && "$out" != *ghp_fake* \
+  && "$(git -C "$tmp/push-origin.git" rev-parse refs/heads/7-feature)" == "$(git -C "$pushproj" rev-parse HEAD)" && ! -e "$tmp/data" ]]; then ok; else bad "push-branch" "status=$status out=$out"; fi
+git -C "$pushproj" checkout -q -b main
+out="$(CWD="$pushproj" ESCAPEMENT_AGENT_GH_TOKEN=ghp_fake f --json push)"
+status=$?
+if [[ $status -eq 2 && "$(jq -r '.error.code' <<<"$out")" == push_base_branch ]]; then ok; else bad "push-main-refused" "status=$status out=$out"; fi
+out="$(CWD="$pushproj" ESCAPEMENT_AGENT_GH_TOKEN=ghp_fake f --json push 7-feature)"
+status=$?
+if [[ $status -eq 1 && "$(jq -r '.error.code' <<<"$out")" == usage ]]; then ok; else bad "push-no-args" "status=$status out=$out"; fi
+
 # authorization before any run: no database yet, and asking doesn't create one
 out="$(f --json authorization)"
 status=$?

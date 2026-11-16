@@ -1,6 +1,6 @@
 import { realpathSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { join } from "node:path";
-import { agentToken, agentIdentity, gh, remoteOf, pushBranch, TOKEN_VAR, agentEnvPath, parseAgentEnv } from "./factory/github.ts";
+import { agentToken, agentIdentity, gh, remoteOf, pushBranch, pushAsAgent, TOKEN_VAR, agentEnvPath, parseAgentEnv } from "./factory/github.ts";
 import { assert, throws, cleanup, makeRepo, tempDir, sh, stubGh } from "./factory/testkit.ts";
 
 const TOKEN = "ghp_test_agent_token_123";
@@ -107,6 +107,101 @@ async function run() {
   sh("git", ["config", `url.${gbare}.insteadOf`, "https://github.com/acme/w.git"], repo);
   pushBranch({ worktree: repo, remote: remoteOf(repo, "acme/w"), repo: "acme/w", branch: "42-x", token: TOKEN });
   assert(sh("git", ["rev-parse", "refs/heads/42-x"], gbare) === sh("git", ["rev-parse", "HEAD"], repo), "a GitHub remote is pushed over https as the agent");
+
+  console.log("\nfactory push (no run)\n");
+  {
+    const agentEnv = { XDG_CONFIG_HOME: tempDir(), [TOKEN_VAR]: TOKEN };
+    const noToken = { XDG_CONFIG_HOME: tempDir() };
+    const settings = "## Escapement Settings\n\n- **base-branch**: develop\n";
+    const w = realpathSync(makeRepo({ branch: "80-work", origin: "git@github.com:acme/p.git", claudeMd: settings }));
+    const pbare = join(tempDir(), "p.git");
+    sh("git", ["init", "-q", "--bare", pbare], tempDir());
+    sh("git", ["config", `url.${pbare}.insteadOf`, "https://github.com/acme/p.git"], w);
+    sh("git", ["branch", "other"], w);
+    const pushed = () => sh("git", ["for-each-ref", "--format=%(refname)", "refs/heads"], pbare);
+    const fails = (fn: () => unknown, code: string): boolean => {
+      try {
+        fn();
+        return false;
+      } catch (err) {
+        return String((err as Error).message).includes(code) || (err as { code?: string }).code === code;
+      }
+    };
+
+    const before = pushed();
+    const tokenless = fails(() => pushAsAgent({ worktree: w, env: noToken }), "no_agent_token");
+    assert(tokenless && before === "" && pushed() === "", "factory push without an agent token is no_agent_token and pushes nothing");
+
+    const res = pushAsAgent({ worktree: w, env: agentEnv });
+    const head = sh("git", ["rev-parse", "HEAD"], w);
+    assert(
+      sh("git", ["rev-parse", "refs/remotes/origin/80-work"], w) === head &&
+        sh("git", ["rev-parse", "--abbrev-ref", "80-work@{upstream}"], w) === "origin/80-work" &&
+        sh("git", ["rev-list", "--count", "@{upstream}..HEAD"], w) === "0",
+      "factory push records the pushed branch as origin's and sets it as upstream",
+    );
+    const first =
+      res.branch === "80-work" &&
+      res.sha === head &&
+      res.repo === "acme/p" &&
+      res.remote === "https://github.com/acme/p.git" &&
+      !JSON.stringify(res).includes(TOKEN) &&
+      pushed() === "refs/heads/80-work" &&
+      sh("git", ["rev-parse", "refs/heads/80-work"], pbare) === head;
+    sh("git", ["commit", "-q", "--amend", "-m", "rewritten"], w);
+    const forced = fails(() => pushAsAgent({ worktree: w, env: agentEnv }), "push_failed");
+    const unchanged = sh("git", ["rev-parse", "refs/heads/80-work"], pbare) === head;
+    assert(first && forced && unchanged, "factory push pushes the current branch as the agent and never forces");
+
+    const refused = ["develop", "main", "master"].map((b) => {
+      sh("git", ["checkout", "-q", "-b", b], w);
+      const r = fails(() => pushAsAgent({ worktree: w, env: agentEnv }), "push_base_branch");
+      sh("git", ["checkout", "-q", "80-work"], w);
+      return r;
+    });
+    assert(refused.every(Boolean) && pushed() === "refs/heads/80-work", "factory push refuses the base branch, main and master");
+
+    sh("git", ["checkout", "-q", "--detach"], w);
+    assert(fails(() => pushAsAgent({ worktree: w, env: agentEnv }), "detached_head"), "factory push refuses a detached HEAD");
+    sh("git", ["checkout", "-q", "80-work"], w);
+
+    sh("git", ["update-ref", "refs/remotes/origin/trunk", "HEAD"], w);
+    sh("git", ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk"], w);
+    sh("git", ["checkout", "-q", "-b", "trunk"], w);
+    const trunkRefused = fails(() => pushAsAgent({ worktree: w, env: agentEnv }), "push_base_branch");
+    sh("git", ["checkout", "-q", "80-work"], w);
+    assert(trunkRefused && pushed() === "refs/heads/80-work", "factory push refuses origin's default branch");
+
+    // Off github.com the token is never offered. insteadOf would carry each
+    // push to a local bare repo, so only the refusal keeps them empty.
+    const offHosts = [
+      { origin: "git@gitlab.com:acme/p.git", url: "https://gitlab.com/acme/p.git" },
+      { origin: "https://ghe.example.com/acme/p.git", url: "https://ghe.example.com/acme/p.git" },
+      { origin: "ssh://git@git.internal.example:2222/acme/p.git", url: "https://git.internal.example/acme/p.git" },
+    ];
+    const offResults = offHosts.map(({ origin, url }) => {
+      const r = realpathSync(makeRepo({ branch: "80-work", origin }));
+      const ob = join(tempDir(), "off.git");
+      sh("git", ["init", "-q", "--bare", ob], tempDir());
+      sh("git", ["config", `url.${ob}.insteadOf`, url], r);
+      const withToken = fails(() => pushAsAgent({ worktree: r, env: agentEnv }), "not_github");
+      const withoutToken = fails(() => pushAsAgent({ worktree: r, env: noToken }), "not_github");
+      const empty = sh("git", ["for-each-ref"], ob) === "";
+      return { r, ob, url, ok: withToken && withoutToken && empty };
+    });
+    assert(offResults.every((x) => x.ok), "factory push never sends the agent token to a host that isn't github.com");
+
+    const off = offResults[0];
+    const runPushRefused = fails(
+      () => pushBranch({ worktree: off.r, remote: remoteOf(off.r, "acme/p"), repo: "acme/p", branch: "80-work", token: TOKEN }),
+      "not_github",
+    );
+    assert(runPushRefused && sh("git", ["for-each-ref"], off.ob) === "", "the run's push refuses a host that isn't github.com before using the token");
+
+    const plain = realpathSync(makeRepo({ branch: "develop", origin: "git@github.com:acme/q.git" }));
+    sh("git", ["update-ref", "refs/remotes/origin/develop", "HEAD"], plain);
+    assert(fails(() => pushAsAgent({ worktree: plain, env: agentEnv }), "push_base_branch"), "without base-branch, the default target branch is refused");
+  }
 
   cleanup();
   console.log("\nAll GitHub access tests passed.");
