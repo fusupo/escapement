@@ -37,7 +37,8 @@ export type CaseResult = { name: string; failure: string | null; detail: string 
 export type SuiteResult = { suite: Suite; exitCode: number | null; durationS: number; cases: CaseResult[] };
 
 const PASS_LINE = /^\s*(?:✓|OK:) (.+?)\s*$/;
-const THROWN = /^(.+?) \(((?:[A-Za-z]+)?Error\b.*)\)$/s;
+// The ` (SomeError: …)` throws() appends; a multi-line message leaves the ( unclosed on this line.
+const THROWN = /^(.+?) \(((?:[A-Za-z]+)?Error\b.*?)\)?$/;
 
 /** The suites under `root`, in run order. */
 export function discoverSuites(root: string): Suite[] {

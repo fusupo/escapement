@@ -28,6 +28,7 @@ function run() {
   const cases = casesFrom(ts, out, 0);
   assert(cases.length === 2 && cases[0].name === "it works" && cases.every((c) => c.failure === null), "each ✓ line is a passing case");
   assert(cases[1].name === "refuses junk" && /^FactoryError: run #1-r1/.test(cases[1].detail ?? ""), "the error throws() appends is moved out of the name");
+  assert(casesFrom(ts, "  ✓ rejects it (FactoryError: invalid settings in /tmp/x/CLAUDE.md:\n  max-attempts: bad)\n", 0)[0].name === "rejects it", "a multi-line error is moved out too");
   const failed = casesFrom(ts, `${out}Error: FAIL: the rerun finds that PR\n    at assert\n`, 1);
   assert(failed.at(-1)!.name === "suite failed" && /exit 1\nError: FAIL: the rerun finds that PR/.test(failed.at(-1)!.failure ?? ""), "a failing suite adds a failed case with its FAIL line");
   assert(casesFrom(ts, "nothing here\n", 0)[0].failure !== null, "a suite that exits 0 with no ✓ fails: it tested nothing");
