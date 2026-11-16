@@ -109,6 +109,15 @@ escapement/
 
 ## Development Commands
 
+### Running the Tests
+
+```bash
+bash scripts/run-tests.sh                        # every suite, one at a time (JUnit with --junit <path>)
+bash scripts/run-tests.sh scripts/test-factory.sh  # one suite
+```
+
+This is also Escapement's factory `verify` (see Escapement Settings). Never run suites in parallel. The runner's crash tests use `ESCAPEMENT_FACTORY_FAULT` (testing only, docs/FACTORY_CLI.md).
+
 ### Testing Plugin
 
 ```bash

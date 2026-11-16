@@ -1032,7 +1032,7 @@ const BUILD=[
  [6,"#62","Reviewer","validation-reviewer prompt and agent, bundle, record-review completeness and idempotency.","done"],
  [7,"#63","setup-work produces the contract","Readiness, tier, contract and authorization; factory exclude, settings-only check, manifest readiness.","done"],
  [8,"#64","Authorized path","do-work, commit-changes, create-pr, validate-work, archive-work; factory authorization, agent, escalate, pr, record-manual, archive; GitHub as the agent; exec guard on during runs.","done"],
- [9,"#65","Release acceptance test","A real issue end to end, interrupted on purpose during checks, between checks and review, during finalization, and between PR creation and recording.","next"]
+ [9,"#65","Release acceptance test","A real issue end to end, interrupted on purpose during checks, between checks and review, during finalization, and between PR creation and recording. Fault injection, crash tests at every boundary and their fixes are in; the acceptance run on #80 comes next.","next"]
 ];
 const ST={done:["s-pass","done"],next:["s-pend","next up"],open:["s-neutral","open"]};
 $("#buildList").innerHTML=BUILD.map(([n,iss,t,d,s])=>`<li><span class="no">${n}</span><div><span class="t"><a href="https://github.com/fusupo/escapement/issues/${iss.slice(1)}">${iss}</a> ${esc(t)}</span><div class="d">${esc(d)}</div>${n===1?`<span class="sub">Also fixed alongside: <a href="https://github.com/fusupo/escapement/issues/67">#67</a>, manifest skills run their CLI through a plugin-root wrapper.</span>`:""}</div><span class="state ${ST[s][0]}">${ST[s][1]}</span></li>`).join("")+

@@ -4,7 +4,7 @@ The factory runner is a small deterministic CLI that owns a run's state, locks, 
 
 The Escapement skills are one client of the runner. Other hosts, such as Escapement Studio, can call it as a subprocess and read its `--json` output. The runner never invokes a skill or an agent. It runs git and the commands you give it, and, for a run's push and PR, `gh` as the AI agent's GitHub identity (see [GitHub and the agent identity](#github-and-the-agent-identity)).
 
-First-release status: #59 provides `start`, `approve`, `exec`, `status`, `resume` and `revoke`. #60 adds contract validation, settings, `check` and `schema`. #61 adds `validate`. #62 adds `review-input`, `record-review` and `prompt`. #63 adds `exclude`, a settings-only `check`, and a `start` that refuses the target branch; `setup-work` drives `check`, `exclude`, `start` and `approve` (its factory path). #64 adds `authorization`, `agent`, `escalate`, `pr`, `record-manual` and `archive`, GitHub access as the agent, and the exec guard; `do-work`, `commit-changes`, `create-pr`, `validate-work` and `archive-work` drive them (the authorized path, FACTORY_DESIGN.md §6.1).
+First-release status: #59 provides `start`, `approve`, `exec`, `status`, `resume` and `revoke`. #60 adds contract validation, settings, `check` and `schema`. #61 adds `validate`. #62 adds `review-input`, `record-review` and `prompt`. #63 adds `exclude`, a settings-only `check`, and a `start` that refuses the target branch; `setup-work` drives `check`, `exclude`, `start` and `approve` (its factory path). #64 adds `authorization`, `agent`, `escalate`, `pr`, `record-manual` and `archive`, GitHub access as the agent, and the exec guard; `do-work`, `commit-changes`, `create-pr`, `validate-work` and `archive-work` drive them (the authorized path, FACTORY_DESIGN.md §6.1). #65 adds fault injection for crash tests, the `validate` next step, and killing a crashed check's process group; Escapement itself is configured as a factory project.
 
 ## Running it
 
@@ -507,6 +507,26 @@ Error codes:
 |---|---|
 | `blocked` (exit 2) | from start `on_target_branch`; `run_deadline`, `not_authorized`, `run_halted`, `run_closed`, `lock_timeout`, `attempt_budget`; from validate also `attempt_open`, `bad_setting`, `contract_mismatch`, `not_configured`, `dirty_tree`, `no_target`, `no_merge_base`; from review-input and record-review also `contract_mismatch`, `not_issued`, `invalid_verdict`, `incomplete_verdict`, `verdict_conflict`; from pr `not_validated`, `no_report`, `stale_report`, `head_moved`, `pr_conflict`, `pr_not_open`, `no_agent_token`; from record-manual `no_report`, `not_pending_manual`, `already_resolved`, `stale_report`, `stale_contract`, `unknown_evidence`; from archive `pr_open`, `no_agent_token`; from agent `no_agent_token`; wherever the agent identity is read, `agent_env_permissions` |
 | `error` (exit 1) | `usage`, `no_such_run`, `run_exists`, `wrong_state`, `illegal_transition`, `no_contract`, `bad_contract`, `bad_setting`, `no_active_authorization`, `bad_duration`, `bad_work_item`, `bad_project_root`, `not_a_repo`, `detached_head`, `git_failed`, `no_such_attempt`, `revision_changed`, `snapshot_failed`, `unreadable`, `bad_pattern`, `gh_missing`, `gh_failed`, `push_failed`, `no_remote`, `internal` |
+
+## Fault injection (testing only)
+
+Crash tests (`scripts/test-factory.sh`, and the first-release acceptance run, #65) make the runner die at an exact point with an environment variable. It does nothing when unset.
+
+- `ESCAPEMENT_FACTORY_FAULT`: a comma-separated list of points, each `point` or `point@N` (the Nth time the point is reached in one process; default the first). At the point the runner writes `factory: fault injected at {point}` to stderr and SIGKILLs itself: no cleanup, no lock release, no JSON, exit status 137. A mistyped point is a `usage` error before the command runs.
+- `ESCAPEMENT_FACTORY_FAULT_DIR`: makes each point fire once across processes. Firing leaves `{dir}/{point}.fired`, and a point whose file exists is skipped, so one session can arm several points and still resume past each.
+
+| Point | Where | Left behind | Picked up by |
+|---|---|---|---|
+| `validate.before_check` | before each check starts; `@N` counts them in run order: setup, static, each `command` evidence, verify | attempt `checks_running`, owner dead | `resume` → `interrupted`; `next` is `validate` |
+| `validate.report_written` | the attempt's `report.json` written | attempt `checks_running` | the same |
+| `validate.committed` | the attempt moved to `awaiting_review` (or `complete`), before output | the host saw no result | `next` is `review`; `resume` → `reissue_review` |
+| `review-input.issued` | the bundle written and issued | as before the call | `resume` → `reissue_review`; `review-input` reuses the snapshot |
+| `record-review.verdict_stored` | `review.json` stored, attempt `finalizing` | attempt `finalizing` | `next` is `resume`; `resume` → `refinalize`; `record-review` with its `file` |
+| `record-review.report_written` | the final `report.json` written, attempt still `finalizing` | the same | the same |
+| `pr.created` | `gh pr create` succeeded, number not recorded | an open PR, run `validated` without `pr_number` | `pr` again → `recovered` |
+| `pr.recorded` | the number recorded, before output | run `pr_open` | `pr` again → `updated` |
+
+Child processes inherit the variable, so a project's tests should clear it; Escapement's `scripts/run-tests.sh` does.
 
 ## Exit status
 
