@@ -16,7 +16,8 @@
     "test:check": "node --import tsx test-check.ts",
     "test:migrate": "node --import tsx test-migrate.ts",
     "test:factory-context": "node --import tsx test-factory-context.ts",
-    "test:factory-state": "node --import tsx test-factory-state.ts"
+    "test:factory-state": "node --import tsx test-factory-state.ts",
+    "test:factory-locks": "node --import tsx test-factory-locks.ts"
   },
   "dependencies": {
     "better-sqlite3": "^11.0.0"
