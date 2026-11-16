@@ -415,9 +415,12 @@ fusupo
 
 ## Version
 
-**Current:** 3.6.2
+**Current:** 3.6.3
 
 **Changelog:**
+- 3.6.3 (2026-11-15): Manifest skills can run their CLI again (#67)
+  - **Wrapper**: `scripts/manifest.sh` runs `manifest/manifest-cli.ts` with tsx loaded from the plugin's `manifest/node_modules`, so the manifest skills work from any project directory. Relative `{context-path}` seed paths still resolve against the project root
+  - **Setup**: the CLI's dependencies must be installed once with `npm ci` in the plugin's `manifest/` directory. `manifest.sh --check` reports whether they are
 - 3.6.2 (2026-11-15): context-path is no longer read from documentation examples (#57)
   - **Shared parser**: `scripts/get-context-path.sh` reads the setting only from the first `## Escapement Settings` section and skips fenced code blocks. `archive-work`, `stash-artifact` and the manifest skills use it, and `manifest/init.ts` and `scripts/migrate-archives.py` follow the same rules
   - **Behavior change**: a `context-path` line outside `## Escapement Settings` is now ignored, with a warning
