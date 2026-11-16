@@ -314,7 +314,7 @@ When set:
 - **`archive-work`** archives scratchpads and session logs to `{context-path}/{branch}/archive/` instead of `docs/dev/cc-archive/`
 - **`archive-work`** also maintains `{context-path}/INDEX.md` — a chronological table of all archived work across branches (oldest-first)
 - **`stash-artifact`** saves ad hoc scripts and notes to `{context-path}/{branch}/scripts/` or `{context-path}/{branch}/notes/`
-- **The manifest skills** keep their database at `{context-path}/manifest/manifest.db`
+- **The manifest skills** keep their database at `{context-path}/manifest/manifest.db`. Without a context-path it is `manifest/manifest.db` inside the repo (add it to `.gitignore`). The manifest CLI reads the setting from the project it runs in (from a git worktree, the main repo), or from `--project-root <path>`
 
 Note: The PreCompact hook always writes `SESSION_LOG_{N}.jsonl` to the project root (alongside the scratchpad). Session logs are converted to markdown and moved to the context directory by `archive-work` at archive time.
 
@@ -443,9 +443,13 @@ fusupo
 
 ## Version
 
-**Current:** 3.6.3
+**Current:** 3.6.4
 
 **Changelog:**
+- 3.6.4 (2026-11-15): The manifest uses the calling project's database, and its schema can be upgraded (#58)
+  - **Project root**: the manifest CLI reads context-path from the project it runs in, not from the plugin's own CLAUDE.md. Linked git worktrees share the main repo's manifest, and `--project-root <path>` picks a project explicitly. `--data-dir` still overrides both
+  - **Behavior change**: a project without a context-path keeps its manifest at `manifest/manifest.db` in the repo. Before, it silently used Escapement's database
+  - **Versioned schema**: ordered migrations tracked in `PRAGMA user_version` replace `ensureSchema`. Existing databases are adopted as version 1 and upgraded in place
 - 3.6.3 (2026-11-15): Manifest skills can run their CLI again (#67)
   - **Wrapper**: `scripts/manifest.sh` runs `manifest/manifest-cli.ts` with tsx loaded from the plugin's `manifest/node_modules`, so the manifest skills work from any project directory. Relative `{context-path}` seed paths still resolve against the project root
   - **Setup**: the CLI's dependencies must be installed once with `npm ci` in the plugin's `manifest/` directory. `manifest.sh --check` reports whether they are

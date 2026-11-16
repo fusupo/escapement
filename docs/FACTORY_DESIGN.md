@@ -133,8 +133,8 @@ One run through the first release. This table only gathers what §3.6, §4.1, §
 ### 2.5 Prerequisites
 
 - **#57** — context-path detection matches the documentation example `../myproject-ctx` before the real value; run artifacts would land in the wrong place. *Resolved (PR #68).*
-- **Project identity in the manifest code.** `manifest/init.ts` `resolveContextPath()` reads the `CLAUDE.md` next to the *plugin* (`resolve(__dirname, "..")`), so without an explicit data dir every consuming project resolves to Escapement's own context path and DB. The CLI must take the target repo/worktree root explicitly (flag or cwd's git toplevel) and resolve context-path from that project's `CLAUDE.md`.
-- **Versioned schema.** `ensureSchema()` skips initialization whenever `work_items` exists, so factory tables would never be added to existing DBs. Replace with a `schema_version` table (or `PRAGMA user_version`) and ordered migrations.
+- **Project identity in the manifest code.** `manifest/init.ts` `resolveContextPath()` reads the `CLAUDE.md` next to the *plugin* (`resolve(__dirname, "..")`), so without an explicit data dir every consuming project resolves to Escapement's own context path and DB. The CLI must take the target repo/worktree root explicitly (flag or cwd's git toplevel) and resolve context-path from that project's `CLAUDE.md`. *Resolved (#58): `--project-root`, defaulting to the main worktree of the cwd's repo.*
+- **Versioned schema.** `ensureSchema()` skips initialization whenever `work_items` exists, so factory tables would never be added to existing DBs. Replace with a `schema_version` table (or `PRAGMA user_version`) and ordered migrations. *Resolved (#58): `PRAGMA user_version` and `manifest/migrations.ts`. Factory tables arrive as migration 2.*
 
 ---
 
@@ -704,8 +704,8 @@ All keys optional. Missing `static`/`verify` → `blocked` ("not configured"). `
 Status as of 2026-11-15; tracked in #66.
 
 1. **#57** — context-path detection. **Done** (PR #68). Found alongside it and also done: **#67**, the manifest skills run their CLI through a plugin-root wrapper, `scripts/manifest.sh` (PR #69).
-2. **#58 Project identity + versioned schema** — explicit target root in the manifest/factory CLI; `schema_version` and ordered migrations replacing `ensureSchema` (§2.5). **Next.**
-3. **#59 `factory` CLI core** — run/attempt/authorization tables, state machines, `start`/`approve`/`exec`/`status`/`resume`/`revoke`, build and worktree locks, command and run deadlines, process-group cleanup, artifact dir. Open.
+2. **#58 Project identity + versioned schema** — explicit target root in the manifest/factory CLI; `schema_version` and ordered migrations replacing `ensureSchema` (§2.5). **Done.**
+3. **#59 `factory` CLI core** — run/attempt/authorization tables, state machines, `start`/`approve`/`exec`/`status`/`resume`/`revoke`, build and worktree locks, command and run deadlines, process-group cleanup, artifact dir. **Next.**
 4. **#60 Contract + settings + readiness + tiers** — schema, evidence types, settings parsing. Open.
 5. **#61 `factory validate`** — identity (clean tree + HEAD), setup policy, static + evidence phases, fresh results dirs, single structured test run, change classification, actual-diff tier, draft reports. Open.
 6. **#62 Reviewer** — `validation-reviewer` agent, bundle, `record-review` completeness checks and idempotency. Open.
