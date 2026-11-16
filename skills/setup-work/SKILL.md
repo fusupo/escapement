@@ -125,7 +125,12 @@ Never read the settings by grepping CLAUDE.md; `check` applies the section and f
    - `CONTEXT_PATH=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/get-context-path.sh" CLAUDE.md)`. The lore file is `{context-path}/PROJECT_LORE.md`, or `PROJECT_LORE.md` in the project root when context-path is empty.
    - **Lore:** pick the entries that bear on the areas this issue touches. Quote them verbatim; don't paraphrase.
    - **Related archives:** in `{context-path}/INDEX.md`, find the issues this one depends on or relates to, and read the Key Decisions and Lessons Learned in their archive `README.md`.
-   - **Manifest work item**, if the project has one. Only the `owner/repo` from the git remote and the numeric issue number go into the SQL:
+   - **Manifest work item**, if there is one. Opening the manifest creates it, so first check that it exists, and skip the manifest entirely (here and in Phase 3.5) when it doesn't:
+     ```bash
+     MANIFEST_DB=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" db-path)   # never opens or creates it
+     test -f "$MANIFEST_DB"
+     ```
+     Only the `owner/repo` from the git remote and the numeric issue number go into the SQL:
      ```bash
      bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" query "SELECT id, archive_path FROM work_items WHERE repo = '{owner/repo}' AND issue_number = {number}"
      bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" query "SELECT d.id, d.state, d.archive_path FROM edges e JOIN work_items d ON d.id = e.to_id WHERE e.rel = 'depends_on' AND e.from_id = '{id}'"
@@ -436,7 +441,7 @@ bash "$FACTORY" --json check --contract "$DRAFT_DIR/contract.json"
       # $DRAFT_DIR/readiness.json: {"version": 1, "status": …, "questions": […]}
       bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" readiness {owner/repo} {issue_number} "$DRAFT_DIR/readiness.json"
       ```
-      It does nothing when the issue has no manifest work item. Update `## Readiness` with the final status.
+      Only when `$MANIFEST_DB` exists (Phase 1). It does nothing when the issue has no work item. Update `## Readiness` with the final status.
 
 4. **Confirm Resolution:**
    Display summary of decisions made:
