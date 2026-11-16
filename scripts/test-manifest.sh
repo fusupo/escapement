@@ -55,6 +55,27 @@ out="$(cd "$project" && ESCAPEMENT_MANIFEST_DIR="$shared" bash "$wrapper" seed c
 out2="$(cd "$other" && ESCAPEMENT_MANIFEST_DIR="$shared" bash "$wrapper" status 2>&1)"
 if [[ "$out2" == *"Total items: 1"* ]]; then ok; else bad "shared-across-projects" "$out$out2"; fi
 
+# readiness mirrors a readiness document (here straight from factory check) into the work item
+cat > "$tmp/rseed.sql" <<'EOF'
+INSERT INTO work_items (id, name, kind, repo, issue_number) VALUES ('acme#7', 'Seven', 'issue', 'acme/w', 7);
+EOF
+bash "$wrapper" --data-dir "$tmp/rdata" seed "$tmp/rseed.sql" >/dev/null 2>&1
+echo '{"version": 1, "run_id": "pending", "risk_tier_proposed": "standard", "criteria": [{"id": "AC-1", "text": "x", "evidence": []}]}' > "$tmp/rcontract.json"
+out="$(bash "$here/factory.sh" --json check --project-root "$here/.." --contract "$tmp/rcontract.json" | jq .result |
+  bash "$wrapper" --data-dir "$tmp/rdata" readiness acme/w 7 - 2>&1)"
+meta="$(bash "$wrapper" --data-dir "$tmp/rdata" query "SELECT meta FROM work_items WHERE id = 'acme#7'" 2>&1)"
+if [[ "$out" == *"Marked 'acme#7' needs_human"* && "$meta" == *'"needs_human":true'* && "$meta" == *'AC-1'* ]]; then ok; else bad "readiness-needs-human" "$out
+$meta"; fi
+echo '{"version": 1, "status": "ready", "questions": []}' > "$tmp/ready.json"
+out="$(bash "$wrapper" --data-dir "$tmp/rdata" readiness acme/w 7 "$tmp/ready.json" 2>&1)"
+meta="$(bash "$wrapper" --data-dir "$tmp/rdata" query "SELECT meta FROM work_items WHERE id = 'acme#7'" 2>&1)"
+if [[ "$out" == *"Cleared"* && "$meta" != *needs_human* ]]; then ok; else bad "readiness-ready" "$out
+$meta"; fi
+out="$(bash "$wrapper" --data-dir "$tmp/rdata" readiness acme/w 8 "$tmp/ready.json" 2>&1)"
+if [[ $? -eq 0 && "$out" == *"No work item for acme/w#8"* ]]; then ok; else bad "readiness-no-item" "$out"; fi
+out="$(echo '{}' | bash "$wrapper" --data-dir "$tmp/rdata" readiness acme/w 7 - 2>&1)"
+if [[ $? -eq 1 && "$out" == *"not a readiness document"* ]]; then ok; else bad "readiness-invalid" "$out"; fi
+
 # Missing dependencies: a copy of the plugin layout without node_modules
 fake="$tmp/fake-plugin"
 mkdir -p "$fake/scripts" "$fake/manifest"
