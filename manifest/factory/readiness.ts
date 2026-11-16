@@ -59,14 +59,18 @@ function contractQuestion(error: string, data: unknown): ReadinessQuestion {
 /**
  * Check a contract against the project in `projectDir` (its CLAUDE.md
  * settings). `contractText` is the file's content, or null if unreadable.
+ * Without a contract (`undefined`), only the settings are checked: a host
+ * can ask whether the project is set up for the factory before planning.
  */
-export function checkReadiness(opts: { contractText: string | null; source: string; projectDir: string }): Readiness {
+export function checkReadiness(opts: { contractText?: string | null; source: string; projectDir: string }): Readiness {
   const questions: ReadinessQuestion[] = [];
   const loaded = readSettings(opts.projectDir);
   const { settings } = loaded;
 
   let data: unknown = undefined;
-  if (opts.contractText === null) {
+  if (opts.contractText === undefined) {
+    // settings only
+  } else if (opts.contractText === null) {
     questions.push({ about: "contract", question: `Cannot read ${opts.source}. Where is the contract?` });
   } else {
     try {

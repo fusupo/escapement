@@ -131,6 +131,8 @@ if [[ $status -eq 0 && "$(jq -r '.ok and .result.status == "needs_human" and ([.
 if [[ ! -e "$tmp/nodb" ]]; then ok; else bad "check-opens-no-db"; fi
 out="$(f check --contract ../bad-contract.json)"
 if [[ $? -eq 0 && "$out" == needs_human* && "$out" == *"[criterion]"* ]]; then ok; else bad "check-text" "$out"; fi
+out="$(ESCAPEMENT_MANIFEST_DIR="$tmp/nodb" f --json check)"
+if [[ $? -eq 0 && "$(jq -r '.result.status == "needs_human" and ([.result.questions[].ref] == ["static", "verify"]) and (.result | has("tier") | not)' <<<"$out")" == true ]]; then ok; else bad "check-settings-only" "$out"; fi
 
 # schema: published JSON Schema paths, or content with --print
 out="$(ESCAPEMENT_MANIFEST_DIR="$tmp/nodb" f --json schema)"
