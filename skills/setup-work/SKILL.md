@@ -625,7 +625,7 @@ Only after **Approve + authorize run**. The approved plan and contract become a 
    ```
    The two digests and approve's `.result.authorization.contract_digest` must be equal. If they aren't, run `factory revoke '{run_id}'` and stop.
 
-8. **Record the run** in the scratchpad, after `## Validation Contract`:
+8. **Record the run** in the scratchpad. Tick both Setup items in its Implementation Checklist (the branch is fetched, created and checked out), and add this after `## Validation Contract`:
    ```markdown
    ## Factory Run
    - **Run:** {run_id} (approved {approved_at})
@@ -770,9 +770,8 @@ Explicit approval required — handled by Phase 3.6 Plan Approval step.
 User must approve, request revision, or review before branch creation proceeds.
 
 **Before Branch Creation:**
-Confirm readiness:
+Plan approval (Phase 3.6) already covers creating the branch, and on the factory path checking it out and authorizing the run; don't ask again. Ask only about something approval didn't cover, such as:
 - "Base branch develop-ts is 5 commits behind origin. Pull first?"
-- "Ready to create feature branch?"
 
 ## Success Criteria
 
