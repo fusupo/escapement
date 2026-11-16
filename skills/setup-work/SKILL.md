@@ -504,6 +504,8 @@ This mirrors Claude's EnterPlanMode/ExitPlanMode approval pattern — the user r
       {X} implementation tasks
       {Y} quality checks
       {Z} decisions resolved
+      [factory] readiness: {ready | needs_human}, proposed tier: {tier}
+      [factory] contract: {N} criteria, {M} evidence ({t} test, {c} command, {m} manual)
 
    Key changes:
    - {Brief summary of major tasks}
@@ -515,6 +517,8 @@ This mirrors Claude's EnterPlanMode/ExitPlanMode approval pattern — the user r
      question: "Approve this implementation plan?"
      header: "Plan"
      options:
+       - label: "Approve + authorize run"   # [factory] only, and only when readiness is ready
+         description: "Approve the plan and its validation contract: check out the branch, start a factory run and authorize it"
        - label: "Approve"
          description: "Plan looks good, create branch and proceed"
        - label: "Revise plan"
@@ -523,8 +527,11 @@ This mirrors Claude's EnterPlanMode/ExitPlanMode approval pattern — the user r
          description: "I'll read the scratchpad first, then decide"
    ```
 
+   Offer **Approve + authorize run** only when `FACTORY=on` and the final readiness is `ready`. A `needs_human` plan can still get plain **Approve**.
+
 3. **Handle Response:**
-   - **Approve:** Proceed to Phase 4
+   - **Approve + authorize run:** Proceed to Phase 4, then Phase 4.5
+   - **Approve:** Proceed to Phase 4 only. No run is created, and the Validation Contract stays a draft in the scratchpad
    - **Revise plan:** Resume scratchpad-planner agent with user feedback, then return to Phase 3.6
    - **Let me review:** Wait for user to read SCRATCHPAD, then re-ask approval
 
@@ -561,6 +568,61 @@ This mirrors Claude's EnterPlanMode/ExitPlanMode approval pattern — the user r
    git branch --list {branch-name}
    ```
 
+### Phase 4.5: Authorize the Run [factory]
+
+Only after **Approve + authorize run**. The approved plan and contract become a run and its authorization (§3.6). Stop at the first step that fails, report it, and leave the rest: nothing here is retried silently.
+
+1. **Check out the branch.** A run is bound to the worktree and branch it starts on.
+   ```bash
+   git status --porcelain --untracked-files=no   # must print nothing
+   git checkout {branch-name}
+   ```
+   Tracked changes: stop and ask the operator to commit or stash them. Don't authorize a run on top of them.
+
+2. **Exclude the working files.** Validation needs a clean tree, and these files never belong in it:
+   ```bash
+   bash "$FACTORY" --json exclude 'SCRATCHPAD_*' 'SESSION_LOG_*' AGENT_CONSTRAINTS.md
+   ```
+
+3. **Start the run:**
+   ```bash
+   bash "$FACTORY" --json start '#{issue_number}' --target-ref {base-branch} [--manifest-id {manifest_id}]
+   ```
+   Keep `.result.run_id` and `.result.artifact_dir`. On `run_exists`, this worktree already has an open run: show `factory status` and stop.
+
+4. **Write the contract into the run.** Set `run_id` to the new run ID in the scratchpad's contract block, and write the same JSON to `{artifact_dir}/contract.draft.json`. Change nothing else: what the operator approved is what gets authorized.
+
+5. **Check it:**
+   ```bash
+   bash "$FACTORY" --json check --contract "{artifact_dir}/contract.draft.json"
+   ```
+   It must be `ready`. If it isn't, stop: show the questions. The run stays `planned` with no authorization, and setup-work leaves it there for the operator.
+
+6. **Approve it:**
+   ```bash
+   bash "$FACTORY" --json approve '{run_id}' --contract "{artifact_dir}/contract.draft.json"
+   ```
+   The runner stores the bytes as `{artifact_dir}/contract.json`, records their digest and issues an `active` authorization. The run moves to `approved`, and the run deadline starts.
+
+7. **Confirm the digest.** The authorization must name exactly the contract that was approved:
+   ```bash
+   echo "sha256:$(sha256sum "{artifact_dir}/contract.json" | cut -d' ' -f1)"
+   bash "$FACTORY" --json status '{run_id}'   # .result.authorization: status "active", contract_digest
+   ```
+   The two digests and approve's `.result.authorization.contract_digest` must be equal. If they aren't, run `factory revoke '{run_id}'` and stop.
+
+8. **Record the run** in the scratchpad, after `## Validation Contract`:
+   ```markdown
+   ## Factory Run
+   - **Run:** {run_id} (approved {approved_at})
+   - **Artifacts:** {artifact_dir}
+   - **Contract digest:** {contract_digest}
+   - **Deadline:** {deadline_at}
+   - **Authorizes:** {authorizes}; never merge, force-push or a contract change
+   ```
+
+Any later change to the contract needs `factory approve` again, which supersedes this authorization.
+
 **Final Output:**
 
 Display concise summary:
@@ -579,6 +641,15 @@ Display concise summary:
 🚀 Ready to begin work:
    git checkout {branch-name}
    # Then start implementation
+```
+
+After **Approve + authorize run**, the branch is already checked out. Replace the last block with:
+```
+🏭 Factory run {run_id} authorized (state: approved)
+   Contract: {artifact_dir}/contract.json ({contract_digest})
+   Deadline: {deadline_at}
+
+🚀 Ready to begin work on {branch-name}
 ```
 
 **Note:** If clarifications were resolved in Phase 3.5, the scratchpad now contains
@@ -624,6 +695,14 @@ If feature branch already exists:
 - Warn about potential conflicts
 - Suggest reviewing existing commits
 
+### Factory Run Not Authorized
+If a Phase 4.5 step fails, report the step, the runner's error code and message, and the state it left:
+- before `start`: no run exists;
+- after `start`: run `{run_id}` is `planned` without authorization. Fix the cause and run `factory approve` with the contract, or leave it;
+- after `approve` with a digest mismatch: the authorization has been revoked.
+
+The branch, scratchpad and excludes stay as they are. Plain setup-work is unaffected.
+
 ### Repository Access Issues
 If can't access repository:
 - Verify GitHub authentication (gh auth status)
@@ -640,6 +719,11 @@ If can't access repository:
 **Receives context from:**
 - Project CLAUDE.md - Architecture and conventions
 - `/prime-session` - Current development priorities
+- **[factory]** `PROJECT_LORE.md`, archives in `{context-path}/INDEX.md`, the manifest work item
+
+**Calls [factory]:**
+- `scripts/factory.sh`: `check`, `exclude`, `start`, `approve`, `status` (`docs/FACTORY_CLI.md`)
+- `scripts/manifest.sh readiness`: mirrors `needs_human` into the work item
 
 ## Best Practices
 
@@ -707,8 +791,9 @@ plan mode to design the implementation approach before we proceed?
 
 ---
 
-**Version:** 1.1.0
-**Last Updated:** 2025-12-31
+**Version:** 1.2.0
+**Last Updated:** 2026-11-16
 **Maintained By:** Escapement
 **Changelog:**
+- v1.2.0: Factory path (docs/FACTORY_DESIGN.md §3): readiness, light context, proposed tier and validation contract when the project is set up for the factory; "Approve + authorize run" starts and approves a factory run. Unchanged otherwise (#63)
 - v1.1.0: Added Task delegation to Explore agent, parallel execution, LSP integration, EnterPlanMode triggers
