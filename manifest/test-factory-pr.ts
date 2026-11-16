@@ -153,6 +153,11 @@ async function run() {
   r = await openPr(db, a.run.run_id, { ...o, narrative: "## Summary\nRewritten.\n" });
   let now = stub.state().prs;
   assert(r.action === "updated" && r.pr_number === 101 && now.length === 1, "again: the same PR is updated, none created");
+  const update = stub.calls().at(-1)!;
+  assert(
+    update.args.slice(0, 4).join(" ") === "api -X PATCH repos/acme/w/pulls/101" && update.args.includes("-F") && !stub.calls().some((c) => c.args[0] === "pr" && c.args[1] === "edit"),
+    "the update goes through the REST API, never gh pr edit (which fails where classic Projects are deprecated)",
+  );
   assert(now[0].body.startsWith("## Summary\nRewritten.") && count(now[0].body, SECTION_BEGIN) === 1, "a new narrative replaces the old; one section");
   r = await openPr(db, a.run.run_id, o);
   now = stub.state().prs;

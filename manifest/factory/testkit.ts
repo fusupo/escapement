@@ -145,10 +145,12 @@ export type StubState = {
 export type GhCall = { args: string[]; token: string | null; githubToken: string | null; body?: string };
 
 /**
- * A fake `gh` on PATH for the factory tests: it serves `api user` and
- * `pr list | create | edit | view` from a JSON state file and logs every
- * call (argv and whether GH_TOKEN was set) to a JSONL file. Nothing leaves
- * the machine.
+ * A fake `gh` on PATH for the factory tests: it serves `api user`,
+ * `pr list | create | view` and the PR update the runner makes
+ * (`api -X PATCH repos/{repo}/pulls/{n}`, called "edit" for crashAfter and
+ * failOn) from a JSON state file, and logs every call (argv and whether
+ * GH_TOKEN was set) to a JSONL file. Like a repository where classic
+ * Projects are deprecated, `pr edit` fails. Nothing leaves the machine.
  */
 export function stubGh(initial: Partial<StubState> = {}) {
   const dir = tempDir("factory-gh-");
@@ -164,11 +166,14 @@ const args = process.argv.slice(2);
 const st = JSON.parse(fs.readFileSync(statePath, "utf-8"));
 const flag = (n) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : undefined; };
 const entry = { args, token: process.env.GH_TOKEN ?? null, githubToken: process.env.GITHUB_TOKEN ?? null };
-const bodyFile = flag("--body-file");
+const fields = {};
+args.forEach((a, i) => { if ((a === "-F" || a === "-f") && args[i + 1]) { const [k, ...v] = args[i + 1].split("="); fields[k] = v.join("="); } });
+const bodyFile = flag("--body-file") || (fields.body && fields.body.startsWith("@") ? fields.body.slice(1) : undefined);
 if (bodyFile) entry.body = fs.readFileSync(bodyFile, "utf-8");
 fs.appendFileSync(logPath, JSON.stringify(entry) + "\\n");
 const save = () => fs.writeFileSync(statePath, JSON.stringify(st));
-const sub = args[0] === "pr" ? args[1] : args[0];
+const patch = args[0] === "api" && args.includes("PATCH") ? (args.find((a) => a.startsWith("repos/") && a.includes("/pulls/")) || "") : null;
+const sub = patch !== null ? "edit" : args[0] === "pr" ? args[1] : args[0];
 if (st.failOn === sub) { process.stderr.write("stub gh: " + sub + " failed for token " + process.env.GH_TOKEN + "\\n"); process.exit(1); }
 const done = (out) => {
   if (out !== undefined) process.stdout.write(out + "\\n");
@@ -178,6 +183,18 @@ const done = (out) => {
 const view = (p) => ({ number: p.number, url: p.url, title: p.title, body: p.body, headRefName: p.headRefName,
   baseRefName: p.baseRefName, headRepositoryOwner: { login: p.owner }, state: p.state, mergedAt: p.mergedAt });
 if (args[0] === "api" && args[1] === "user") done(JSON.stringify(st.user));
+if (patch !== null) {
+  const pr = st.prs.find((p) => p.number === Number(patch.split("/").pop()));
+  if (!pr) { process.stderr.write("gh: Not Found (HTTP 404)\\n"); process.exit(1); }
+  if (entry.body !== undefined) pr.body = entry.body;
+  if (fields.title) pr.title = fields.title;
+  save();
+  done(JSON.stringify({ number: pr.number, html_url: pr.url }));
+}
+if (args[0] === "pr" && args[1] === "edit") {
+  process.stderr.write("GraphQL: Projects (classic) is being deprecated in favor of the new Projects experience (repository.pullRequest.projectCards)\\n");
+  process.exit(1);
+}
 if (args[0] !== "pr") { process.stderr.write("stub gh: unsupported " + args.join(" ") + "\\n"); process.exit(2); }
 const repo = flag("-R") || "";
 const owner = repo.split("/").slice(-2)[0];
@@ -197,7 +214,6 @@ if (sub === "create") {
 const number = Number(args[2]);
 const pr = st.prs.find((p) => p.number === number);
 if (!pr) { process.stderr.write("stub gh: no pull request " + args[2] + "\\n"); process.exit(1); }
-if (sub === "edit") { pr.body = entry.body ?? pr.body; if (flag("--title")) pr.title = flag("--title"); save(); done(pr.url); }
 if (sub === "view") done(JSON.stringify(view(pr)));
 process.stderr.write("stub gh: unsupported " + args.join(" ") + "\\n");
 process.exit(2);
