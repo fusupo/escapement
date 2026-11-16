@@ -5,6 +5,7 @@ import {
   startRun,
   approveRun,
   revokeRun,
+  escalateRun,
   runStatus,
   listRuns,
   requireExecutable,
@@ -145,6 +146,17 @@ async function run() {
   assert(open === "STUDIO-12-r1,#42-r1", "status lists open runs");
   assert(listRuns(db, { all: true }).length === 3, "status --all includes closed runs");
   assert(st.authorizations.length === 1 && Array.isArray(st.authorizations[0].authorizes), "run status lists authorizations");
+
+  console.log("\nescalate\n");
+  const e = startRun(db, { workItem: "#77", ctx: { ...ctx, worktreePath: "/esc" }, artifactDir: tempDir() });
+  throws(() => escalateRun(db, e.run_id, { reason: "  " }), /usage/, "escalate needs a reason");
+  approveRun(db, e.run_id, { contractFile: contractFor(e.run_id), budgetMs: HOUR });
+  let esc = escalateRun(db, e.run_id, { reason: "validate blocked: dirty_tree" });
+  assert(esc.changed && esc.run.state === "escalated" && esc.run.state_reason === "validate blocked: dirty_tree", "escalate halts the run with the reason");
+  esc = escalateRun(db, e.run_id, { reason: "again" });
+  assert(!esc.changed && esc.run.state_reason === "validate blocked: dirty_tree", "escalating an escalated run changes nothing");
+  transitionRun(db, e.run_id, "closed", { action: "abandoned" });
+  throws(() => escalateRun(db, e.run_id, { reason: "x" }), /run_closed/, "a closed run can't be escalated");
 
   db.close();
   console.log("\nAll factory run tests passed.");

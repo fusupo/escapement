@@ -1,7 +1,7 @@
 // Shared helpers for the factory test suites. Every test works in a fresh
 // temporary directory and database; the real manifest is never opened.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, chmodSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -22,6 +22,13 @@ export function throws(fn: () => unknown, pattern: RegExp, msg: string): void {
 }
 
 const tempDirs: string[] = [];
+
+// Tests never read the user's own agent identity (~/.config/escapement/agent.env).
+process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), "factory-config-"));
+tempDirs.push(process.env.XDG_CONFIG_HOME);
+delete process.env.ESCAPEMENT_AGENT_GH_TOKEN;
+delete process.env.ESCAPEMENT_AGENT_NAME;
+delete process.env.ESCAPEMENT_AGENT_EMAIL;
 
 export function tempDir(prefix = "factory-test-"): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
@@ -112,4 +119,101 @@ export function contractFor(runId: string, extra: Record<string, unknown> = {}):
   const file = join(tempDir("factory-contract-"), "contract.json");
   writeFileSync(file, contractJson(runId, extra));
   return file;
+}
+
+// ── a stub `gh` ───────────────────────────────────────────────────────
+
+export type StubPr = {
+  number: number;
+  url: string;
+  title: string;
+  body: string;
+  headRefName: string;
+  baseRefName: string;
+  owner: string;
+  state: "OPEN" | "CLOSED" | "MERGED";
+  mergedAt: string | null;
+};
+export type StubState = {
+  user: { login: string; id: number };
+  prs: StubPr[];
+  /** Exit 1 after performing this subcommand ("create", "edit"), as if gh crashed after GitHub acted. */
+  crashAfter?: string | null;
+  /** Fail this subcommand without acting. */
+  failOn?: string | null;
+};
+export type GhCall = { args: string[]; token: string | null; githubToken: string | null; body?: string };
+
+/**
+ * A fake `gh` on PATH for the factory tests: it serves `api user` and
+ * `pr list | create | edit | view` from a JSON state file and logs every
+ * call (argv and whether GH_TOKEN was set) to a JSONL file. Nothing leaves
+ * the machine.
+ */
+export function stubGh(initial: Partial<StubState> = {}) {
+  const dir = tempDir("factory-gh-");
+  const statePath = join(dir, "state.json");
+  const logPath = join(dir, "calls.jsonl");
+  const state: StubState = { user: { login: "agent-bot", id: 4242 }, prs: [], crashAfter: null, failOn: null, ...initial };
+  writeFileSync(statePath, JSON.stringify(state));
+  const script = `#!/usr/bin/env node
+const fs = require("fs");
+const statePath = ${JSON.stringify(statePath)};
+const logPath = ${JSON.stringify(logPath)};
+const args = process.argv.slice(2);
+const st = JSON.parse(fs.readFileSync(statePath, "utf-8"));
+const flag = (n) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : undefined; };
+const entry = { args, token: process.env.GH_TOKEN ?? null, githubToken: process.env.GITHUB_TOKEN ?? null };
+const bodyFile = flag("--body-file");
+if (bodyFile) entry.body = fs.readFileSync(bodyFile, "utf-8");
+fs.appendFileSync(logPath, JSON.stringify(entry) + "\\n");
+const save = () => fs.writeFileSync(statePath, JSON.stringify(st));
+const sub = args[0] === "pr" ? args[1] : args[0];
+if (st.failOn === sub) { process.stderr.write("stub gh: " + sub + " failed for token " + process.env.GH_TOKEN + "\\n"); process.exit(1); }
+const done = (out) => {
+  if (out !== undefined) process.stdout.write(out + "\\n");
+  if (st.crashAfter === sub) { process.stderr.write("stub gh: crashed after " + sub + "\\n"); process.exit(1); }
+  process.exit(0);
+};
+const view = (p) => ({ number: p.number, url: p.url, title: p.title, body: p.body, headRefName: p.headRefName,
+  baseRefName: p.baseRefName, headRepositoryOwner: { login: p.owner }, state: p.state, mergedAt: p.mergedAt });
+if (args[0] === "api" && args[1] === "user") done(JSON.stringify(st.user));
+if (args[0] !== "pr") { process.stderr.write("stub gh: unsupported " + args.join(" ") + "\\n"); process.exit(2); }
+const repo = flag("-R") || "";
+const owner = repo.split("/").slice(-2)[0];
+if (sub === "list") {
+  const head = flag("--head");
+  const state = (flag("--state") || "open").toUpperCase();
+  done(JSON.stringify(st.prs.filter((p) => (!head || p.headRefName === head) && (state === "ALL" || p.state === state)).map(view)));
+}
+if (sub === "create") {
+  const number = 100 + st.prs.length + 1;
+  const url = "https://github.com/" + repo + "/pull/" + number;
+  st.prs.push({ number, url, title: flag("--title"), body: entry.body ?? "", headRefName: flag("--head"),
+    baseRefName: flag("--base"), owner, state: "OPEN", mergedAt: null });
+  save();
+  done(url);
+}
+const number = Number(args[2]);
+const pr = st.prs.find((p) => p.number === number);
+if (!pr) { process.stderr.write("stub gh: no pull request " + args[2] + "\\n"); process.exit(1); }
+if (sub === "edit") { pr.body = entry.body ?? pr.body; if (flag("--title")) pr.title = flag("--title"); save(); done(pr.url); }
+if (sub === "view") done(JSON.stringify(view(pr)));
+process.stderr.write("stub gh: unsupported " + args.join(" ") + "\\n");
+process.exit(2);
+`;
+  const bin = join(dir, "gh");
+  writeFileSync(bin, script);
+  chmodSync(bin, 0o755);
+  return {
+    dir,
+    /** PATH with the stub first. */
+    path: `${dir}:${process.env.PATH ?? ""}`,
+    state: (): StubState => JSON.parse(readFileSync(statePath, "utf-8")),
+    setState: (patch: Partial<StubState>) => writeFileSync(statePath, JSON.stringify({ ...JSON.parse(readFileSync(statePath, "utf-8")), ...patch })),
+    calls: (): GhCall[] =>
+      existsSync(logPath)
+        ? readFileSync(logPath, "utf-8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l) as GhCall)
+        : [],
+  };
 }

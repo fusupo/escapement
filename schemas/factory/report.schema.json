@@ -27,6 +27,32 @@
     "flags"
   ],
   "properties": {
+    "revision": {
+      "description": "Report revision. Absent in report.json (revision 1). record-manual writes report.r{k}.json, k >= 2, when human outcomes resolve pending_manual; earlier revisions are never changed (§5.5).",
+      "type": "integer",
+      "minimum": 2
+    },
+    "supersedes": {
+      "description": "File name of the revision this one replaces, in the same attempt directory.",
+      "type": "string",
+      "minLength": 1
+    },
+    "manual_outcomes": {
+      "description": "Human outcomes for manual evidence, recorded with factory record-manual and bound to this report's head_sha and contract_digest.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["evidence_id", "outcome", "note", "recorder", "recorded_at"],
+        "properties": {
+          "evidence_id": { "type": "string", "minLength": 1 },
+          "outcome": { "enum": ["pass", "fail"] },
+          "note": { "type": "string", "minLength": 1 },
+          "recorder": { "type": "string", "minLength": 1 },
+          "recorded_at": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
     "version": {
       "const": 1
     },

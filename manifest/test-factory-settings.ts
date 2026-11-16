@@ -53,7 +53,7 @@ function run() {
     assert(s.requiredChecks.join() === "static,verify", "required-checks defaults to static, verify");
     assert(s.maxAttempts === 3, "max-attempts defaults to 3");
     assert(s.commandTimeoutMs === 900_000 && s.lockTimeoutMs === 1_800_000 && s.runBudgetMs === 7_200_000, "durations default to 15m, 30m, 2h");
-    assert(s.execHook === "off" && s.gateMode === "report-only", "exec-hook off, gate-mode report-only");
+    assert(s.execHook === "on" && s.gateMode === "report-only", "exec-hook on (the guard is active during runs), gate-mode report-only");
     assert(s.testFiles.includes("*.test.*") && s.testFiles.includes("__tests__/"), "test-files has common defaults");
     const own = parse("## Escapement Settings\n- **test-files**: spec/**, *_spec.rb\n").settings;
     assert(own.testFiles.join() === "spec/**,*_spec.rb", "test-files replaces the defaults when set");

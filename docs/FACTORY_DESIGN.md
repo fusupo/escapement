@@ -109,6 +109,7 @@ One run through the first release. This table only gathers what §3.6, §4.1, §
 | 9 | Merge (**operator touch 2**) | operator | — | `closed` (merged) | — | operator action and merge SHA (recorded by `manifest-sync`, next) | merge is never authorized |
 
 - Step 8 runs on `pass` or `pending_manual` (§6.1). Manual outcomes are recorded later with `factory record-manual` (§5.5).
+- *As built (#64):* steps 4–8 run in `do-work` without questions when `factory authorization` matches. Commits (step 5) carry the AI agent's identity, and step 8's push and PR run as the agent's GitHub account (§4.8). `archive-work` closes the run after the merge.
 - **Failure path:** `fail`, `blocked` or `error` at step 6 or 7 moves the run to `escalated`. The report is kept, the operator is notified, and the run stops. The fix loop (§6.2) is next.
 
 ### 2.2 Next (in order)
@@ -207,6 +208,8 @@ Approval creates a run (§4.7) and an authorization recorded in the manifest DB:
 
 *As built (#63):* approval offers "Approve + authorize run" next to plain "Approve", which creates no run. The run is created only on that choice, so a rejected plan leaves nothing behind: the contract is drafted in the scratchpad with `run_id: "pending"`. On approval `setup-work` checks out the feature branch (`factory start` now refuses the target branch, `on_target_branch`), runs `factory exclude` for its working files, starts the run, writes the contract with the real `run_id` to `{artifact_dir}/contract.draft.json`, checks and approves it, and confirms that the authorization's digest equals that of the stored `contract.json`. Reference: [FACTORY_CLI.md](FACTORY_CLI.md#start), `skills/setup-work/SKILL.md` Phase 4.5.
 
+*As built (#64):* skills ask one question, `factory authorization`. It matches the worktree's run on repo, branch, active authorization, `contract.json` digest, a non-halted state and the deadline, and answers with what the authorization allows and an advisory next step (implement, resume, review, pr, refresh_pr). It is read-only and never creates the database. `commit-changes`, `create-pr` and `do-work` drop their confirmations only on a match with the action they take. Under an authorization, the factory's work is visible as the AI agent's: commits carry its name and email (`factory agent`), and the push and PR run as its GitHub account. Reference: [FACTORY_CLI.md](FACTORY_CLI.md#authorization).
+
 ---
 
 ## 4. Stage 2: The Factory Runner and `validate-work`
@@ -239,6 +242,8 @@ Instructions cannot guarantee locking, deadlines, or cleanup; code can. A small 
 - **Atomic writes:** reports and logs are written to a temp file and renamed.
 
 **Implementation-time commands:** the implementer is instructed to run builds/tests via `factory exec`, so they also queue on the lock. Instructions alone can't enforce this; an optional `PreToolUse` hook can reject Bash calls matching the project's `verify`/`static` commands when they don't go through `factory exec`. The hook ships disabled by default and is enabled per project.
+
+*As built (#64):* the hook (`hooks/factory-exec-guard.sh`) is registered for every project but acts only where the runner keeps its marker: inside the worktree's git directory, while a run is approved, implementing or validating under an active authorization. So it is **on by default during runs** (`exec-hook` defaults to `on`), and a project opts out with `exec-hook: off`. Outside runs it costs one `jq` and one `git` call. The runner now also runs `gh`, for the run's push and PR only, and only as the agent (§4.8); it still never calls a skill or an agent, and issue text still comes from the host. Reference: [FACTORY_CLI.md](FACTORY_CLI.md#the-exec-guard).
 
 ### 4.2 Run artifacts live outside the tracked tree
 
@@ -368,6 +373,8 @@ any non-complete → interrupted   (set only by resume, per the rules below)
 ### 4.8 Idempotent PR creation
 
 `factory pr` first looks up an existing open PR for the branch (`gh pr list --head <branch>`). If one exists, it records its number and updates the body; otherwise it creates one and records the number in the same step. A crash between creation and recording is reconciled on resume by the same lookup. `factory pr` holds the worktree lock and re-checks that branch head equals the finalized report's `head_sha` before creating or updating.
+
+*As built (#64):* `gh` runs as the AI agent's GitHub identity (`ESCAPEMENT_AGENT_GH_TOKEN`, from the environment or the user's `~/.config/escapement/agent.env`; without it `pr` is refused, never run as the operator), and the runner pushes only HEAD to the run's branch, never forced. The lookup ignores forks' PRs with the same branch name. The host writes the PR narrative (`--body-file`) and the runner appends its report section between markers, replacing only that section on updates. "Reconciled on resume" became "run `factory pr` again": the lookup finds a PR an earlier call created, and the number is recorded once. Updating an existing PR is bookkeeping, allowed past the deadline and for an escalated run, so its description never shows a stale report. **Rule:** everything the factory writes to GitHub goes through the runner as the agent. That includes later additions such as the fix loop's re-pushes, the gate's recommendation and merge recording. Escapement's skills act on GitHub as the agent too, through the GitHub MCP tools, which are authenticated as the agent account; skills that still call `gh` (which acts as the operator) are converted in #80. Reference: [FACTORY_CLI.md](FACTORY_CLI.md#pr).
 
 ### 4.9 Reviewer bundle and completeness
 
@@ -548,6 +555,8 @@ Contracts name no commands in the first release: every check comes from project 
 
 *As built (#62):* `pending_manual` moves the run to `validated`, as `pass` does. The PR can open while manual outcomes are outstanding, and the report shows them as pending.
 
+*As built (#64):* a revision is `attempts/{n}/report.r{k}.json`, with `revision`, `supersedes` and `manual_outcomes` (optional report fields). Any single `fail` resolves the report at once, even with other manual items unrecorded; it adds a blocking finding `manual:{id}` and escalates the run. Recording the same outcome again is a no-op; a different one replaces it until the report resolves. The result says when the open PR needs `factory pr` to refresh its report section. Reference: [FACTORY_CLI.md](FACTORY_CLI.md#record-manual).
+
 ---
 
 ## 6. The Authorized Path, Fix Loop, and Gate
@@ -563,6 +572,8 @@ With an active authorization, `do-work`:
 5. on `fail` / `blocked` / `error`: state `escalated`, notify operator with the report; stop.
 
 No new agent role; the existing confirmations are skipped only under authorization.
+
+*As built (#64):* `do-work` asks `factory authorization` first and routes on its `next`. `validate-work` (new) runs step 3, re-running the reviewer at most twice on an incomplete verdict. `create-pr` hands its title and narrative to `factory pr`. Step 5 also covers what the runner can't see: a blocked precondition or a blocker the implementer can't resolve goes through the new `factory escalate`, so the run shows why it stopped. Without an agent identity (`ESCAPEMENT_AGENT_GH_TOKEN`), `do-work` stops before implementing. Notification is a push notification plus the session's final message. `archive-work` copies the contract, reports, verdicts and PR body into the archive and closes the run with `factory archive --close`, as merged or abandoned from its PR, so the worktree can start its next run.
 
 ### 6.2 Fix loop (next)
 
@@ -704,13 +715,15 @@ Extends `## Escapement Settings` in each project's CLAUDE.md:
 - **command-timeout**: 15m
 - **lock-timeout**: 30m
 - **run-budget**: 2h
-- **exec-hook**: off
+- **exec-hook**: on
 - **gate-mode**: report-only
 ```
 
 All keys optional. Missing `static`/`verify` → `blocked` ("not configured"). `required-checks` cannot be narrowed by a contract. `test-results` should reference `$FACTORY_RESULTS_DIR` (for jest-junit, set `JEST_JUNIT_OUTPUT_DIR` from it). If a test runner can only write to a fixed path inside the worktree, it must be gitignored; the runner clears it before each invocation and moves results into the artifact dir afterward (§4.4). `run-budget` sets the enforced run deadline; agent time and token figures are advisory.
 
 *As built (#60):* settings are read from the CLAUDE.md of the run's worktree whenever a command needs them, not copied per run. Each report records their digest in `policy_version`, and a branch that changes them, or weakens `required-checks`, is an execution-policy change (§4.6), so a weakened setting is flagged for review rather than silently used. `factory check` reports a required check with no command as a readiness question. Reference: [FACTORY_CLI.md](FACTORY_CLI.md#settings).
+
+*As built (#64):* `exec-hook` defaults to `on`; it governs the exec guard during runs (§4.1).
 
 *As built (#61):* `test-files` (glob list) names test files for classification (§4.6); its default covers common layouts (`*.test.*`, `*.spec.*`, `test/`, `tests/`, `__tests__/`, `test_*.py`, `*_test.py`, `*_test.go`). `base-branch` is the default target for `factory start`.
 
@@ -731,7 +744,7 @@ All keys optional. Missing `static`/`verify` → `blocked` ("not configured"). `
 | `do-work` | fix loop (§6.2) | next |
 | `setup-work` + `plan-critic` agent | critique loop (§3.5) | next |
 | gate + `manifest-sync` | report-only recommendation; operator action and merge SHA recording | next |
-| `PreToolUse` exec hook | optional enforcement of `factory exec` | first (off by default) |
+| `PreToolUse` exec hook | optional enforcement of `factory exec` | first (as built: on during runs, opt out per project) |
 
 ---
 
@@ -746,8 +759,8 @@ Status as of 2026-11-16; tracked in #66.
 5. **#61 `factory validate`** — identity (clean tree + HEAD), setup policy, static + evidence phases, fresh results dirs, single structured test run, change classification, actual-diff tier, draft reports. **Done.** Blocked preconditions use no attempt (§4.3); the classification baseline comes from git (§4.6); new `test-files` setting (§8).
 6. **#62 Reviewer** — `validation-reviewer` agent, bundle, `record-review` completeness checks and idempotency. **Done.** The reviewer is a prompt plus the verdict schema, with the Claude Code agent as a thin wrapper; policy changes need a sign-off; `pending_manual` validates the run (§4.9, §5.5).
 7. **#63 `setup-work`** produces contract + authorization. **Done.** Offered at plan approval only when the project's required checks are configured; the run is created on approval; new `factory exclude`, settings-only `factory check`, `manifest.sh readiness` (§3.1, §3.6).
-8. **#64 Authorized path** — `do-work`, `commit-changes`, `create-pr`, `factory pr`, `record-manual`. **Next.**
-9. **#65 Release acceptance test** — a real issue end to end, plus deliberate interruptions at each boundary: during checks, between checks and review, during finalization, and between PR creation and recording. The first release is complete only when this passes; fix what breaks before moving on. Open. → *first release complete*
+8. **#64 Authorized path** — `do-work`, `commit-changes`, `create-pr`, `factory pr`, `record-manual`. **Done.** Also `factory authorization`, `agent`, `escalate` and `archive`, and the `validate-work` skill. GitHub work runs as the AI agent's identity, through the runner (§4.8). The exec guard is on during runs (§4.1). `archive-work` closes runs.
+9. **#65 Release acceptance test** — a real issue end to end, plus deliberate interruptions at each boundary: during checks, between checks and review, during finalization, and between PR creation and recording. The first release is complete only when this passes; fix what breaks before moving on. **Next.** → *first release complete*
 
 **Host-agnostic interface (added 2026-11-15 to #59–#62).** The factory must be usable by hosts other than the Escapement skills, for example Escapement Studio calling it as a subprocess. Requirements: `--json` output on every command; external work-item IDs (no required manifest `work_items` row; `manifest_id` optional in the contract); storage passed explicitly (`--project-root`, optional artifact-dir override); invocation through a plugin-root wrapper (`scripts/factory.sh`) with no skill calls from the runner; contract, report and verdict schemas published as standalone JSON Schema; the `.git/info/exclude` obligation for hosts documented and tested; the reviewer defined as a prompt plus verdict schema, with the Claude Code agent as a thin wrapper.
 10. **Bounded fix loop.**
@@ -759,7 +772,7 @@ Status as of 2026-11-16; tracked in #66.
 
 ## 11. Risks Accepted for the First Release
 
-- `factory exec` adoption by the implementer is instruction-based unless the hook is enabled.
+- `factory exec` adoption by the implementer is instruction-based; the hook (on during runs) catches only the project's own `static` and `verify` commands at the start of a command.
 - "New vs. modified" test classification is heuristic; ambiguity defaults to the stricter class.
 - Branch validation can pass while the combined merge fails; the report says so, and the operator merges.
 - Stale ignored build output isn't detected; projects own clean-build-safe commands.

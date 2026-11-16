@@ -13,6 +13,7 @@ tools:
   - Bash:python3 *
   - Bash:bash *
   - Bash:rm *
+  - Bash:find *
   - Glob
   - Grep
   - AskUserQuestion
@@ -141,6 +142,13 @@ The rest of this archive-work run lands in the session's next log.
    - Current branch for context
    - Recent commits for PR detection
    - HEAD SHA for linking
+
+5. **Find a Factory Run:** setup-work records an authorized run in the scratchpad's `## Factory Run` section (`**Run:** {run_id}`). When there is one:
+   ```bash
+   FACTORY="${CLAUDE_PLUGIN_ROOT}/scripts/factory.sh"
+   bash "$FACTORY" --json status '{run_id}'
+   ```
+   Note `.result.run.artifact_dir`, `.result.run.state` and `.result.run.pr_number` for Phase 6.5. Single-quote the run ID: it contains `#`. No section, or `status` fails (`no_such_run`), means there's no run to archive.
 
 **After parallel detection, verify completion:**
 - Check if scratchpad tasks are all complete
@@ -430,6 +438,13 @@ Context directory changes:
    - You'll need to commit the context directory separately if it's git-tracked
 ```
 
+**With a factory run (Phase 2, step 5), also show:**
+```
+Factory run {run_id} ({state}, PR #{pr_number}):
+   - contract, reports, verdicts and PR body copied to {archive}/runs/{run_id}/
+   - the run is closed: merged if its PR merged, otherwise abandoned
+```
+
 ### Phase 6: Execute Archive
 
 1. **Move Files** (per Phase 4 instructions based on mode)
@@ -505,6 +520,38 @@ Context directory changes:
    # PR: #{pr_number}
    ```
 
+### Phase 6.5: Archive the Factory Run
+
+Only when Phase 2 found a run. Its artifacts stay where they are (the factory database records their paths); the archive keeps a copy of what explains the outcome. Logs, test results and review snapshots are left out: they are large, and they stay in the artifact dir.
+
+1. **Copy** the contract, every report revision, the verdicts and the PR body into `{ARCHIVE_DIR}/runs/{run_id}/`, keeping their layout:
+   ```bash
+   ART='{artifact_dir}'
+   DEST="$ARCHIVE_DIR/runs/{run_id}"
+   (cd "$ART" && find . -type f \( -name contract.json -o -name review.json -o -name report.json -o -name 'report.r[0-9]*.json' -o -path ./pr/body.md \)) |
+     while IFS= read -r f; do mkdir -p "$DEST/$(dirname "$f")" && cp "$ART/$f" "$DEST/$f"; done
+   ```
+   In in-repo mode, also `git add "$DEST"` so the copy is committed with the archive.
+
+2. **Record it and close the run**, so the worktree can start its next run:
+   ```bash
+   bash "$FACTORY" --json archive '{run_id}' --path "$DEST" --close
+   ```
+   - **`.ok`:** the run is `closed`, as `.result.closed` (`merged` when its PR merged, `abandoned` when it had none or it was closed unmerged).
+   - **Refused `pr_open`:** the PR is still open. Ask:
+     ```
+     AskUserQuestion:
+       question: "PR #{pr_number} of factory run {run_id} is still open. Close the run anyway?"
+       header: "Factory run"
+       options:
+         - label: "Leave the run open"
+           description: "Record the archive path only; close it after the PR is merged or closed"
+         - label: "Close as abandoned"
+           description: "The PR stays as it is; the run is closed as abandoned"
+     ```
+     **Leave open:** `factory archive '{run_id}' --path "$DEST"`. **Close:** add `--abandon`.
+   - **Refused `no_agent_token`:** reading the PR's state needs the agent's GitHub token. Record the path without `--close`, and tell the operator to close the run later with `factory archive '{run_id}' --path "$DEST" --close`.
+
 ### Phase 7: Report Result
 
 **Context mode:**
@@ -518,6 +565,10 @@ Files archived (to context directory):
    - SCRATCHPAD_{issue_number}.md
    - SESSION_LOG_*.md (if any existed)
    - README.md (summary generated)
+
+Factory run (if any):
+   - {run_id}: closed ({merged|abandoned}), or left open
+   - Artifacts copied to {context-path}/{branch}/archive/runs/{run_id}/
 
 INDEX.md updated:
    - {context-path}/INDEX.md
@@ -576,7 +627,7 @@ Committed: {commit hash}
 - Commit the archive
 
 ### Option 2: Delete Only
-If user prefers not to keep history:
+If user prefers not to keep history (a factory run is left untouched: not copied, not closed):
 ```
 AskUserQuestion:
   question: "How to handle the scratchpad?"
@@ -655,6 +706,9 @@ No PR found for this work.
 **Invokes:**
 - `commit-changes` skill - To commit archive
 
+**Calls:**
+- `scripts/factory.sh` `status` and `archive` for a factory run (Phase 6.5)
+
 **Reads from:**
 - Scratchpad - Content to archive
 - Git history - PR information
@@ -683,10 +737,11 @@ No PR found for this work.
 
 ---
 
-**Version:** 2.4.1
-**Last Updated:** 2026-11-15
+**Version:** 2.5.0
+**Last Updated:** 2026-11-16
 **Maintained By:** Escapement
 **Changelog:**
+- v2.5.0: Phase 6.5 archives a factory run: copies its contract, reports, verdicts and PR body, records archive_path and closes the run (merged or abandoned, from its PR) (#64)
 - v2.4.1: Read context-path with scripts/get-context-path.sh, which ignores examples in fenced blocks and outside `## Escapement Settings` (#57)
 - v2.4.0: Added Phase 1.5 Capture Session Tail — save the conversation since the last session log, with a branch check before including another branch's work (#55)
 - v2.3.0: Added Phase 4.5 Project Lore Retro — reconcile + capture non-obvious context (invariants, gotchas, glossary, coupling, do-not-touch) at archive time

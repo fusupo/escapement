@@ -4,9 +4,11 @@ description: Create context-aware pull requests with issue integration. Invoke w
 tools:
   - Bash:git *
   - Bash:gh *
+  - Bash:bash *
   - mcp__github__*
   - mcp__linear__*
   - Read
+  - Write
   - AskUserQuestion
 ---
 
@@ -28,6 +30,32 @@ This skill activates when the user says things like:
 - After work completion: "Done, let's open a PR"
 
 ## Workflow Execution
+
+### Phase 0: Authorized Run Check
+
+A factory run approved with setup-work's "Approve + authorize run" opens its own PR, as the AI agent's GitHub identity, with its validation report in the description (docs/FACTORY_DESIGN.md §4.8, §6.1). Ask the runner whether this worktree has one:
+
+```bash
+FACTORY="${CLAUDE_PLUGIN_ROOT}/scripts/factory.sh"
+bash "$FACTORY" --check && bash "$FACTORY" --json authorization
+```
+
+- **`--check` fails, or `.result.matched` is false:** not authorized. Skip this phase; everything below runs exactly as written.
+- **Matched, `next` is `await_merge`:** the PR is open and already shows the current report. Report `.result.pr_number` and stop.
+- **Matched, but `.result.authorizes` lacks `open_pr`, or `.result.next` is neither `pr` nor `refresh_pr`:** stop without opening a PR: "Factory run {run_id} has no passing validation report yet (state {state}, next {next}). Run validate-work first." Don't fall back to opening a PR another way: an authorized branch only gets a PR with its report.
+- **Matched, `next` is `pr` or `refresh_pr`:** authorized. Note `.result.run_id`, `.result.artifact_dir` and `.result.target_ref`, the base branch.
+
+**Under authorization:**
+- Phases 1–4 run as written, with `{target_ref}` as the base. The issue text may already be in `{artifact_dir}/issue.md` (validate-work wrote it); reuse it. The description's Testing section can point at the validation report, which the runner appends.
+- **Phase 5 is skipped.** Show the title and description; don't ask.
+- **Phase 6 is replaced.** Never `git push`, `gh pr create`, the GitHub MCP tools or labels yourself: the runner pushes the run's branch and opens or updates the PR as the agent. Write the description with the Write tool to `{artifact_dir}/pr/narrative.md` (the artifact dir, never the worktree), then:
+  ```bash
+  bash "$FACTORY" --json pr '{run_id}' --title '{title}' --body-file '{artifact_dir}/pr/narrative.md'
+  ```
+  Single-quote the run ID and title (a `'` in the title is written `'\''`). For `refresh_pr` the title is optional; the PR keeps its own unless you pass one.
+  - **`.ok`:** report `.result.url`, `.result.pr_number` and `.result.action`: `created`, `updated`, or `recovered` (an earlier, interrupted call had created it). Running it again is safe: it finds the PR an earlier call created.
+  - **`gh_failed` or `push_failed`** (exit 1): GitHub may have acted before the failure. Run the same command once more; it finds a PR an earlier call created. If it fails again, report it and stop.
+  - **Refused** (exit 2, `.error.code`): report the code and message and stop; under do-work, the caller decides whether to escalate. `head_moved` means commits came after validation, or the tree is dirty (validate again); `no_agent_token` means ESCAPEMENT_AGENT_GH_TOKEN isn't set (environment or `~/.config/escapement/agent.env`); `run_deadline` means the run was escalated.
 
 ### Phase 1: Gather Context (Parallel)
 
@@ -135,7 +163,7 @@ Closes #{issue_number}
 
 ### Phase 5: Confirm with User
 
-Use `AskUserQuestion` to confirm PR details:
+Under an authorized run (Phase 0), skip this phase. Otherwise use `AskUserQuestion` to confirm PR details:
 
 ```
 AskUserQuestion:
@@ -157,6 +185,8 @@ AskUserQuestion:
 Display the proposed title and description before asking.
 
 ### Phase 6: Create Pull Request
+
+Under an authorized run, Phase 0 replaces this phase (`factory pr`).
 
 1. **Ensure branch is pushed:**
    ```bash
@@ -260,8 +290,11 @@ Based on context, automatically determine:
 ## Integration with Other Skills
 
 **Follows:**
-- `do-work` skill - After completing all tasks
+- `do-work` skill - After completing all tasks (under an authorized run, after validate-work passes)
 - `commit-changes` skill - After final commit
+
+**Calls:**
+- `scripts/factory.sh` `authorization` and `pr` (Phase 0; docs/FACTORY_CLI.md)
 
 **Links to:**
 - GitHub Issues - Auto-close on merge
@@ -286,7 +319,9 @@ Based on context, automatically determine:
 
 ---
 
-**Version:** 1.0.0
-**Last Updated:** 2025-12-29
+**Version:** 1.1.0
+**Last Updated:** 2026-11-16
 **Maintained By:** Escapement
 **Converted From:** commands/open-pr.md
+**Changelog:**
+- v1.1.0: Under a matching active factory authorization, open or update the PR through `factory pr` (as the AI agent, with the validation report), without confirmation; refuse without a passing report (#64)

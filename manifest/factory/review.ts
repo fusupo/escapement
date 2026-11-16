@@ -282,7 +282,7 @@ export async function reviewInput(
   db: Database,
   runId: string,
   attempt: number,
-  opts: { owner: Owner; lockWaitMs: number; issueFile?: string },
+  opts: { owner: Owner; lockWaitMs: number; issueFile?: string; dataDir?: string },
 ): Promise<ReviewInputResult> {
   const run0 = requireExecutable(db, runId, opts.owner).run;
   return withLocks(db, [worktreeLock(run0.worktree_path)], opts.owner, { waitMs: lockWait(run0, opts.lockWaitMs), runId }, () => {
@@ -326,6 +326,9 @@ export async function reviewInput(
     const at = attemptDir(run.artifact_dir, attempt);
     const required = requiredJudgments({ worktree: run.worktree_path, contract, draft });
     const writeTo = join(dir, "verdict.json");
+    // The commands name the database this bundle was written from, so they
+    // work from any shell, whatever its environment.
+    const runner = `bash ${shq(FACTORY_SH)}${opts.dataDir ? ` --data-dir ${shq(opts.dataDir)}` : ""}`;
     const bundle: Bundle = {
       version: 1,
       run_id: runId,
@@ -345,9 +348,9 @@ export async function reviewInput(
       verdict: {
         schema: schemaPath("verdict"),
         write_to: writeTo,
-        record: `bash ${shq(FACTORY_SH)} record-review ${shq(runId)} ${attempt} ${shq(writeTo)}`,
+        record: `${runner} record-review ${shq(runId)} ${attempt} ${shq(writeTo)}`,
       },
-      runner: { path: FACTORY_SH, exec: `bash ${shq(FACTORY_SH)} exec ${shq(runId)} --` },
+      runner: { path: FACTORY_SH, exec: `${runner} exec ${shq(runId)} --` },
       reviewer_prompt: promptPath("reviewer"),
     };
     const bundlePath = join(dir, "bundle.json");

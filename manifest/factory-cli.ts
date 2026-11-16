@@ -1,20 +1,26 @@
 import type { Database } from "better-sqlite3";
-import { initManifest } from "./init.ts";
-import { projectContext, resolveWorktree, excludePatterns } from "./factory/context.ts";
-import { startRun, approveRun, revokeRun, runStatus, listRuns } from "./factory/runs.ts";
+import { initManifest, resolveDbPath } from "./init.ts";
+import { projectContext, resolveWorktree, excludePatterns, mainRepoRoot, repoName, git } from "./factory/context.ts";
+import { agentIdentity, TOKEN_VAR, NAME_VAR, EMAIL_VAR } from "./factory/github.ts";
+import { matchAuthorization, noMatch, type AuthorizationMatch } from "./factory/authorization.ts";
+import { startRun, approveRun, revokeRun, escalateRun, runStatus, listRuns } from "./factory/runs.ts";
 import { getRun } from "./factory/state.ts";
 import { loadSettings, SETTING_DEFAULTS, type FactorySettings } from "./factory/settings.ts";
 import { execCommand, execExitCode } from "./factory/exec.ts";
 import { resumeRun } from "./factory/resume.ts";
 import { validateRun } from "./factory/validate.ts";
 import { reviewInput, recordReview } from "./factory/review.ts";
+import { openPr } from "./factory/pr.ts";
+import { recordManual } from "./factory/manual.ts";
+import { archiveRun } from "./factory/archive.ts";
+import { syncGuard } from "./factory/guard.ts";
 import { currentOwner } from "./factory/owner.ts";
 import { FactoryError, parseDuration } from "./factory/util.ts";
 import { checkReadiness } from "./factory/readiness.ts";
 import { SCHEMA_NAMES, schemaPath, isSchemaName } from "./factory/schemas.ts";
 import { PROMPT_NAMES, promptPath, isPromptName } from "./factory/prompts.ts";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readFileSync, existsSync } from "node:fs";
+import { resolve, dirname } from "node:path";
 
 /**
  * The factory runner CLI (docs/FACTORY_CLI.md). Hosts call it through
@@ -47,9 +53,24 @@ Commands:
   record-review <run_id> <attempt> <file>
                                 Check a reviewer verdict (- reads stdin) and
                                 finalize the attempt's report
+  record-manual <run_id> <evidence_id> pass|fail --note <text>
+                                Record a human's outcome for manual evidence the
+                                report left pending; all pass (or any fail)
+                                writes the next report revision
+  pr <run_id> [--title <t>] [--body-file <f>]
+                                Push the branch and open or update the run's PR
+                                as the agent (idempotent; needs a validated run
+                                and ESCAPEMENT_AGENT_GH_TOKEN)
+  archive <run_id> --path <dir> [--close] [--abandon]
+                                Record where the run's artifacts were archived;
+                                --close closes the run (merged or abandoned,
+                                from its PR), --abandon without asking GitHub
   status [run_id]               List open runs (--all: include closed), or show one
   resume <run_id>               Reconcile an interrupted run
   revoke <run_id>               End the run's active authorization
+  escalate <run_id> --reason <text>
+                                Stop the run to wait on a human (no-op when it
+                                is already blocked or escalated)
   check [--contract <file>]     Readiness: is the contract valid and runnable in
                                 this project? Prints ready or needs_human with
                                 questions (no run needed). Without --contract,
@@ -61,11 +82,18 @@ Commands:
   exclude <pattern>...          Add .gitignore-style patterns for the host's
                                 working files to the repository's
                                 .git/info/exclude (no run needed)
+  agent                         The AI agent's commit identity (name, email),
+                                from ${NAME_VAR}/${EMAIL_VAR}, else
+                                the account of ${TOKEN_VAR}
+  authorization                 Does this worktree have a run whose active
+                                authorization lets skills act without asking?
+                                Prints matched or the reasons it isn't (exit 0
+                                either way; never creates the database)
 
 Options:
   --json                Print one JSON object (see docs/FACTORY_CLI.md)
   --data-dir <path>     Use {path}/manifest.db instead of the shared manifest
-  --project-root <path> start, check, exclude: the worktree
+  --project-root <path> start, check, exclude, authorization: the worktree
                         (default: git toplevel of the cwd)
   --artifact-dir <path> Put run artifacts in {path}/{run_id}/
   --issue <n>           start: issue number, when the work item isn't #N
@@ -78,9 +106,19 @@ Options:
   --timeout <dur>       exec, validate: timeout per command
                         (default: command-timeout setting, else ${SETTING_DEFAULTS["command-timeout"]})
   --issue-file <file>   review-input: the issue text to put in the bundle
-  --lock-timeout <dur>  exec, validate, review-input, record-review, resume:
+  --lock-timeout <dur>  exec, validate, review-input, record-review, resume, pr,
+                        record-manual, archive:
                         how long to wait for locks
                         (default: lock-timeout setting, else ${SETTING_DEFAULTS["lock-timeout"]})
+  --reason <text>       escalate: why the run needs a human
+  --note <text>         record-manual: what was checked and seen
+  --recorder <name>     record-manual: who checked (default: the OS user)
+  --title <text>        pr: the PR title (needed to create it)
+  --body-file <file>    pr: the host's PR description; the runner adds its
+                        report section (on update, only the section changes)
+  --path <dir>          archive: where the host archived the run's artifacts
+  --close               archive: close the run, from its PR's state
+  --abandon             archive: close the run as abandoned
   --all                 status: include closed runs
   --print               schema, prompt: print the content instead of the path
 
@@ -100,8 +138,14 @@ const VALUE_FLAGS = new Set([
   "--timeout",
   "--lock-timeout",
   "--issue-file",
+  "--reason",
+  "--title",
+  "--body-file",
+  "--note",
+  "--recorder",
+  "--path",
 ]);
-const BOOL_FLAGS = new Set(["--json", "--all", "--print", "--help", "-h"]);
+const BOOL_FLAGS = new Set(["--json", "--all", "--print", "--close", "--abandon", "--help", "-h"]);
 
 type Parsed = { flags: Map<string, string | true>; positional: string[]; rest: string[] };
 
@@ -167,8 +211,40 @@ function need(value: string | undefined, what: string): string {
 
 type Outcome = { result: unknown; text: string; exitCode?: number };
 
+/** Commands that can change a run's state or authorization: the exec guard's marker is re-synced after them. */
+const GUARD_SYNC_COMMANDS = new Set([
+  "approve",
+  "revoke",
+  "escalate",
+  "exec",
+  "validate",
+  "record-review",
+  "record-manual",
+  "pr",
+  "archive",
+  "resume",
+]);
+
+/** Every command that uses the manifest database. */
+const KNOWN_DB_COMMANDS = new Set([
+  "start",
+  "approve",
+  "exec",
+  "validate",
+  "review-input",
+  "record-review",
+  "status",
+  "resume",
+  "revoke",
+  "escalate",
+  "authorization",
+  "pr",
+  "record-manual",
+  "archive",
+]);
+
 /** Commands that don't touch the manifest database, so hosts can run them anywhere. */
-const NO_DB_COMMANDS = new Set(["check", "schema", "prompt", "exclude"]);
+const NO_DB_COMMANDS = new Set(["check", "schema", "prompt", "exclude", "agent"]);
 
 function dispatchNoDb(command: string, p: Parsed): Outcome {
   const [arg] = p.positional;
@@ -203,6 +279,10 @@ function dispatchNoDb(command: string, p: Parsed): Outcome {
       ];
       return { result: r, text: lines.join("\n") };
     }
+    case "agent": {
+      const a = agentIdentity();
+      return { result: a, text: `${a.name} <${a.email}>${a.login ? `  (GitHub: ${a.login})` : ""}` };
+    }
     case "schema": {
       if (arg === undefined) {
         const schemas = SCHEMA_NAMES.map((name) => ({ name, path: schemaPath(name) }));
@@ -232,6 +312,42 @@ function dispatchNoDb(command: string, p: Parsed): Outcome {
     default:
       throw new FactoryError("usage", `unknown command ${command}`);
   }
+}
+
+/**
+ * The worktree, repo and branch `authorization` compares a run against.
+ * Not being in a repository, or on a branch, is an answer, not an error:
+ * skills call this everywhere and fall back to asking.
+ */
+function authorizationFor(db: Database | null, projectRoot: string | undefined): AuthorizationMatch {
+  let worktreePath: string;
+  try {
+    worktreePath = resolveWorktree(projectRoot);
+  } catch (err) {
+    if (err instanceof FactoryError && err.code === "not_a_repo") return noMatch("not_a_repo");
+    throw err;
+  }
+  let branch = "";
+  try {
+    branch = git(["branch", "--show-current"], worktreePath);
+  } catch {
+    // treated as detached below
+  }
+  if (!branch) return noMatch("detached_head");
+  if (!db) return noMatch("no_database");
+  return matchAuthorization(db, { worktreePath, repo: repoName(mainRepoRoot(worktreePath)), branch });
+}
+
+function describeMatch(r: AuthorizationMatch): string {
+  if (!r.matched) return `not matched: ${r.reasons.join(", ")}${r.run_id ? `\n  run: ${r.run_id} (${r.state})` : ""}`;
+  return [
+    `matched: ${r.run_id} (${r.state}), next: ${r.next}`,
+    `  branch:    ${r.branch} → ${r.target_ref}`,
+    `  contract:  ${r.contract_digest}`,
+    `  authorizes: ${r.authorizes.join(", ")}`,
+    `  deadline:  ${r.deadline_at ?? "-"}`,
+    ...(r.pr_number !== null ? [`  pr:        #${r.pr_number}`] : []),
+  ].join("\n");
 }
 
 async function dispatch(db: Database, command: string, p: Parsed, json: boolean): Promise<Outcome> {
@@ -308,6 +424,7 @@ async function dispatch(db: Database, command: string, p: Parsed, json: boolean)
         owner,
         lockWaitMs: duration(db, p, "--lock-timeout", runId, (s) => s.lockTimeoutMs),
         issueFile: issueFile === undefined ? undefined : resolve(issueFile),
+        dataDir: dirname(resolveDbPath({ dataDir: str(p, "--data-dir") })),
       });
       const n = r.required;
       return {
@@ -334,6 +451,58 @@ async function dispatch(db: Database, command: string, p: Parsed, json: boolean)
       return {
         result: r,
         text: `${runId} attempt ${attempt}: ${r.outcome}${how}\n  run:     ${r.run_state}\n  report:  ${r.report_path}\n  verdict: ${r.verdict_path}`,
+      };
+    }
+    case "record-manual": {
+      const runId = need(arg, "run_id");
+      const r = await recordManual(db, runId, need(p.positional[1], "evidence_id"), need(p.positional[2], "pass or fail"), {
+        note: need(str(p, "--note"), "--note <text>"),
+        recorder: str(p, "--recorder"),
+        owner,
+        lockWaitMs: duration(db, p, "--lock-timeout", runId, (s) => s.lockTimeoutMs),
+      });
+      const state = r.resolved
+        ? `resolved: ${r.resolved} (report revision ${r.report_revision})`
+        : `${r.pending.length} manual check(s) still pending: ${r.pending.join(", ")}`;
+      return {
+        result: r,
+        text: `${runId} ${r.evidence_id}: ${r.outcome}${r.noop ? " (already recorded)" : ""}\n  ${state}\n  run:    ${r.run_state}\n  report: ${r.report_path}${r.refresh_pr ? `\n  PR #${r.pr_number} shows the old report: run factory pr '${runId}'` : ""}`,
+      };
+    }
+    case "archive": {
+      const runId = need(arg, "run_id");
+      const r = await archiveRun(db, runId, {
+        path: need(str(p, "--path"), "--path <dir>"),
+        close: p.flags.has("--close"),
+        abandon: p.flags.has("--abandon"),
+        owner,
+        lockWaitMs: duration(db, p, "--lock-timeout", runId, (s) => s.lockTimeoutMs),
+      });
+      return {
+        result: r,
+        text: `${runId}: archived at ${r.archive_path}${r.changed ? "" : " (unchanged)"}\n  run: ${r.state}${r.closed ? ` (${r.closed})` : ""}`,
+      };
+    }
+    case "pr": {
+      const runId = need(arg, "run_id");
+      const bodyFile = str(p, "--body-file");
+      let narrative: string | undefined;
+      if (bodyFile !== undefined) {
+        try {
+          narrative = readFileSync(resolve(bodyFile), "utf-8");
+        } catch (err) {
+          throw new FactoryError("usage", `cannot read --body-file ${bodyFile}: ${(err as Error).message}`);
+        }
+      }
+      const r = await openPr(db, runId, {
+        owner,
+        lockWaitMs: duration(db, p, "--lock-timeout", runId, (s) => s.lockTimeoutMs),
+        title: str(p, "--title"),
+        narrative,
+      });
+      return {
+        result: r,
+        text: `${runId}: PR #${r.pr_number} ${r.action} (${r.outcome}, attempt ${r.attempt})\n  ${r.url}\n  run:  ${r.state}\n  body: ${r.body_path}`,
       };
     }
     case "status": {
@@ -371,6 +540,18 @@ async function dispatch(db: Database, command: string, p: Parsed, json: boolean)
       ];
       return { result: r, text: lines.join("\n") };
     }
+    case "authorization": {
+      const r = authorizationFor(db, str(p, "--project-root"));
+      return { result: r, text: describeMatch(r) };
+    }
+    case "escalate": {
+      const runId = need(arg, "run_id");
+      const r = escalateRun(db, runId, { reason: need(str(p, "--reason"), "--reason <text>"), owner });
+      return {
+        result: r,
+        text: r.changed ? `${runId}: escalated (${r.run.state_reason})` : `${runId}: already ${r.run.state}${r.run.state_reason ? ` (${r.run.state_reason})` : ""}; nothing changed`,
+      };
+    }
     case "revoke": {
       const a = revokeRun(db, need(arg, "run_id"));
       return { result: { authorization: a }, text: `${a.run_id}: authorization ${a.contract_digest} revoked` };
@@ -378,6 +559,20 @@ async function dispatch(db: Database, command: string, p: Parsed, json: boolean)
     default:
       throw new FactoryError("usage", `unknown command ${command}`);
   }
+}
+
+/** A command other than start when the manifest database doesn't exist yet. */
+function withoutDatabase(command: string, p: Parsed): Outcome {
+  const where = resolveDbPath({ dataDir: str(p, "--data-dir") });
+  if (command === "authorization") {
+    const r = authorizationFor(null, str(p, "--project-root"));
+    return { result: r, text: describeMatch(r) };
+  }
+  if (command === "status" && p.positional.length === 0) return { result: { runs: [] }, text: "No open runs." };
+  if (!KNOWN_DB_COMMANDS.has(command)) throw new FactoryError("usage", `unknown command ${command}`);
+  const runId = p.positional[0];
+  if (!runId) throw new FactoryError("usage", "missing run_id");
+  throw new FactoryError("no_such_run", `no run ${runId} (no factory database at ${where})`);
 }
 
 async function main(argv: string[]): Promise<number> {
@@ -415,6 +610,10 @@ async function main(argv: string[]): Promise<number> {
     let out: Outcome;
     if (NO_DB_COMMANDS.has(command)) {
       out = dispatchNoDb(command, parsed);
+    } else if (command !== "start" && !existsSync(resolveDbPath({ dataDir: str(parsed, "--data-dir") }))) {
+      // Opening the manifest would create it. Only start creates runs, so
+      // without a database there is no run: answer that, and create nothing.
+      out = withoutDatabase(command, parsed);
     } else {
       db = initManifest({ dataDir: str(parsed, "--data-dir") });
       db.pragma("busy_timeout = 10000");
@@ -430,6 +629,15 @@ async function main(argv: string[]): Promise<number> {
   } catch (err) {
     return fail(err);
   } finally {
+    // Also after a failure: a blocked command may have escalated the run.
+    const runId = parsed.positional[0];
+    if (db && runId && GUARD_SYNC_COMMANDS.has(command)) {
+      try {
+        syncGuard(db, runId);
+      } catch {
+        // The marker is advisory; resume and the next command re-sync it.
+      }
+    }
     db?.close();
   }
 }

@@ -4,6 +4,7 @@ description: Create thoughtful git commits with conventional commits format. Inv
 tools:
   - mcp__serena__*
   - Bash:git *
+  - Bash:bash *
   - Read
   - Grep
   - AskUserQuestion
@@ -27,6 +28,34 @@ This skill activates when the user says things like:
 - After completing a scratchpad task: "Done with this task, commit it"
 
 ## Workflow Execution
+
+### Phase 0: Authorized Run Check
+
+A factory run approved with setup-work's "Approve + authorize run" authorizes commits on its branch (docs/FACTORY_DESIGN.md §3.6, §6.1). Ask the runner whether this worktree has one:
+
+```bash
+FACTORY="${CLAUDE_PLUGIN_ROOT}/scripts/factory.sh"
+bash "$FACTORY" --check && bash "$FACTORY" --json authorization
+```
+
+- **`--check` fails, `.result.matched` is false, or `.result.authorizes` lacks `commit`:** not authorized. Skip this phase; everything below runs exactly as written, with every confirmation.
+- **Matched, with `commit`:** authorized. Note `.result.run_id`, then get the agent's commit identity:
+  ```bash
+  bash "$FACTORY" --json agent
+  ```
+  If it fails (`no_agent_token`), stop without committing: "Commits under factory run {run_id} carry the AI agent's identity: put ESCAPEMENT_AGENT_GH_TOKEN (or ESCAPEMENT_AGENT_NAME and ESCAPEMENT_AGENT_EMAIL) in ~/.config/escapement/agent.env (chmod 600), or export it." On `agent_env_permissions`, say what the message says: the file needs `chmod 600`. Never fall back to the operator's identity. Otherwise note `.result.name` and `.result.email` as written.
+
+**Under authorization the approved plan stands in for the confirmations:**
+- **Phase 2:** several logical changes become several commits, in a sensible order, without asking which first.
+- **Phase 4:** skipped. Show the message; don't ask.
+- **Phase 5:** stage explicit paths only (never `git add -A` or `git add .`), and commit as the agent, author and committer both:
+  ```bash
+  git -c user.name="{name}" -c user.email="{email}" commit -m "$(cat <<'EOF'
+  {message}
+  EOF
+  )"
+  ```
+- **Never** push (`factory pr` does that), amend or rewrite a commit already made, or commit a file that doesn't belong to the work: an untracked file you didn't create, or anything that looks like a secret. Leave it, report it and stop; the caller (do-work) escalates the run.
 
 ### Phase 1: Gather Context (Parallel)
 
@@ -67,6 +96,8 @@ Execute these in parallel for efficiency:
    - Verify no secrets or sensitive data included
 
 ### Phase 3: Craft Commit Message
+
+When the project's CLAUDE.md defines its own commit format, use that format instead of the default below; its module emojis and scopes come from there too.
 
 **Format:**
 ```
@@ -117,7 +148,7 @@ Execute these in parallel for efficiency:
 
 ### Phase 4: Confirm with User
 
-Use `AskUserQuestion` to confirm the commit:
+Under an authorized run (Phase 0), skip this phase. Otherwise use `AskUserQuestion` to confirm the commit:
 
 ```
 AskUserQuestion:
@@ -225,8 +256,11 @@ If in detached HEAD state:
 ## Integration with Other Skills
 
 **Called by:**
-- `do-work` skill - After completing each scratchpad task
+- `do-work` skill - After completing each scratchpad task (without confirmations under an authorized factory run)
 - User directly via natural language
+
+**Calls:**
+- `scripts/factory.sh` `authorization` and `agent` (Phase 0; docs/FACTORY_CLI.md)
 
 **Works with:**
 - Project CLAUDE.md - Module emojis and conventions
@@ -269,7 +303,9 @@ This skill would then use 🌐 for api changes, 🎨 for frontend changes, etc.
 
 ---
 
-**Version:** 1.0.1
-**Last Updated:** 2026-10-19
+**Version:** 1.1.0
+**Last Updated:** 2026-11-16
 **Maintained By:** Escapement
 **Converted From:** commands/commit.md
+**Changelog:**
+- v1.1.0: Under a matching active factory authorization, commit without confirmations, as the AI agent's identity (#64)
