@@ -2,7 +2,7 @@ import type { Database } from "better-sqlite3";
 import { initManifest, resolveDbPath } from "./init.ts";
 import { projectContext, resolveWorktree, excludePatterns, mainRepoRoot, repoName, git } from "./factory/context.ts";
 import { matchAuthorization, noMatch, type AuthorizationMatch } from "./factory/authorization.ts";
-import { startRun, approveRun, revokeRun, runStatus, listRuns } from "./factory/runs.ts";
+import { startRun, approveRun, revokeRun, escalateRun, runStatus, listRuns } from "./factory/runs.ts";
 import { getRun } from "./factory/state.ts";
 import { loadSettings, SETTING_DEFAULTS, type FactorySettings } from "./factory/settings.ts";
 import { execCommand, execExitCode } from "./factory/exec.ts";
@@ -51,6 +51,9 @@ Commands:
   status [run_id]               List open runs (--all: include closed), or show one
   resume <run_id>               Reconcile an interrupted run
   revoke <run_id>               End the run's active authorization
+  escalate <run_id> --reason <text>
+                                Stop the run to wait on a human (no-op when it
+                                is already blocked or escalated)
   check [--contract <file>]     Readiness: is the contract valid and runnable in
                                 this project? Prints ready or needs_human with
                                 questions (no run needed). Without --contract,
@@ -86,6 +89,7 @@ Options:
   --lock-timeout <dur>  exec, validate, review-input, record-review, resume:
                         how long to wait for locks
                         (default: lock-timeout setting, else ${SETTING_DEFAULTS["lock-timeout"]})
+  --reason <text>       escalate: why the run needs a human
   --all                 status: include closed runs
   --print               schema, prompt: print the content instead of the path
 
@@ -105,6 +109,7 @@ const VALUE_FLAGS = new Set([
   "--timeout",
   "--lock-timeout",
   "--issue-file",
+  "--reason",
 ]);
 const BOOL_FLAGS = new Set(["--json", "--all", "--print", "--help", "-h"]);
 
@@ -415,6 +420,14 @@ async function dispatch(db: Database, command: string, p: Parsed, json: boolean)
     case "authorization": {
       const r = authorizationFor(db, str(p, "--project-root"));
       return { result: r, text: describeMatch(r) };
+    }
+    case "escalate": {
+      const runId = need(arg, "run_id");
+      const r = escalateRun(db, runId, { reason: need(str(p, "--reason"), "--reason <text>"), owner });
+      return {
+        result: r,
+        text: r.changed ? `${runId}: escalated (${r.run.state_reason})` : `${runId}: already ${r.run.state}${r.run.state_reason ? ` (${r.run.state_reason})` : ""}; nothing changed`,
+      };
     }
     case "revoke": {
       const a = revokeRun(db, need(arg, "run_id"));

@@ -130,6 +130,12 @@ out="$(f --json authorization)"
 status=$?
 if [[ $status -eq 0 && "$(jq -r '(.result.matched | not) and (.result.reasons | index("no_active_authorization") != null)' <<<"$out")" == true ]]; then ok; else bad "authorization-revoked" "status=$status out=$out"; fi
 
+# escalate: the host stops the run to wait on a human; again is a no-op
+out="$(f --json escalate '#5-r1' --reason 'blocked: dirty_tree')"
+if [[ "$(jq -r '.ok and .result.changed and .result.run.state == "escalated" and .result.run.state_reason == "blocked: dirty_tree"' <<<"$out")" == true ]]; then ok; else bad "escalate-json" "$out"; fi
+out="$(f --json escalate '#5-r1' --reason 'again')"
+if [[ "$(jq -r '.ok and (.result.changed | not)' <<<"$out")" == true ]]; then ok; else bad "escalate-noop" "$out"; fi
+
 # errors: exit 1 with kind "error"
 out="$(f --json status 'no-such-run')"
 status=$?

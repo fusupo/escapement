@@ -220,6 +220,26 @@ export function revokeRun(db: Database, runId: string): AuthorizationRow {
   });
 }
 
+/**
+ * Stop a run to wait on a human (§6.1): the host hit something it can't
+ * get past, such as a blocked precondition or a real blocker. A run that
+ * is already blocked or escalated is left as it is. Bookkeeping, so it
+ * works past the deadline; a closed run can't be escalated.
+ */
+export function escalateRun(
+  db: Database,
+  runId: string,
+  opts: { reason: string; owner?: Owner },
+): { run: RunRow; changed: boolean } {
+  if (!opts.reason.trim()) throw new FactoryError("usage", "escalate needs a --reason");
+  return tx(db, () => {
+    const run = getRun(db, runId);
+    if (run.state === "closed") throw blocked("run_closed", `run ${runId} is closed`);
+    if (run.state === "blocked" || run.state === "escalated") return { run, changed: false };
+    return { run: transitionRun(db, runId, "escalated", { reason: opts.reason.trim(), owner: opts.owner }), changed: true };
+  });
+}
+
 // ── preconditions for commands that execute work ─────────────────────
 
 export function deadlinePassed(run: RunRow, now: number = Date.now()): boolean {
