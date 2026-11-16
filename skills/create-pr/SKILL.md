@@ -53,7 +53,7 @@ bash "$FACTORY" --check && bash "$FACTORY" --json authorization
   ```
   Single-quote the run ID and title (a `'` in the title is written `'\''`). For `refresh_pr` the title is optional; the PR keeps its own unless you pass one.
   - **`.ok`:** report `.result.url`, `.result.pr_number` and `.result.action` (`created` or `updated`). Running it again is safe: it finds the PR an earlier call created.
-  - **Refused** (exit 2, `.error.code`): report the code and message and stop; the caller (do-work) escalates the run. `revision_changed` means commits came after validation (validate again); `no_agent_token` means ESCAPEMENT_AGENT_GH_TOKEN isn't set; `run_deadline` means the run was escalated.
+  - **Refused** (exit 2, `.error.code`): report the code and message and stop; the caller (do-work) escalates the run. `head_moved` means commits came after validation, or the tree is dirty (validate again); `no_agent_token` means ESCAPEMENT_AGENT_GH_TOKEN isn't set; `run_deadline` means the run was escalated.
 
 ### Phase 1: Gather Context (Parallel)
 

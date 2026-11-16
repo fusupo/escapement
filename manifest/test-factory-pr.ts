@@ -116,10 +116,10 @@ async function run() {
 
   await rejects(openPr(db, a.run.run_id, { ...o, env: { ...env, ESCAPEMENT_AGENT_GH_TOKEN: "" }, title: "t" }), /no_agent_token/, "no agent token: refused");
   writeFileSync(join(a.root, "stray.txt"), "x");
-  await rejects(openPr(db, a.run.run_id, { ...o, title: "t" }), /revision_changed[\s\S]*not clean/, "a dirty tree: revision_changed");
+  await rejects(openPr(db, a.run.run_id, { ...o, title: "t" }), /head_moved[\s\S]*not clean/, "a dirty tree: head_moved");
   sh("git", ["add", "stray.txt"], a.root);
   sh("git", ["commit", "-q", "-m", "after validation"], a.root);
-  await rejects(openPr(db, a.run.run_id, { ...o, title: "t" }), /revision_changed[\s\S]*HEAD is/, "HEAD moved since validation: revision_changed");
+  await rejects(openPr(db, a.run.run_id, { ...o, title: "t" }), /head_moved[\s\S]*HEAD is/, "HEAD moved since validation: head_moved");
   sh("git", ["reset", "-q", "--hard", "HEAD~1"], a.root);
   const contractPath = join(a.run.artifact_dir, "contract.json");
   const contract = readFileSync(contractPath, "utf-8");

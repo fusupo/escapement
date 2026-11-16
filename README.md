@@ -152,11 +152,12 @@ Skills are invoked automatically by Claude Code when relevant, or you can refere
 | Skill            | Triggers                            | Purpose                                        |
 | ---------------- | ----------------------------------- | ---------------------------------------------- |
 | `setup-work`     | "setup issue #X", "start issue #X"  | Fetch issue, create scratchpad, prepare branch; on projects set up for the factory, also draft a validation contract and offer to authorize a run |
-| `commit-changes` | "commit", "commit these changes"    | Smart commits with conventional format         |
-| `create-pr`      | "create a PR", "open pull request"  | Context-aware PR creation                      |
+| `commit-changes` | "commit", "commit these changes"    | Smart commits with conventional format; under an authorized factory run, without asking, as the AI agent |
+| `create-pr`      | "create a PR", "open pull request"  | Context-aware PR creation; under an authorized run, through `factory pr` with the validation report |
 | `review-pr`      | "review PR #X", "check this PR"     | Roadmap-aware code review                      |
-| `do-work`        | "start working", "continue work"    | Execute tasks from scratchpad                  |
-| `archive-work`   | "archive this work", "clean up"     | Move completed scratchpads to archive          |
+| `do-work`        | "start working", "continue work"    | Execute tasks from scratchpad; under an authorized run, from approved plan to open PR with no questions |
+| `validate-work`  | "validate this work", "record the manual check" | Validate a factory run: checks, fresh-context reviewer, recorded verdict; manual outcomes |
+| `archive-work`   | "archive this work", "clean up"     | Move completed scratchpads to archive; archive and close a factory run |
 | `create-issue`   | "create an issue", "file a bug"     | Ad hoc GitHub issue creation from natural language |
 | `stash-artifact` | "stash this script", "save to context" | Save artifacts to context directory         |
 | `prime-session`  | "orient me", "what is this project" | Read project docs for context                  |
@@ -187,6 +188,8 @@ Escapement includes a **PreCompact hook** that captures your raw session transcr
 The `archive-work` skill later saves the session's tail since the last log, converts the `.jsonl` files to readable markdown (using `scripts/convert-session-log.py`), and moves them to the archive directory.
 
 **Requirements:** `jq` must be installed for the hook to function.
+
+A **PreToolUse hook**, `factory-exec-guard.sh`, keeps a factory run's builds and tests on the shared build lock. It acts only in a worktree whose run is being implemented under an authorization (a marker the runner keeps inside `.git`), and refuses the project's `static` and `verify` commands unless they go through `factory exec`. Everywhere else it exits at once. A project opts out with `exec-hook: off` in its Escapement Settings. See [FACTORY_CLI.md](docs/FACTORY_CLI.md#the-exec-guard).
 
 ## Agents
 
@@ -235,7 +238,8 @@ escapement/
 │   ├── commit-changes/       # Conventional commits
 │   ├── create-pr/            # Pull request creation
 │   ├── review-pr/            # PR review
-│   ├── do-work/              # Execute from scratchpad
+│   ├── do-work/              # Execute from scratchpad (authorized factory path)
+│   ├── validate-work/        # Validate a factory run: checks, reviewer, verdict
 │   ├── archive-work/         # Archive completed work (context-path aware)
 │   ├── create-issue/         # Ad hoc GitHub issue creation
 │   ├── stash-artifact/       # Save artifacts to context directory
@@ -247,11 +251,12 @@ escapement/
 │   └── manifest-dispatch/    # Dispatch parallel work from manifest plan
 ├── hooks/
 │   ├── hooks.json            # Hook configuration
-│   └── archive-session-log.sh # PreCompact hook (JSONL slice)
+│   ├── archive-session-log.sh # PreCompact hook (JSONL slice)
+│   └── factory-exec-guard.sh  # PreToolUse hook: a run's checks go through factory exec
 ├── manifest/                 # Manifest and factory CLIs (TypeScript, SQLite)
 │   ├── manifest-cli.ts       # Manifest entry point; run it through scripts/manifest.sh
 │   ├── factory-cli.ts        # Factory runner entry point; run it through scripts/factory.sh
-│   ├── factory/              # Runs, locks, exec, resume, settings, tiers, schemas, readiness, validate, review
+│   ├── factory/              # Runs, locks, exec, resume, settings, tiers, schemas, readiness, validate, review, authorization, GitHub, pr, manual, archive, guard
 │   ├── init.ts               # Database setup and context-path resolution
 │   ├── plan.ts               # Dispatch plan generation
 │   ├── migrations.ts         # Ordered schema migrations (PRAGMA user_version)
@@ -466,9 +471,17 @@ fusupo
 
 ## Version
 
-**Current:** 3.11.0
+**Current:** 3.12.0
 
 **Changelog:**
+- 3.12.0 (2026-11-16): The factory's authorized path (#64)
+  - **From approved plan to open PR with no questions.** When `setup-work`'s "Approve + authorize run" authorized a run, `do-work` works through the tasks with builds and tests through `factory exec`, commits each one, validates and opens the PR. When something stops it, it escalates the run, notifies you and stops. Your touches are plan approval and merge. Without an authorization every skill behaves as before
+  - **The AI agent's identity on GitHub.** Under an authorization, commits carry the agent's name and email, and the push and PR run as the agent's GitHub account: export `ESCAPEMENT_AGENT_GH_TOKEN` (optionally `ESCAPEMENT_AGENT_NAME`, `ESCAPEMENT_AGENT_EMAIL`). Without it the factory refuses rather than acting as you
+  - **`factory.sh pr`** pushes the run's branch and opens or updates its PR in one locked step, with the validation report in the description. Running it again after a crash finds the PR instead of opening a second one
+  - **New `validate-work` skill:** `factory validate`, then the fresh-context reviewer, then `factory record-review`, with up to two re-runs of an incomplete verdict. It also records manual checks
+  - **`factory.sh record-manual`** records a human's outcome for manual evidence; when they resolve, the report gets a new revision and a failure escalates the run
+  - **`factory.sh authorization`**, **`agent`**, **`escalate`** and **`archive`**: the run a worktree's skills may act for, the agent's commit identity, stopping a run for a human, and archiving and closing a run (`archive-work` now does this)
+  - **Exec guard:** a PreToolUse hook refuses a run's `static` and `verify` commands outside `factory exec` while the run is implemented; `exec-hook` now defaults to `on`
 - 3.11.0 (2026-11-16): setup-work produces the validation contract and run authorization (#63)
   - **Factory path in `setup-work`**, only for projects whose required checks are configured (otherwise it is unchanged): a readiness check before planning, relevant lore and related archives, a proposed risk tier, and a validation contract with evidence for every criterion, checked with `factory check` and written into the scratchpad
   - **"Approve + authorize run"** next to plain "Approve" at plan approval. It checks out the branch, excludes the working files, starts a factory run, writes the contract into it and approves it, then confirms the authorization's digest matches the stored contract. Plain approval creates no run

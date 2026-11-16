@@ -2,9 +2,9 @@
 
 The factory runner is a small deterministic CLI that owns a run's state, locks, deadlines and artifacts. The design and the reasoning behind it are in [FACTORY_DESIGN.md](FACTORY_DESIGN.md), §4 and §7. This page is the reference for calling it.
 
-The Escapement skills are one client of the runner. Other hosts, such as Escapement Studio, can call it as a subprocess and read its `--json` output. The runner never invokes a skill or an agent. It only runs git and the commands you give it.
+The Escapement skills are one client of the runner. Other hosts, such as Escapement Studio, can call it as a subprocess and read its `--json` output. The runner never invokes a skill or an agent. It runs git and the commands you give it, and, for a run's push and PR, `gh` as the AI agent's GitHub identity (see [GitHub and the agent identity](#github-and-the-agent-identity)).
 
-First-release status: #59 provides `start`, `approve`, `exec`, `status`, `resume` and `revoke`. #60 adds contract validation, settings, `check` and `schema`. #61 adds `validate`. #62 adds `review-input`, `record-review` and `prompt`. #63 adds `exclude`, a settings-only `check`, and a `start` that refuses the target branch; `setup-work` drives `check`, `exclude`, `start` and `approve` (its factory path). `record-manual` and `pr` arrive in #64.
+First-release status: #59 provides `start`, `approve`, `exec`, `status`, `resume` and `revoke`. #60 adds contract validation, settings, `check` and `schema`. #61 adds `validate`. #62 adds `review-input`, `record-review` and `prompt`. #63 adds `exclude`, a settings-only `check`, and a `start` that refuses the target branch; `setup-work` drives `check`, `exclude`, `start` and `approve` (its factory path). #64 adds `authorization`, `agent`, `escalate`, `pr`, `record-manual` and `archive`, GitHub access as the agent, and the exec guard; `do-work`, `commit-changes`, `create-pr`, `validate-work` and `archive-work` drive them (the authorized path, FACTORY_DESIGN.md §6.1).
 
 ## Running it
 
@@ -45,10 +45,12 @@ A run directory holds:
 contract.json          approved contract (approve)
 exec/{n}.log           output of the n-th exec
 exec/{n}.json          its result record (same shape as exec's JSON result)
-attempts/{n}/report.json        the attempt's report (validate; finalized by #62)
+attempts/{n}/report.json        the attempt's report (validate; finalized by record-review)
+attempts/{n}/report.r{k}.json   later revisions (record-manual), k = 2, 3, …
 attempts/{n}/logs/{id}.log      output of each command the attempt ran
 attempts/{n}/results/{id}/      structured results of each verify invocation
-attempts/{n}/review.json        reviewer verdict (#62)
+attempts/{n}/review.json        reviewer verdict (record-review)
+pr/body.md                      the PR description as last sent (pr)
 ```
 
 **Schemas.** The documents hosts exchange with the runner have published JSON Schemas in `schemas/factory/` (contract, report, verdict, readiness). `factory schema` prints their paths. See [schemas/factory/README.md](../schemas/factory/README.md).
@@ -68,6 +70,12 @@ attempts/{n}/review.json        reviewer verdict (#62)
 | `status [run_id]` | List open runs (`--all` includes closed ones), or show one run | yes |
 | `resume <run_id>` | Reconcile an interrupted run (§4.7) | yes, reconciliation only |
 | `revoke <run_id>` | End the active authorization | yes |
+| `escalate <run_id> --reason <text>` | Stop the run to wait on a human | yes |
+| `authorization` | Does this worktree's run let skills act without asking? Read-only; never creates the database | yes |
+| `agent` | The AI agent's commit identity. No database needed | n/a |
+| `pr <run_id>` | Push the branch and open or update the run's PR, as the agent | **no** to create; yes to update |
+| `record-manual <run_id> <evidence_id> pass\|fail --note <text>` | Record a human's outcome for manual evidence | yes |
+| `archive <run_id> --path <dir>` | Record where the run was archived; `--close` closes it | yes |
 | `check [--contract <file>]` | Readiness: is the contract valid and runnable in this project? Without `--contract`, only the settings are checked. No run or database needed | n/a |
 | `exclude <pattern>…` | Add the host's working-file patterns to the repository's `.git/info/exclude`. No run or database needed | n/a |
 | `schema [name]` | Path of a published JSON Schema, or its content with `--print`; no name lists them all. No database needed | n/a |
@@ -79,7 +87,7 @@ Options:
 |---|---|---|
 | `--json` | all | off |
 | `--data-dir <path>` | all | shared manifest |
-| `--project-root <path>` | start, check, exclude | git toplevel of the cwd |
+| `--project-root <path>` | start, check, exclude, authorization | git toplevel of the cwd |
 | `--artifact-dir <path>` | start | see Storage |
 | `--issue <n>` | start | parsed from `#N` or `owner/repo#N` |
 | `--manifest-id <id>` | start | none |
@@ -89,7 +97,14 @@ Options:
 | `--run-budget <dur>` | approve | `run-budget` setting, else `2h` |
 | `--timeout <dur>` | exec, validate (per command) | `command-timeout` setting, else `15m` |
 | `--issue-file <file>` | review-input | none |
-| `--lock-timeout <dur>` | exec, validate, review-input, record-review, resume | `lock-timeout` setting, else `30m` |
+| `--lock-timeout <dur>` | exec, validate, review-input, record-review, resume, pr, record-manual, archive | `lock-timeout` setting, else `30m` |
+| `--reason <text>` | escalate (required) | none |
+| `--title <text>` | pr (needed to create the PR) | none |
+| `--body-file <file>` | pr: the host's PR description | the PR's own description on update; none on create |
+| `--note <text>` | record-manual (required) | none |
+| `--recorder <name>` | record-manual | the OS user |
+| `--path <dir>` | archive (required) | none |
+| `--close`, `--abandon` | archive | off |
 | `--all` | status | off |
 | `--print` | schema, prompt | off |
 
@@ -109,7 +124,7 @@ The runner reads the factory keys of `## Escapement Settings` (FACTORY_DESIGN.md
 | `test-files` | comma list of globs naming test files (§4.6) | `*.test.*, *.spec.*, test/, tests/, __tests__/, test_*.py, *_test.py, *_test.go` |
 | `max-attempts` | positive whole number | `3` |
 | `command-timeout`, `lock-timeout`, `run-budget` | duration | `15m`, `30m`, `2h` |
-| `exec-hook` | `on`, `off` | `off` |
+| `exec-hook` | `on`, `off`: the exec guard during runs | `on` |
 | `gate-mode` | `report-only` | `report-only` |
 
 - Settings are read when a command needs them, not copied per run. Their digest (factory keys only) is reported by `check` and goes into each report's `policy_version`. A branch that changes them is an execution-policy change (§4.6), so weakening them is visible to review.
@@ -267,7 +282,7 @@ The commands in `verdict.record` and `runner.exec` carry no global options. A ho
 **Outcome:**
 - `fail` on any `supports_criterion` of `no` or `partial`, `procedure_adequate` of `no`, sign-off `concern`, `justified: false`, or blocking finding. Each one becomes a blocking finding in the report: `judgment:{id}`, `signoff:{path}`, `justification:{location}` or `review:{n}` (the verdict's own findings, in order).
 - Otherwise `pending_manual` when the contract has manual evidence, else `pass`.
-- `pass` and `pending_manual` move the run to `validated`, so a PR can open while a human records the manual outcomes (`record-manual`, #64). `fail` escalates it. A run that was halted meanwhile (for example by the deadline) keeps its state.
+- `pass` and `pending_manual` move the run to `validated`, so a PR can open while a human records the manual outcomes (`record-manual`). `fail` escalates it. A run that was halted meanwhile (for example by the deadline) keeps its state.
 
 **Idempotency.** The verdict digest is the `sha256:` of its canonical JSON (keys sorted), so formatting doesn't matter.
 - The same verdict for a `complete` attempt is a no-op (`noop: true`). A different one is `verdict_conflict`.
@@ -295,6 +310,95 @@ The manifest mirrors a readiness document into a work item with `manifest.sh rea
 
 The runner knows no host's file names. `setup-work` passes `'SCRATCHPAD_*' 'SESSION_LOG_*' AGENT_CONSTRAINTS.md`.
 
+### authorization
+
+`authorization [--project-root <path>]` answers the one question skills ask before they skip a confirmation (§3.6): does this worktree have a run whose active authorization covers it? It looks up the worktree's non-closed run and is **matched** only when all hold:
+
+- the run's repo and branch are the worktree's current repo and branch;
+- the run has an active authorization;
+- `{artifact_dir}/contract.json` hashes to the authorized digest, which is also the run's;
+- the run is `approved`, `implementing`, `validating`, `validated` or `pr_open`, not waiting on a human;
+- the run deadline hasn't passed.
+
+Otherwise `reasons` lists each one that failed: `no_run`, `repo_mismatch`, `branch_mismatch`, `no_active_authorization`, `contract_missing`, `contract_changed`, `run_halted`, `run_deadline`. Outside a repository it is `not_a_repo`, on a detached HEAD `detached_head`, and when the manifest database doesn't exist `no_database`: it never opens or creates the database, and never changes the run, even past the deadline. It exits 0 either way; route on `matched`.
+
+A matched answer carries the run, what the authorization allows (`authorizes`) and an advisory `next`:
+
+| `next` | When |
+|---|---|
+| `implement` | no attempt is open (none yet, or the last was interrupted) |
+| `resume` | the latest attempt's checks are running, or crashed |
+| `review` | the latest attempt awaits review, or its finalization was interrupted |
+| `pr` | the run is `validated` |
+| `refresh_pr` | the run is `pr_open` |
+
+The runner still checks every command on its own; `next` only tells a host where to pick up.
+
+### escalate
+
+`escalate <run_id> --reason <text>` moves a run to `escalated`, so it shows why it stopped instead of looking active: the host hit something it can't get past, such as a blocked precondition or a real blocker. A run already blocked or escalated is left as it is (`changed: false`). It works past the deadline and refuses a closed run.
+
+### GitHub and the agent identity
+
+Everything the factory does on GitHub runs as the AI agent's GitHub account, so its work shows as the agent's and not the operator's:
+
+| Variable | Use |
+|---|---|
+| `ESCAPEMENT_AGENT_GH_TOKEN` | Required for `pr`, and for `archive --close` with a PR. The agent account's token |
+| `ESCAPEMENT_AGENT_NAME`, `ESCAPEMENT_AGENT_EMAIL` | Optional. The agent's commit author. Default: the token account's login and its GitHub noreply address (`{id}+{login}@users.noreply.github.com`) |
+
+- The token reaches `gh` as `GH_TOKEN` (`GITHUB_TOKEN` is dropped), and `git push` through a credential helper that reads the variable. It never appears in argv, URLs, logs, events or JSON output; errors redact it.
+- Without it, `pr` and `archive --close` are blocked with `no_agent_token`. The runner never falls back to the operator's own `gh` login.
+- Keep the variables out of any file a project commits. They have to be in the environment the host runs the runner in.
+- `agent` prints the commit identity (`{name, email, login, source}`, `source` being `env` or `github`). Skills commit with it under an authorization: `git -c user.name=… -c user.email=… commit`.
+- The `gh` CLI must be on PATH (`gh_missing` otherwise).
+
+### pr
+
+`pr <run_id> [--title <t>] [--body-file <f>]` opens the run's PR, or updates it, idempotently (§4.8). It holds the worktree lock.
+
+1. **Checks.** The run is `validated`, or `pr_open`, or `escalated` with a PR already recorded (a refresh). Otherwise `not_validated`. Then:
+   - an active authorization allowing `push_branch` and `open_pr` (`not_authorized`);
+   - `contract.json` is the approved contract (`contract_mismatch`);
+   - the current report, the latest complete attempt's highest revision, exists (`no_report`), is `pass` or `pending_manual` when creating (`not_validated`), and is for the approved contract (`stale_report`);
+   - HEAD equals the report's `head_sha` and the tree is clean (`head_moved`: validate again).
+2. **Lookup.** `gh pr list --head {branch} --state open`, keeping PRs from the run's repository (a fork's PR with the same branch name is ignored). Two open PRs: `pr_conflict`. A recorded number that isn't the open PR: `pr_conflict`. A recorded PR that is no longer open: `pr_not_open`.
+3. **Create or update.** With no open PR, creating needs `--title` (`usage`) and the deadline not passed (otherwise the run escalates: `run_deadline`). The runner pushes HEAD to `refs/heads/{branch}` and nothing else, never forced, then runs `gh pr create --base {target_ref} --head {branch}` or `gh pr edit {number}`. On a GitHub remote the push goes over https as the agent, whatever protocol `origin` uses; a local remote is pushed as configured. Project `pre-push` hooks still run.
+4. **Record.** The PR number goes on the run, with a `state_change` event (entity `pr`), and a `validated` run moves to `pr_open`.
+
+**The description** is the host's narrative (`--body-file`; on update without it, the PR's current description) plus the runner's report section, between `<!-- escapement:factory-report:begin -->` and `<!-- escapement:factory-report:end -->`. Updates replace only the section. It shows the outcome, the run and attempt (and report revision), the actual and proposed tier with reasons, what was validated (the branch, not the merge result), the contract digest, a table of every criterion's evidence with its result and judgment, manual checks (pending or recorded), findings and flags. Text from reports is escaped, so it can't break the table or forge a marker. The final description is kept at `{artifact_dir}/pr/body.md`.
+
+**Crashes.** Running `pr` again after a crash at any step is safe: the lookup finds a PR an earlier call created, and the same number is recorded once. Recovery is "run the command again"; `resume` doesn't touch PRs.
+
+Updating an existing PR is bookkeeping: it works past the deadline, and for an `escalated` run with a PR, so its description stops showing a stale report.
+
+### record-manual
+
+`record-manual <run_id> <evidence_id> pass|fail --note <text> [--recorder <name>]` records a human's outcome for `manual` evidence that the current report left `pending_manual` (§5.5). It holds the worktree lock and works past the deadline.
+
+- **Bound to the report.** The report must be for the approved contract (`stale_contract`) and HEAD must still be its `head_sha` (`stale_report`); a new commit invalidates earlier records along with the report. The evidence must be one awaiting a human (`unknown_evidence`, listing those that are). A report that isn't `pending_manual` refuses with `not_pending_manual`, or `already_resolved` once human outcomes decided it.
+- **Records.** Each is a `manual_outcome` event with the outcome, note, recorder, head and contract. The same outcome again is a no-op; a different one replaces it until the report resolves.
+- **Resolution.** When every manual item is `pass`, or any is `fail`, the runner writes the next revision, `attempts/{n}/report.r{k}.json`: `revision`, `supersedes`, the new `outcome`, the manual evidence marked `passed` or `failed`, and `manual_outcomes`. Earlier revisions, `report.json` included, are never changed, and the attempt's outcome follows. A `fail` adds a blocking finding `manual:{evidence_id}` with the note and escalates the run.
+- `refresh_pr: true` in the result means the run's open PR shows the old report: run `pr` again.
+
+### archive
+
+`archive <run_id> --path <dir> [--close | --abandon]` records where the host archived the run (`archive_path`) and can close it, so its worktree can start another run. It holds the worktree lock and works past the deadline.
+
+- `--close` takes the action from the run's PR, read as the agent: merged → `merged`; closed unmerged, or no PR at all (no GitHub call) → `abandoned`; still open → `pr_open`, nothing recorded.
+- `--abandon` closes the run as `abandoned` without asking GitHub.
+- Closing ends the authorization. The artifact dir stays where it is: the database records its paths. The merge commit and other operator actions are recorded later (manifest-sync).
+- The same path again, or closing a closed run, changes nothing.
+
+### The exec guard
+
+While a run is implemented, builds and tests should go through `exec`, so they queue on the build lock. The plugin's `PreToolUse` hook `hooks/factory-exec-guard.sh` enforces that for Claude Code's Bash tool.
+
+- **The marker.** The runner keeps `$(git rev-parse --git-path escapement-factory-run.json)` (per worktree, inside `.git`, so the tree stays clean) exactly while the run is `approved`, `implementing` or `validating` under an active authorization, `exec-hook` is `on` (the default), and `static` or `verify` is configured. It holds `{version, run_id, worktree_path, deadline_at, commands}`, the commands being the settings' `static` and `verify`. The CLI re-syncs it after every command that names a run, failures included, so it follows each transition, revocation and close; `resume` heals one a crash left behind.
+- **The hook.** With no marker it exits at once (one `jq` and one `git` call). With one, it splits the command on `&&`, `||`, `;`, `|` and newlines; a part that starts with a guarded command (after environment assignments, `time`, `command`, `nohup` or an opening parenthesis) is refused, with the exact `exec` command to use. It ignores a marker past the run deadline and lets the call through on anything unexpected, such as no `jq` or a malformed marker.
+- **Opting out.** `exec-hook: off` in the project's Escapement Settings: the runner then writes no marker.
+- It guards against forgetting, not against an adversary (§11): `npx jest` instead of `npm test` gets through.
+
 ## Locks
 
 Locks are rows in `factory_locks`, not `flock`s. They only serialize factory commands; anything outside the factory ignores them.
@@ -302,7 +406,7 @@ Locks are rows in `factory_locks`, not `flock`s. They only serialize factory com
 | Lock | Guards | Held by |
 |---|---|---|
 | `build` | CPU: one build or test at a time across all worktrees (per user, since the DB is per user) | `exec` while its command runs; `validate` throughout |
-| `worktree:{path}` | One factory operation at a time on a worktree | `exec`, `validate`, `review-input`, `record-review`, `resume`; `pr` later |
+| `worktree:{path}` | One factory operation at a time on a worktree | `exec`, `validate`, `review-input`, `record-review`, `resume`, `pr`, `record-manual`, `archive` |
 
 Each row records its holder: pid, process start time, command, host and run.
 - A holder whose process is gone, or whose pid now belongs to another process, is treated as dead.
@@ -353,6 +457,12 @@ With `--json`, every command prints exactly one JSON object on stdout.
 - **status** without one: `{runs: [run, …]}`
 - **resume:** `{run, deadline_passed, actions: [{attempt, found, action, detail?}], released_locks}`
 - **revoke:** `{authorization}`
+- **escalate:** `{run, changed}`
+- **authorization:** `{matched: false, reasons, run_id, state}`, or `{matched: true, reasons: [], run_id, state, repo, branch, target_ref, worktree_path, artifact_dir, contract_path, contract_digest, authorizes, approved_at, deadline_at, issue_number, pr_number, latest_attempt: {attempt, status, outcome, head_sha} | null, next}`
+- **agent:** `{name, email, login, source}`
+- **pr:** `{run_id, pr_number, url, action, state, head_sha, attempt, report_revision, outcome, body_path}`; `action` is `created` or `updated`
+- **record-manual:** `{run_id, attempt, evidence_id, outcome, noop, recorded: [{evidence_id, outcome}], pending, resolved, report_path, report_revision, run_state, pr_number, refresh_pr}`; `resolved` is null until the report resolves
+- **archive:** `{run_id, archive_path, changed, closed, pr_state, state}`; `closed` is `merged`, `abandoned` or null
 - **exclude:** `{path, added, present}`: the exclude file, the patterns appended, and those already there
 - **check:** a readiness document (`schemas/factory/readiness.schema.json`): `{version, status, questions: [{about, question, ref?}], tier?: {tier, reasons}, required_checks: [{name, command}], target_ref, settings_digest}`. `target_ref` is the branch `start` targets without `--target-ref`; hosts create the feature branch from it
 - **schema:** `{schemas: [{name, path}]}`, or `{name, path}`, plus `schema` with `--print`
@@ -364,7 +474,8 @@ Run fields:
 - `issue_number`, `manifest_id`, `work_type`
 - `state`, `state_reason`
 - `tier_proposed` (from the contract, set by approve), `tier_actual` and `policy_version` (set by validate)
-- `contract_digest`, `operator_action`
+- `contract_digest`, `operator_action` (the close action)
+- `pr_number` (set by pr), `archive_path` (set by archive), `merge_sha` (null until manifest-sync records it)
 - `started_at`, `ended_at`
 
 The remaining §7.1 columns appear too and stay null until later issues fill them.
@@ -378,8 +489,8 @@ Error codes:
 
 | kind | codes |
 |---|---|
-| `blocked` (exit 2) | from start `on_target_branch`; `run_deadline`, `not_authorized`, `run_halted`, `run_closed`, `lock_timeout`, `attempt_budget`; from validate also `attempt_open`, `bad_setting`, `contract_mismatch`, `not_configured`, `dirty_tree`, `no_target`, `no_merge_base`; from review-input and record-review also `contract_mismatch`, `not_issued`, `invalid_verdict`, `incomplete_verdict`, `verdict_conflict` |
-| `error` (exit 1) | `usage`, `no_such_run`, `run_exists`, `wrong_state`, `illegal_transition`, `no_contract`, `bad_contract`, `bad_setting`, `no_active_authorization`, `bad_duration`, `bad_work_item`, `bad_project_root`, `not_a_repo`, `detached_head`, `git_failed`, `no_such_attempt`, `revision_changed`, `snapshot_failed`, `unreadable`, `bad_pattern`, `internal` |
+| `blocked` (exit 2) | from start `on_target_branch`; `run_deadline`, `not_authorized`, `run_halted`, `run_closed`, `lock_timeout`, `attempt_budget`; from validate also `attempt_open`, `bad_setting`, `contract_mismatch`, `not_configured`, `dirty_tree`, `no_target`, `no_merge_base`; from review-input and record-review also `contract_mismatch`, `not_issued`, `invalid_verdict`, `incomplete_verdict`, `verdict_conflict`; from pr `not_validated`, `no_report`, `stale_report`, `head_moved`, `pr_conflict`, `pr_not_open`, `no_agent_token`; from record-manual `no_report`, `not_pending_manual`, `already_resolved`, `stale_report`, `stale_contract`, `unknown_evidence`; from archive `pr_open`, `no_agent_token`; from agent `no_agent_token` |
+| `error` (exit 1) | `usage`, `no_such_run`, `run_exists`, `wrong_state`, `illegal_transition`, `no_contract`, `bad_contract`, `bad_setting`, `no_active_authorization`, `bad_duration`, `bad_work_item`, `bad_project_root`, `not_a_repo`, `detached_head`, `git_failed`, `no_such_attempt`, `revision_changed`, `snapshot_failed`, `unreadable`, `bad_pattern`, `gh_missing`, `gh_failed`, `push_failed`, `no_remote`, `internal` |
 
 ## Exit status
 
@@ -391,5 +502,6 @@ Error codes:
 | `exec` | the command's own exit status, or 124 when the runner killed it |
 | `validate` | 0 whenever it recorded an attempt, whatever the outcome; read `outcome` from the JSON |
 | `record-review` | 0 when it recorded the verdict, or already had, whatever the outcome; 2 when the verdict is rejected |
+| `authorization` | 0 whether or not it matched; read `matched` |
 
 `exec`'s statuses can overlap with 1 and 2 when the command itself exits with them, so hosts should read the JSON. With `--json`, the command's output goes only to the log, never to stdout.

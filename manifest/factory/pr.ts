@@ -99,7 +99,7 @@ export async function openPr(
       throw blocked("stale_report", `the report was validated against ${report.contract_digest}, not the approved ${run.contract_digest}`);
     }
     const identity = identityHolds(run.worktree_path, report.head_sha);
-    if (!identity.ok) throw blocked("revision_changed", `${identity.detail}; validate again before opening the PR`);
+    if (!identity.ok) throw blocked("head_moved", `${identity.detail}; validate again before opening the PR`);
 
     const env = opts.env ?? process.env;
     const token = agentToken(env);

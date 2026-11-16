@@ -25,7 +25,8 @@ escapement/
 │   ├── commit-changes/  # Smart git commits with conventions
 │   ├── create-pr/       # Context-aware pull request creation
 │   ├── review-pr/       # Roadmap-aware PR review
-│   ├── do-work/         # Execute work from scratchpad
+│   ├── do-work/         # Execute work from scratchpad (authorized factory path)
+│   ├── validate-work/   # Validate a factory run: checks, reviewer, verdict; manual outcomes
 │   ├── archive-work/    # Archive completed scratchpads (context-path aware)
 │   ├── create-issue/    # Ad hoc GitHub issue creation
 │   ├── stash-artifact/  # Save artifacts to context directory
@@ -37,7 +38,8 @@ escapement/
 │   └── manifest-dispatch/ # Dispatch parallel work from manifest plan
 ├── hooks/
 │   ├── hooks.json       # Hook configuration
-│   └── archive-session-log.sh  # PreCompact hook script
+│   ├── archive-session-log.sh  # PreCompact hook script
+│   └── factory-exec-guard.sh   # PreToolUse hook: a factory run's checks go through `factory exec`
 ├── scripts/             # Reusable utility scripts for skills
 │   ├── convert-session-log.py  # JSONL→markdown session log converter
 │   ├── get-context-path.sh     # Shared context-path parser (section- and fence-aware)
@@ -73,7 +75,8 @@ escapement/
 | `commit-changes` | "Commit these changes" | Smart commits with project conventions |
 | `create-pr` | "Create a PR" | Context-aware pull request creation |
 | `review-pr` | "Review PR #123" | Roadmap-aware code review |
-| `do-work` | "Start working on issue #42" | Execute tasks from scratchpad with TodoWrite |
+| `do-work` | "Start working on issue #42" | Execute tasks from scratchpad with TodoWrite; under an authorized factory run, through to an open PR without questions |
+| `validate-work` | "Validate this work" | Factory validation: `factory validate`, the validation-reviewer, `record-review`; manual outcomes |
 | `archive-work` | "Archive this work" | Move completed scratchpads to archive (context-path aware) |
 | `create-issue` | "Create an issue", "File a bug" | Ad hoc GitHub issue creation from natural language |
 | `stash-artifact` | "Stash this script", "Save to context" | Save artifacts to context directory |
@@ -92,6 +95,10 @@ escapement/
 - Always writes to the project root; `archive-work` moves logs to the context path
 - Creates `SESSION_LOG_{N}.jsonl` files, each holding only the conversation since the previous log (via `scripts/slice-session-log.sh` and a per-session cursor)
 - Requires `jq` to be installed
+
+**PreToolUse hook** `factory-exec-guard.sh` (matcher `Bash`): while a worktree's factory run is implemented under an authorization, refuses the project's `static`/`verify` commands outside `factory exec`. It reads only a marker the runner keeps in the worktree's git dir, so it is inert everywhere else; `exec-hook: off` opts a project out. Tests: `scripts/test-factory-hook.sh`.
+
+**Authorized path:** `commit-changes`, `create-pr` and `do-work` drop their confirmations only when `factory authorization` matches. Everything the factory writes to GitHub (push, PR) goes through the runner as the AI agent's identity (`ESCAPEMENT_AGENT_GH_TOKEN`), never as the operator. See `docs/FACTORY_CLI.md`.
 
 ### Agents
 

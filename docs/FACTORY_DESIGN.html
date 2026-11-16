@@ -420,6 +420,7 @@ ul.tight li{margin:.3rem 0}
       </table></div>
       <p class="muted" style="font-size:.9rem">An authorization ends when the run reaches a terminal state. <code>factory revoke</code> or any contract change revokes it; re-approval issues a new one on the same run.</p>
       <p><i>As built (#63):</i> <code>setup-work</code> takes this path only when the project's required checks are configured (a settings-only <code>factory check</code> is <code>ready</code>), and then offers <b>Approve + authorize run</b> next to plain <b>Approve</b>, which creates no run. The contract is drafted in the scratchpad, so a rejected plan leaves nothing behind. On approval it checks out the branch (<code>factory start</code> refuses the target branch), excludes its working files with <code>factory exclude</code>, starts the run, writes the contract into the run, checks and approves it, and confirms the authorization's digest matches the stored contract. Readiness is mirrored into the manifest with <code>manifest.sh readiness</code>, under its own key so dependency ambiguities are kept.</p>
+      <p><i>As built (#64):</i> skills ask one question, <code>factory authorization</code>: does this worktree's run match on repo, branch, active authorization, <code>contract.json</code> digest, a non-halted state and the deadline? It answers with what the authorization allows and where to pick up (implement, resume, review, pr, refresh_pr), and never changes anything. <code>commit-changes</code>, <code>create-pr</code> and <code>do-work</code> drop their confirmations only on a match. Under an authorization the factory's work shows as the AI agent's: commits carry its name and email, and the push and PR run as its GitHub account.</p>
 
       <h3>What setup-work adds</h3>
       <div class="tbl-wrap"><table>
@@ -482,6 +483,7 @@ ul.tight li{margin:.3rem 0}
         </tbody>
       </table></div>
       <p><b>Manual evidence</b> is recorded with <code>factory record-manual &lt;run&gt; &lt;evidence&gt; pass|fail --note …</code>. Each record is bound to the current report's revision and contract; a new commit invalidates it. When every manual item passes, the outcome moves from <code>pending_manual</code> to <code>pass</code> as a new report revision, and the original is kept. <i>As built (#62):</i> a <code>pending_manual</code> outcome moves the run to <code>validated</code>, so the PR can open while manual items are outstanding.</p>
+      <p><i>As built (#64):</i> a revision is <code>attempts/{n}/report.r{k}.json</code> with <code>revision</code>, <code>supersedes</code> and <code>manual_outcomes</code>. A single <code>fail</code> resolves the report at once, adds a blocking finding <code>manual:{id}</code> and escalates the run. The result says when the open PR needs <code>factory pr</code> to refresh its report section.</p>
     </section>
 
     <!-- 5 VALIDATE -->
@@ -599,6 +601,7 @@ ul.tight li{margin:.3rem 0}
         </svg></div>
       </div>
       <p class="muted" style="font-size:.9rem">The implementer is told to run builds and tests through <code>factory exec</code> so they queue too. An optional <code>PreToolUse</code> hook can reject direct calls to the project's verify or static commands; it ships off.</p>
+      <p><i>As built (#64):</i> the hook is registered for every project but acts only where the runner keeps its marker, inside the worktree's git directory while a run is approved, implementing or validating under an active authorization. It is <b>on by default during runs</b> (<code>exec-hook: off</code> opts out) and costs one <code>jq</code> and one <code>git</code> call elsewhere.</p>
 
       <h3>Deadlines bound runner activity, not bookkeeping</h3>
       <p>Each command has a timeout; on expiry the runner kills the whole process group, records <code>error</code> and releases its locks. Approval also stores an absolute <code>deadline_at</code>. Past it, commands that start execution refuse and the run escalates. Bookkeeping stays available.</p>
@@ -626,6 +629,7 @@ ul.tight li{margin:.3rem 0}
       <p>Budgets survive recovery: resume never resets attempt counts, deadlines or recorded time.</p>
       <h3>PR creation is idempotent</h3>
       <p><code>factory pr</code> first looks for an open PR on the branch. If one exists it records the number and updates the body; otherwise it creates one and records it in the same step. A crash between creating and recording is reconciled on resume by the same lookup. It holds the worktree lock and re-checks that the branch head still equals the report's <code>head_sha</code>.</p>
+      <p><i>As built (#64):</i> <code>gh</code> runs as the AI agent's GitHub identity (<code>ESCAPEMENT_AGENT_GH_TOKEN</code>; without it the runner refuses, never acting as the operator), and the runner pushes only HEAD to the run's branch, never forced. The host writes the narrative; the runner appends its report section between markers and replaces only that on updates. Recovery is running <code>factory pr</code> again: the lookup finds a PR an earlier call created. Everything the factory writes to GitHub goes through the runner as the agent.</p>
     </section>
 
     <!-- 9 GATE -->
@@ -707,7 +711,7 @@ ul.tight li{margin:.3rem 0}
           <tr><td>create-pr</td><td>Delegates to <code>factory pr</code> under authorization; checks report head equals branch head</td><td><span class="state s-pass">first</span></td></tr>
           <tr><td>archive-work</td><td>Archives the run artifacts; records <code>archive_path</code></td><td><span class="state s-pass">first</span></td></tr>
           <tr><td>validation-reviewer agent</td><td>New</td><td><span class="state s-pass">first</span></td></tr>
-          <tr><td>PreToolUse exec hook</td><td>Optional enforcement of <code>factory exec</code></td><td><span class="state s-pass">first</span> off</td></tr>
+          <tr><td>PreToolUse exec hook</td><td>Optional enforcement of <code>factory exec</code></td><td><span class="state s-pass">first</span> on during runs</td></tr>
           <tr><td>do-work</td><td>Fix loop</td><td><span class="state s-pend">next</span></td></tr>
           <tr><td>setup-work + plan-critic</td><td>Critique loop</td><td><span class="state s-pend">next</span></td></tr>
           <tr><td>gate + manifest-sync</td><td>Report-only recommendation; operator action and merge SHA</td><td><span class="state s-pend">next</span></td></tr>
@@ -720,7 +724,7 @@ ul.tight li{margin:.3rem 0}
       <div class="eyebrow">13 · Risks &amp; open questions <span class="src">md §11, §12</span></div>
       <h2>Accepted for the first release</h2>
       <ul class="tight">
-        <li>Using <code>factory exec</code> is instruction-based unless the hook is on.</li>
+        <li>Using <code>factory exec</code> is instruction-based; the hook, on during runs, catches only the project's own <code>static</code> and <code>verify</code> commands.</li>
         <li>"New versus modified" test classification is a heuristic; ambiguity takes the stricter class.</li>
         <li>Branch validation can pass while the merge fails. The report says so, and the operator merges.</li>
         <li>Stale ignored build output isn't detected; projects own clean-build-safe commands.</li>
@@ -1015,7 +1019,7 @@ function gate(){const miss=GATE.filter(([k])=>!$("#g-"+k).checked).map(g=>g[1]);
 $$("#gateList input").forEach(i=>i.onchange=gate); gate();
 
 /* config */
-const CFG=[["context-path","../myproject-ctx","Where run artifacts and archives live."],["base-branch","develop","Target for branches and PRs."],["setup","npm ci","Run under the lock when the lockfile digest changes."],["static","npm run typecheck && npm run lint","Phase 1. Required."],["verify","npx jest --runInBand --reporters=default --reporters=jest-junit","Phase 2, run once. Required."],["test-results","junit:$FACTORY_RESULTS_DIR/junit.xml","Where structured results land. Should use the fresh results directory."],["required-checks","static, verify","Always run in full; contracts name no commands, so they can't narrow them."],["sensitive-paths","src/auth/**, migrations/**, .github/**","Touching these makes a run sensitive."],["validation-files","jest.config.*, tsconfig*.json, package.json","Changing these is an execution-policy change."],["test-files","*.test.*, *.spec.*, tests/","Which files are tests, for change classification. Common defaults."],["max-attempts","3","Fix-loop cap (next)."],["command-timeout","15m","Per-command deadline; process group killed on expiry."],["lock-timeout","30m","Longest wait for the build lock."],["run-budget","2h","Sets the enforced run deadline."],["exec-hook","off","Optional enforcement of factory exec."],["gate-mode","report-only","How the gate behaves."]];
+const CFG=[["context-path","../myproject-ctx","Where run artifacts and archives live."],["base-branch","develop","Target for branches and PRs."],["setup","npm ci","Run under the lock when the lockfile digest changes."],["static","npm run typecheck && npm run lint","Phase 1. Required."],["verify","npx jest --runInBand --reporters=default --reporters=jest-junit","Phase 2, run once. Required."],["test-results","junit:$FACTORY_RESULTS_DIR/junit.xml","Where structured results land. Should use the fresh results directory."],["required-checks","static, verify","Always run in full; contracts name no commands, so they can't narrow them."],["sensitive-paths","src/auth/**, migrations/**, .github/**","Touching these makes a run sensitive."],["validation-files","jest.config.*, tsconfig*.json, package.json","Changing these is an execution-policy change."],["test-files","*.test.*, *.spec.*, tests/","Which files are tests, for change classification. Common defaults."],["max-attempts","3","Fix-loop cap (next)."],["command-timeout","15m","Per-command deadline; process group killed on expiry."],["lock-timeout","30m","Longest wait for the build lock."],["run-budget","2h","Sets the enforced run deadline."],["exec-hook","on","The factory exec guard during runs; off opts out."],["gate-mode","report-only","How the gate behaves."]];
 $("#cfgRows").innerHTML=CFG.map(([k,v,d])=>`<tr><td><code>${k}</code></td><td class="mono" style="font-size:.78rem;word-break:break-word">${esc(v)}</td><td>${esc(d)}</td></tr>`).join("");
 
 /* build order */
@@ -1027,8 +1031,8 @@ const BUILD=[
  [5,"#61","factory validate","Identity, setup policy, static and evidence phases, fresh results, classification, actual tier, draft reports.","done"],
  [6,"#62","Reviewer","validation-reviewer prompt and agent, bundle, record-review completeness and idempotency.","done"],
  [7,"#63","setup-work produces the contract","Readiness, tier, contract and authorization; factory exclude, settings-only check, manifest readiness.","done"],
- [8,"#64","Authorized path","do-work, commit-changes, create-pr, factory pr, record-manual.","next"],
- [9,"#65","Release acceptance test","A real issue end to end, interrupted on purpose during checks, between checks and review, during finalization, and between PR creation and recording.","open"]
+ [8,"#64","Authorized path","do-work, commit-changes, create-pr, validate-work, archive-work; factory authorization, agent, escalate, pr, record-manual, archive; GitHub as the agent; exec guard on during runs.","done"],
+ [9,"#65","Release acceptance test","A real issue end to end, interrupted on purpose during checks, between checks and review, during finalization, and between PR creation and recording.","next"]
 ];
 const ST={done:["s-pass","done"],next:["s-pend","next up"],open:["s-neutral","open"]};
 $("#buildList").innerHTML=BUILD.map(([n,iss,t,d,s])=>`<li><span class="no">${n}</span><div><span class="t"><a href="https://github.com/fusupo/escapement/issues/${iss.slice(1)}">${iss}</a> ${esc(t)}</span><div class="d">${esc(d)}</div>${n===1?`<span class="sub">Also fixed alongside: <a href="https://github.com/fusupo/escapement/issues/67">#67</a>, manifest skills run their CLI through a plugin-root wrapper.</span>`:""}</div><span class="state ${ST[s][0]}">${ST[s][1]}</span></li>`).join("")+
