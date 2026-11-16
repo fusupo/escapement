@@ -15,14 +15,20 @@ export type Migration = {
  * Ordered schema migrations. The database records the last one applied in
  * PRAGMA user_version.
  *
- * Never edit a migration that has shipped (schema.sql is migration 1 and is
- * frozen); add a new one with the next version number instead.
+ * Never edit a migration that has shipped (schema.sql is migration 1 and
+ * migrations/002-factory.sql is migration 2; both are frozen); add a new one
+ * with the next version number instead.
  */
 export const MIGRATIONS: Migration[] = [
   {
     version: 1,
     name: "initial work_items and edges",
     up: (db) => db.exec(readFileSync(resolve(__dirname, "schema.sql"), "utf-8")),
+  },
+  {
+    version: 2,
+    name: "factory runs, authorizations, attempts, events and locks",
+    up: (db) => db.exec(readFileSync(resolve(__dirname, "migrations", "002-factory.sql"), "utf-8")),
   },
 ];
 

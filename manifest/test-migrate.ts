@@ -41,7 +41,7 @@ function legacyV1Db(): DatabaseType {
 }
 
 const notes: Migration = {
-  version: 2,
+  version: MIGRATIONS.length + 1,
   name: "test notes table",
   up: (db) => db.exec("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT NOT NULL)"),
 };
@@ -54,7 +54,11 @@ function run() {
     const r = migrate(db);
     assert(r.from === 0 && r.to === MIGRATIONS.length, `fresh db migrates 0 -> ${MIGRATIONS.length}`);
     assert(schemaVersion(db) === MIGRATIONS.length, "user_version set to latest");
-    assert(tables(db).join(",") === "edges,work_items", "fresh db has work_items and edges");
+    assert(
+      tables(db).join(",") ===
+        "edges,factory_attempts,factory_authorizations,factory_events,factory_locks,factory_runs,work_items",
+      "fresh db has the manifest and factory tables",
+    );
 
     const again = migrate(db);
     assert(again.from === again.to && again.to === MIGRATIONS.length, "second run is a no-op");
@@ -64,7 +68,8 @@ function run() {
   {
     const db = legacyV1Db();
     const r = migrate(db);
-    assert(r.from === 0 && r.to === 1, "unversioned v1 db is adopted as version 1");
+    assert(r.from === 0 && r.to === MIGRATIONS.length, "unversioned v1 db is adopted as 1 and migrated to latest");
+    assert(tables(db).includes("factory_runs"), "adopted db gains the factory tables");
     const count = (db.prepare("SELECT COUNT(*) AS n FROM work_items").get() as { n: number }).n;
     assert(count === 2, "adopted db keeps its work items");
     db.close();
@@ -73,8 +78,8 @@ function run() {
   {
     const db = legacyV1Db();
     const r = migrate(db, [...MIGRATIONS, notes]);
-    assert(r.from === 0 && r.to === 2, "pending migration 2 runs on an adopted v1 db");
-    assert(tables(db).includes("notes"), "migration 2 created its table");
+    assert(r.from === 0 && r.to === notes.version, "pending migrations run on an adopted v1 db");
+    assert(tables(db).includes("notes"), "the extra migration created its table");
     const edges = (db.prepare("SELECT COUNT(*) AS n FROM edges").get() as { n: number }).n;
     assert(edges === 1, "existing edges survive the upgrade");
     db.close();
@@ -85,7 +90,54 @@ function run() {
     migrate(db);
     db.prepare("INSERT INTO work_items (id, name, kind) VALUES ('a', 'Item A', 'issue')").run();
     const r = migrate(db, [...MIGRATIONS, notes]);
-    assert(r.from === 1 && r.to === 2, "versioned v1 db upgrades in place to 2");
+    assert(r.from === MIGRATIONS.length && r.to === notes.version, "versioned db upgrades in place");
+    db.close();
+  }
+
+  {
+    // A database at version 1 (manifest only) gains the factory tables.
+    const db = legacyV1Db();
+    migrate(db, MIGRATIONS.slice(0, 1));
+    assert(schemaVersion(db) === 1, "db pinned at version 1");
+    const r = migrate(db);
+    assert(r.from === 1 && r.to === 2, "version 1 db upgrades to 2");
+    assert(tables(db).includes("factory_locks"), "migration 2 adds factory_locks");
+    const items = (db.prepare("SELECT COUNT(*) AS n FROM work_items").get() as { n: number }).n;
+    assert(items === 2, "work items survive migration 2");
+    db.close();
+  }
+
+  {
+    const db = new Database(":memory:");
+    migrate(db);
+    const insertRun = (id: string, state: string) =>
+      db
+        .prepare(
+          `INSERT INTO factory_runs (run_id, work_item, repo, worktree_path, branch, target_ref,
+             artifact_dir, state, started_at) VALUES (?, 'w', 'o/r', '/wt', 'b', 'develop', '/a', ?, 'now')`,
+        )
+        .run(id, state);
+    insertRun("r1", "planned");
+    throws(() => insertRun("r2", "bogus"), /CHECK constraint/, "run state CHECK rejects unknown states");
+    const insertAuth = (digest: string, status: string) =>
+      db
+        .prepare(
+          `INSERT INTO factory_authorizations (run_id, contract_digest, baseline_json, authorizes_json,
+             status, approved_at) VALUES ('r1', ?, '{}', '[]', ?, 'now')`,
+        )
+        .run(digest, status);
+    insertAuth("d1", "active");
+    throws(() => insertAuth("d2", "active"), /UNIQUE constraint/, "only one active authorization per run");
+    insertAuth("d3", "superseded");
+    const insertAttempt = (n: number) =>
+      db
+        .prepare(
+          `INSERT INTO factory_attempts (run_id, attempt, status, head_sha, contract_digest,
+             policy_version, started_at) VALUES ('r1', ?, 'checks_running', 'abc', 'd1', 'p', 'now')`,
+        )
+        .run(n);
+    insertAttempt(1);
+    throws(() => insertAttempt(1), /UNIQUE constraint|PRIMARY KEY/, "attempt numbers are unique per run");
     db.close();
   }
 
@@ -93,7 +145,7 @@ function run() {
     const db = new Database(":memory:");
     migrate(db);
     const broken: Migration = {
-      version: 2,
+      version: MIGRATIONS.length + 1,
       name: "broken",
       up: (d) => {
         d.exec("CREATE TABLE half_done (id INTEGER)");
@@ -101,7 +153,7 @@ function run() {
       },
     };
     throws(() => migrate(db, [...MIGRATIONS, broken]), /boom/, "failing migration raises");
-    assert(schemaVersion(db) === 1, "failed migration leaves user_version unchanged");
+    assert(schemaVersion(db) === MIGRATIONS.length, "failed migration leaves user_version unchanged");
     assert(!tables(db).includes("half_done"), "failed migration is rolled back");
     db.close();
   }

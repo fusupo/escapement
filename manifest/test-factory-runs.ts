@@ -1,0 +1,124 @@
+import { readFileSync, existsSync, writeFileSync, realpathSync } from "node:fs";
+import { join } from "node:path";
+import { projectContext } from "./factory/context.ts";
+import {
+  startRun,
+  approveRun,
+  revokeRun,
+  runStatus,
+  listRuns,
+  requireExecutable,
+  runIdBase,
+  issueNumberOf,
+  contractDigest,
+} from "./factory/runs.ts";
+import { getRun, transitionRun } from "./factory/state.ts";
+import { assert, throws, tempDir, cleanup, makeRepo, memDb } from "./factory/testkit.ts";
+
+const HOUR = 3_600_000;
+
+function auths(db: import("better-sqlite3").Database, runId: string) {
+  return db
+    .prepare("SELECT contract_digest, status FROM factory_authorizations WHERE run_id = ? ORDER BY approved_at, contract_digest")
+    .all(runId) as { contract_digest: string; status: string }[];
+}
+
+async function run() {
+  console.log("Run identity\n");
+
+  assert(runIdBase("#42") === "#42", "#42 stays as is");
+  assert(runIdBase("fusupo/escapement#42") === "fusupo-escapement#42", "a slash becomes a dash");
+  assert(runIdBase("  Studio item: 17 ") === "Studio-item-17", "spaces and punctuation are collapsed");
+  throws(() => runIdBase("///"), /bad_work_item/, "a work item with nothing usable is rejected");
+  assert(issueNumberOf("#42") === 42 && issueNumberOf("o/r#7") === 7, "issue numbers are read from #N and owner/repo#N");
+  assert(issueNumberOf("STUDIO-12") === null, "other identifiers have no issue number");
+
+  console.log("\nstart\n");
+  const db = await memDb();
+  const ctxDir = tempDir();
+  const root = realpathSync(
+    makeRepo({ branch: "42-x", origin: "git@github.com:acme/w.git", claudeMd: `## Escapement Settings\n\n- **context-path**: ${ctxDir}\n` }),
+  );
+  const ctx = projectContext(root);
+
+  const r1 = startRun(db, { workItem: "acme/w#42", ctx });
+  assert(r1.run_id === "acme-w#42-r1" && r1.state === "planned", "start creates run r1 in planned");
+  assert(r1.issue_number === 42 && r1.repo === "acme/w" && r1.branch === "42-x", "run records issue, repo and branch");
+  assert(r1.worktree_path === root && r1.target_ref === "main", "run is bound to the worktree, with a default target");
+  assert(r1.artifact_source === "context-path" && existsSync(r1.artifact_dir), "the artifact dir is created under context-path");
+  throws(() => startRun(db, { workItem: "acme/w#42", ctx }), /run_exists/, "a worktree can have only one open run");
+
+  const ext = startRun(db, {
+    workItem: "STUDIO-12",
+    ctx: { ...ctx, worktreePath: "/elsewhere" },
+    artifactDir: tempDir(),
+    manifestId: "m-1",
+    targetRef: "develop",
+    workType: "bug",
+  });
+  assert(ext.run_id === "STUDIO-12-r1" && ext.issue_number === null, "an external work item needs no issue or work_items row");
+  assert(ext.manifest_id === "m-1" && ext.target_ref === "develop" && ext.work_type === "bug", "optional fields are recorded");
+  assert(ext.artifact_source === "flag", "--artifact-dir is honoured");
+
+  console.log("\napprove\n");
+  const contract = join(tempDir(), "contract.json");
+  writeFileSync(contract, '{"criteria":["a"]}');
+  const before = Date.now();
+  const a1 = approveRun(db, r1.run_id, { contractFile: contract, budgetMs: 2 * HOUR });
+  assert(a1.run.state === "approved" && a1.changed, "approve moves planned to approved");
+  assert(a1.authorization.status === "active" && a1.authorization.contract_digest === contractDigest('{"criteria":["a"]}'), "an active authorization holds the contract digest");
+  assert(JSON.parse(a1.authorization.authorizes_json).includes("commit"), "the authorization lists what it allows");
+  assert(readFileSync(join(r1.artifact_dir, "contract.json"), "utf-8") === '{"criteria":["a"]}', "the contract is copied to the artifact dir");
+  const deadline = Date.parse(a1.run.deadline_at!);
+  assert(deadline >= before + 2 * HOUR && deadline <= Date.now() + 2 * HOUR, "deadline_at is approved_at plus the budget");
+
+  const again = approveRun(db, r1.run_id, { contractFile: contract, budgetMs: 2 * HOUR });
+  assert(!again.changed && auths(db, r1.run_id).length === 1, "re-approving the same contract changes nothing");
+
+  writeFileSync(contract, '{"criteria":["a","b"]}');
+  const a2 = approveRun(db, r1.run_id, { contractFile: contract, budgetMs: 10 * HOUR });
+  const statuses = auths(db, r1.run_id).map((a) => a.status).sort().join(",");
+  assert(a2.changed && a2.superseded === a1.authorization.contract_digest, "a changed contract supersedes the old authorization");
+  assert(statuses === "active,superseded", "one active and one superseded authorization remain");
+  assert(getRun(db, r1.run_id).deadline_at === a1.run.deadline_at, "re-approval doesn't move the deadline");
+  assert(getRun(db, r1.run_id).contract_digest === a2.authorization.contract_digest, "the run records the current contract digest");
+  throws(() => approveRun(db, r1.run_id, { contractFile: "/no/such/file", budgetMs: HOUR }), /no_contract/, "a missing contract file is an error");
+
+  console.log("\nrevoke and the authorization lifecycle\n");
+  const rev = revokeRun(db, r1.run_id);
+  assert(rev.status === "revoked" && rev.ended_at !== null, "revoke ends the active authorization as revoked");
+  throws(() => revokeRun(db, r1.run_id), /no_active_authorization/, "revoking twice is an error");
+  throws(() => requireExecutable(db, r1.run_id), /not_authorized/, "a revoked run can't execute");
+  approveRun(db, r1.run_id, { contractFile: contract, budgetMs: HOUR });
+  assert(requireExecutable(db, r1.run_id).authorization.status === "active", "re-approval restores an active authorization");
+  transitionRun(db, r1.run_id, "closed", { action: "abandoned" });
+  const final = auths(db, r1.run_id).map((a) => a.status).sort().join(",");
+  assert(final === "ended,superseded", "closing the run ends the authorization (active → ended)");
+  throws(() => approveRun(db, r1.run_id, { contractFile: contract, budgetMs: HOUR }), /wrong_state/, "a closed run can't be approved");
+
+  console.log("\nrun deadline\n");
+  const r2 = startRun(db, { workItem: "#42", ctx });
+  assert(r2.run_id === "#42-r1", "after closing, the worktree can start a new run");
+  approveRun(db, r2.run_id, { contractFile: contract, budgetMs: HOUR });
+  db.prepare("UPDATE factory_runs SET deadline_at = ? WHERE run_id = ?").run(new Date(Date.now() - 1000).toISOString(), r2.run_id);
+  throws(() => requireExecutable(db, r2.run_id), /run_deadline/, "past the deadline, execution is blocked");
+  assert(getRun(db, r2.run_id).state === "escalated", "the run is escalated with reason run_deadline");
+  const st = runStatus(db, r2.run_id);
+  assert(st.deadline_passed && st.run.state_reason === "run_deadline", "status still works past the deadline");
+  assert(revokeRun(db, r2.run_id).status === "revoked", "revoke still works past the deadline");
+
+  console.log("\nstatus\n");
+  const open = listRuns(db).map((r) => r.run_id).join(",");
+  assert(open === "STUDIO-12-r1,#42-r1", "status lists open runs");
+  assert(listRuns(db, { all: true }).length === 3, "status --all includes closed runs");
+  assert(st.authorizations.length === 1 && Array.isArray(st.authorizations[0].authorizes), "run status lists authorizations");
+
+  db.close();
+  console.log("\nAll factory run tests passed.");
+}
+
+try {
+  await run();
+} finally {
+  cleanup();
+}
