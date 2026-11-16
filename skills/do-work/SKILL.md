@@ -89,7 +89,7 @@ FACTORY="${CLAUDE_PLUGIN_ROOT}/scripts/factory.sh"
 bash "$FACTORY" --check && bash "$FACTORY" --json authorization
 ```
 
-- **`--check` fails, or `.result.matched` is false:** not authorized. Every phase below runs exactly as written. If `.result.run_id` is set, a run exists but can't continue on its own (`.result.reasons`, such as `run_halted` or `contract_changed`): say so in one line, then continue interactively.
+- **`--check` fails, or `.result.matched` is false:** not authorized. Every phase below runs exactly as written. If `.result.run_id` is set, a run exists but can't continue on its own (`.result.reasons`, such as `run_halted` or `contract_changed`). Say so in one line, with the reason from `factory status '{run_id}' --json` (`.result.run.state_reason`), then continue interactively. An escalated or blocked run isn't resumed in the first release: the operator closes it (archive-work, or `factory archive '{run_id}' --path … --abandon`), and a new attempt at the work starts with setup-work.
 - **Matched:** authorized. Note `run_id`, `artifact_dir` and `next`, and check the agent identity commits will carry:
   ```bash
   bash "$FACTORY" --json agent
@@ -350,10 +350,11 @@ Only after Phase 0.5 matched. The approved plan and contract stand in for every 
    ```bash
    bash "$FACTORY" exec '{run_id}' -- {command}
    ```
-   It exits with the command's status; its output is streamed and logged under the artifact dir. The `factory-exec-guard` hook refuses the project's `static` and `verify` commands run any other way, with the exact command to use instead.
+   It exits with the command's status; its output is streamed and logged under the artifact dir. The `factory-exec-guard` hook refuses the project's `static` and `verify` commands run any other way, with the exact command to use instead. Diagnostic runs, such as a single test file or a check at the base commit, go through `exec` too.
 4. **Commit each task** by invoking commit-changes (3.3), with no "Ready to commit?" question. commit-changes sees the same authorization and commits as the agent, without asking.
 5. **Stay inside the contract.** Read it at `{artifact_dir}/contract.json`. Don't edit it, and don't edit the project's checks, test configuration or CI to make them pass: the runner flags policy and modified-assertion changes for the reviewer.
-6. **A blocker** (3.4) you can't resolve from the plan, the contract and the code: note it under Questions/Blockers, then escalate and stop (step D).
+6. **A failing check is yours to fix** when your change caused it: that is implementing. When it fails for a reason the change didn't cause (it fails on the base commit too, or the environment can't run it) and fixing it would mean changing the checks, test configuration or CI, it is a blocker.
+7. **A blocker** (3.4) you can't resolve from the plan, the contract and the code: commit the tasks already finished (so the tree is clean), don't start new ones, note the blocker under Questions/Blockers, then escalate and stop (step D).
 
 ### B. Validate
 
@@ -387,7 +388,7 @@ Send a push notification (PushNotification tool, when available) and end with th
 
 ```
 🏭 {run_id}: {PR #{n} opened: {url} | escalated: {reason}}
-   Outcome: {outcome}   Report: {report_path}
+   Outcome: {outcome}   Report: {report_path}   (leave out when there is no attempt yet)
    {pending manual checks, if any: each ID and how to record it (validate-work)}
 ```
 
@@ -421,6 +422,8 @@ If Claude Code restarts mid-session:
    2. Specify a different issue number
    3. Create a new scratchpad manually
 ```
+
+Under an authorized run, `factory authorization` has already matched the branch, and uncommitted changes from an earlier session are committed with commit-changes when they belong to the work (anything else is a blocker: step D). The questions below are for the interactive path.
 
 ### Wrong Branch
 ```
