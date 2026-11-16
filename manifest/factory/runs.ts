@@ -8,6 +8,7 @@ import { tx, getRun, transitionRun, recordEvent, type RunRow, type AttemptRow } 
 import { listLocks, worktreeLock, BUILD_LOCK } from "./locks.ts";
 import type { Owner } from "./owner.ts";
 import { parseContract } from "./schemas.ts";
+import { readSettings } from "./settings.ts";
 
 /** What an approval lets skills do without asking (§3.6). */
 export const AUTHORIZES = ["commit", "push_branch", "open_pr", "run_validation"] as const;
@@ -63,7 +64,8 @@ export type StartOptions = {
  */
 export function startRun(db: Database, opts: StartOptions): RunRow & { artifact_source: ArtifactSource } {
   const base = runIdBase(opts.workItem);
-  const targetRef = opts.targetRef ?? defaultTargetRef(opts.ctx.worktreePath);
+  const targetRef =
+    opts.targetRef ?? readSettings(opts.ctx.worktreePath).settings.baseBranch ?? defaultTargetRef(opts.ctx.worktreePath);
   let source: ArtifactSource = "flag";
   const run = tx(db, () => {
     const open = db

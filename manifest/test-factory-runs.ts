@@ -60,6 +60,12 @@ async function run() {
   assert(ext.manifest_id === "m-1" && ext.target_ref === "develop" && ext.work_type === "bug", "optional fields are recorded");
   assert(ext.artifact_source === "flag", "--artifact-dir is honoured");
 
+  const based = realpathSync(makeRepo({ claudeMd: "## Escapement Settings\n\n- **base-branch**: trunk\n" }));
+  const db2 = await memDb();
+  const rb = startRun(db2, { workItem: "#5", ctx: projectContext(based), artifactDir: tempDir() });
+  assert(rb.target_ref === "trunk", "without --target-ref, the base-branch setting is the target");
+  db2.close();
+
   console.log("\napprove\n");
   const contract = join(tempDir(), "contract.json");
   const first = contractJson(r1.run_id);
