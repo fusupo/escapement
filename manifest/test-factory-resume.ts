@@ -152,6 +152,7 @@ for (let i = 0; i < 5; i++) {
   }
   {
     assert(runStateForOutcome("fail") === "escalated", "a failed attempt escalates the run (no fix loop yet)");
+    assert(runStateForOutcome("pending_manual") === "validated", "pending_manual validates the run: the PR opens while manual items await a human");
     assert(runStateForOutcome("blocked") === "blocked", "a blocked attempt blocks the run");
   }
 

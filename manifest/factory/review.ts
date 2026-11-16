@@ -3,15 +3,15 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { FactoryError, atomicWrite, blocked } from "./util.ts";
-import { attemptDir } from "./attempts.ts";
+import { FactoryError, atomicWrite, blocked, nowIso } from "./util.ts";
+import { attemptDir, verdictPath } from "./attempts.ts";
 import { changedFiles, identityHolds } from "./revision.ts";
 import { settingsAt } from "./classify.ts";
 import { parseFactorySettings } from "./settings.ts";
 import { firstMatch } from "./glob.ts";
-import { parseContract, schemaPath, type Contract } from "./schemas.ts";
+import { parseContract, schemaPath, schemaErrors, type Contract } from "./schemas.ts";
 import { contractDigest, requireExecutable } from "./runs.ts";
-import { getRun, getAttempt, transitionAttempt, transitionRun, recordEvent, type AttemptRow, type RunRow } from "./state.ts";
+import { tx, getRun, getAttempt, transitionAttempt, transitionRun, recordEvent, type AttemptRow, type RunRow, type RunState } from "./state.ts";
 import { withLocks, worktreeLock } from "./locks.ts";
 import { runStateForOutcome } from "./resume.ts";
 import { promptPath } from "./prompts.ts";
@@ -357,5 +357,292 @@ export async function reviewInput(
         modified_assertions: required.modified_assertions.length,
       },
     };
+  });
+}
+
+// ── record-review: completeness and finalization (§4.7, §4.9) ────────
+
+export type Verdict = {
+  version: 1;
+  source_digest: string;
+  evidence: { id: string; supports_criterion?: "yes" | "no" | "partial"; procedure_adequate?: "yes" | "no"; rationale: string }[];
+  sensitive_paths: { path: string; signoff: "approve" | "concern"; rationale: string }[];
+  modified_assertions: { location: string; justified: boolean; rationale: string }[];
+  findings: { severity: "blocking" | "advisory"; detail: string; location?: string }[];
+};
+
+type Outcome = "pass" | "fail" | "pending_manual" | "error";
+
+export type RecordReviewResult = {
+  run_id: string;
+  attempt: number;
+  status: AttemptRow["status"];
+  outcome: Outcome;
+  report_path: string;
+  verdict_path: string;
+  verdict_digest: string;
+  run_state: RunState;
+  /** The same verdict was already recorded; nothing changed. */
+  noop: boolean;
+  /** An interrupted finalization was completed from the stored verdict. */
+  refinalized: boolean;
+};
+
+/** Stable JSON: object keys sorted, so the same verdict always digests the same. */
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const o = value as Record<string, unknown>;
+    return `{${Object.keys(o).sort().map((k) => `${JSON.stringify(k)}:${canonical(o[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/** Digest of a verdict's canonical JSON: formatting and key order don't change it. */
+export function verdictDigest(verdict: unknown): string {
+  return `sha256:${createHash("sha256").update(canonical(verdict)).digest("hex")}`;
+}
+
+/**
+ * Completeness (§4.9): `source_digest` is the issued snapshot's; every
+ * required evidence ID is judged exactly once with its judgment kind; every
+ * required sensitive path is signed off and every modified-assertion
+ * location justified, exactly once; nothing unknown. Empty means complete.
+ */
+export function verdictProblems(v: Verdict, required: RequiredJudgments, issued: string): string[] {
+  const problems: string[] = [];
+  if (v.source_digest !== issued) {
+    problems.push(`source_digest ${v.source_digest} is not the snapshot issued for this attempt (${issued})`);
+  }
+  const check = <T>(
+    what: string,
+    entries: T[],
+    keyOf: (e: T) => string,
+    wanted: Map<string, string>,
+    missing: (k: string) => string,
+    extra?: (e: T, k: string) => string | null,
+  ) => {
+    const seen = new Map<string, number>();
+    for (const e of entries) {
+      const k = keyOf(e);
+      seen.set(k, (seen.get(k) ?? 0) + 1);
+      if (!wanted.has(k)) problems.push(`${what} ${k}: not one this attempt requires`);
+      else {
+        const p = extra?.(e, k);
+        if (p) problems.push(p);
+      }
+    }
+    for (const k of wanted.keys()) {
+      const n = seen.get(k) ?? 0;
+      if (n === 0) problems.push(missing(k));
+      else if (n > 1) problems.push(`${what} ${k}: given ${n} times; give it once`);
+    }
+  };
+  const kinds = new Map(required.evidence.map((e) => [e.id, e.judgment]));
+  check(
+    "evidence",
+    v.evidence,
+    (e) => e.id,
+    kinds,
+    (k) => `evidence ${k}: no judgment (needs ${kinds.get(k)})`,
+    (e, k) => {
+      const want = kinds.get(k)!;
+      return e[want] === undefined ? `evidence ${k}: judge ${want}, not ${want === "supports_criterion" ? "procedure_adequate" : "supports_criterion"}` : null;
+    },
+  );
+  check(
+    "sensitive path",
+    v.sensitive_paths,
+    (s) => s.path,
+    new Map(required.sensitive_paths.map((s) => [s.path, ""])),
+    (k) => `sensitive path ${k}: no sign-off`,
+  );
+  check(
+    "modified assertion",
+    v.modified_assertions,
+    (m) => m.location,
+    new Map(required.modified_assertions.map((m) => [m.location, ""])),
+    (k) => `modified assertion ${k}: no justification`,
+  );
+  return problems;
+}
+
+type Finding = Report["findings"][number];
+
+/** The findings a verdict adds, each blocking one a reason the attempt fails (§4.9). */
+function reviewFindings(v: Verdict): Finding[] {
+  const out: Finding[] = [];
+  for (const e of v.evidence) {
+    if (e.supports_criterion === "no" || e.supports_criterion === "partial") {
+      out.push({ id: `judgment:${e.id}`, severity: "blocking", detail: `reviewer: evidence supports its criterion: ${e.supports_criterion}: ${e.rationale}` });
+    } else if (e.procedure_adequate === "no") {
+      out.push({ id: `judgment:${e.id}`, severity: "blocking", detail: `reviewer: manual procedure is not adequate: ${e.rationale}` });
+    }
+  }
+  for (const s of v.sensitive_paths) {
+    if (s.signoff === "concern") out.push({ id: `signoff:${s.path}`, severity: "blocking", detail: `reviewer concern: ${s.rationale}`, location: s.path });
+  }
+  for (const m of v.modified_assertions) {
+    if (!m.justified) out.push({ id: `justification:${m.location}`, severity: "blocking", detail: `modified assertion not justified: ${m.rationale}`, location: m.location });
+  }
+  v.findings.forEach((f, i) => out.push({ id: `review:${i + 1}`, severity: f.severity, detail: f.detail, ...(f.location ? { location: f.location } : {}) }));
+  return out;
+}
+
+function recordedResult(db: Database, run: RunRow, a: AttemptRow, extra: { noop: boolean; refinalized: boolean }): RecordReviewResult {
+  return {
+    run_id: run.run_id,
+    attempt: a.attempt,
+    status: a.status,
+    outcome: a.outcome as Outcome,
+    report_path: a.report_path ?? join(attemptDir(run.artifact_dir, a.attempt), "report.json"),
+    verdict_path: verdictPath(run.artifact_dir, a.attempt),
+    verdict_digest: a.verdict_digest!,
+    run_state: getRun(db, run.run_id).state,
+    ...extra,
+  };
+}
+
+/** Write the final report from the kept draft and the stored verdict, complete the attempt, advance the run. */
+function finalize(
+  db: Database,
+  run: RunRow,
+  a: AttemptRow,
+  verdict: Verdict,
+  digest: string,
+  owner: Owner,
+  refinalized: boolean,
+): RecordReviewResult {
+  const dir = attemptDir(run.artifact_dir, a.attempt);
+  const reportPath = join(dir, "report.json");
+  const keptPath = join(dir, "report.draft.json");
+  if (!existsSync(keptPath)) atomicWrite(keptPath, readFileSync(reportPath));
+  const draft = readJsonFile<Report>(keptPath, "draft report");
+
+  const judged = new Map(verdict.evidence.map((e) => [e.id, e]));
+  const evidence = draft.evidence.map((e) => {
+    const j = judged.get(e.id);
+    if (!j) return e;
+    return j.procedure_adequate !== undefined
+      ? { ...e, procedure_adequate: j.procedure_adequate, rationale: j.rationale }
+      : { ...e, supports_criterion: j.supports_criterion!, rationale: j.rationale };
+  });
+  const added = reviewFindings(verdict);
+  const failed = added.some((f) => f.severity === "blocking");
+  const manual = draft.evidence.some((e) => e.executed === "pending_manual");
+  const outcome: Outcome = failed ? "fail" : manual ? "pending_manual" : "pass";
+  const recordedAt = nowIso();
+  const final = {
+    ...draft,
+    status: "complete",
+    outcome,
+    phases: [...draft.phases, { name: "review", outcome: failed ? "fail" : "pass" }],
+    evidence,
+    findings: [...draft.findings, ...added],
+    review: {
+      verdict: "review.json",
+      verdict_digest: digest,
+      source_digest: verdict.source_digest,
+      recorded_at: recordedAt,
+      sensitive_paths: verdict.sensitive_paths,
+      modified_assertions: verdict.modified_assertions,
+    },
+  };
+  const problems = schemaErrors("report", final);
+  if (problems.length) throw new FactoryError("internal", `final report for attempt ${a.attempt} is invalid: ${problems.join("; ")}`);
+  atomicWrite(reportPath, JSON.stringify(final, null, 2) + "\n");
+
+  return tx(db, () => {
+    db.prepare("UPDATE factory_attempts SET report_path = ?, findings_json = ? WHERE run_id = ? AND attempt = ?").run(
+      reportPath,
+      JSON.stringify(final.findings),
+      run.run_id,
+      a.attempt,
+    );
+    transitionAttempt(db, run.run_id, a.attempt, "complete", { owner: null, outcome, reason: "review recorded" });
+    if (getRun(db, run.run_id).state === "validating") {
+      transitionRun(db, run.run_id, runStateForOutcome(outcome), { owner, reason: `attempt ${a.attempt}: ${outcome}` });
+    }
+    recordEvent(db, run.run_id, "state_change", { entity: "verdict", to: "recorded", attempt: a.attempt, verdict_digest: digest, outcome, owner });
+    return recordedResult(db, run, getAttempt(db, run.run_id, a.attempt), { noop: false, refinalized });
+  });
+}
+
+/**
+ * `factory record-review <run_id> <attempt> <file>` (§4.9): check the
+ * verdict, re-check identity, store it as `review.json`, finalize the
+ * report and complete the attempt.
+ *
+ * - A malformed verdict (`invalid_verdict`) or an incomplete one
+ *   (`incomplete_verdict`, every problem listed) is blocked: nothing is
+ *   written and the attempt stays `awaiting_review`.
+ * - Idempotent by verdict digest: the same verdict for a complete attempt
+ *   is a no-op; a different one is `verdict_conflict`. The same verdict
+ *   for a `finalizing` attempt (a crash mid-finalization) finishes it.
+ * - Bookkeeping, so it works past the run deadline (§4.1); a run that was
+ *   escalated meanwhile stays escalated.
+ */
+export async function recordReview(
+  db: Database,
+  runId: string,
+  attempt: number,
+  verdictText: string,
+  opts: { owner: Owner; lockWaitMs: number; source?: string },
+): Promise<RecordReviewResult> {
+  const run0 = getRun(db, runId);
+  if (run0.state === "closed") throw blocked("run_closed", `run ${runId} is closed`);
+  return withLocks(db, [worktreeLock(run0.worktree_path)], opts.owner, { waitMs: opts.lockWaitMs, runId }, () => {
+    const run = getRun(db, runId);
+    if (run.state === "closed") throw blocked("run_closed", `run ${runId} is closed`);
+    const a = getAttempt(db, runId, attempt);
+    const reject = (code: string, problems: string[]): never => {
+      recordEvent(db, runId, "state_change", { entity: "verdict", to: "rejected", attempt, code, problems, owner: opts.owner });
+      const what = opts.source ? `verdict ${opts.source}` : "verdict";
+      throw blocked(code, `${what} rejected; attempt ${attempt} still awaits review:\n  - ${problems.join("\n  - ")}`);
+    };
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(verdictText);
+    } catch (err) {
+      if (a.status !== "awaiting_review") throw blocked("invalid_verdict", `the verdict is not JSON: ${(err as Error).message}`);
+      return reject("invalid_verdict", [`not JSON: ${(err as Error).message}`]);
+    }
+    const digest = verdictDigest(parsed);
+
+    if (a.status === "complete") {
+      if (a.verdict_digest === digest) return recordedResult(db, run, a, { noop: true, refinalized: false });
+      if (a.verdict_digest) {
+        throw blocked("verdict_conflict", `attempt ${attempt} of ${runId} already has a different verdict (${a.verdict_digest}); a complete attempt's verdict can't change`);
+      }
+      throw blocked("wrong_state", `attempt ${attempt} of ${runId} completed without review (${a.outcome ?? "no outcome"})`);
+    }
+    if (a.status === "finalizing" && a.verdict_digest !== digest) {
+      throw blocked("verdict_conflict", `attempt ${attempt} of ${runId} is finalizing another verdict (${a.verdict_digest})`);
+    }
+    if (a.status !== "awaiting_review" && a.status !== "finalizing") {
+      throw blocked("wrong_state", `attempt ${attempt} of ${runId} is ${a.status}; only an attempt awaiting review takes a verdict`);
+    }
+
+    const shape = schemaErrors("verdict", parsed);
+    if (shape.length) return reject("invalid_verdict", shape);
+    const verdict = parsed as Verdict;
+    const { contract } = attemptContract(run, a);
+    const issued = issuedDigest(db, runId, attempt);
+    if (issued === null) throw blocked("not_issued", `no review was issued for attempt ${attempt} of ${runId}; run factory review-input first`);
+    const draft = readJsonFile<Report>(draftReportPath(run.artifact_dir, attempt), "draft report");
+    const problems = verdictProblems(verdict, requiredJudgments({ worktree: run.worktree_path, contract, draft }), issued);
+    if (problems.length) return reject("incomplete_verdict", problems);
+
+    requireIdentity(db, run, a, opts.owner);
+
+    if (a.status === "awaiting_review") {
+      atomicWrite(verdictPath(run.artifact_dir, attempt), JSON.stringify(verdict, null, 2) + "\n");
+      tx(db, () => {
+        db.prepare("UPDATE factory_attempts SET verdict_digest = ? WHERE run_id = ? AND attempt = ?").run(digest, runId, attempt);
+        transitionAttempt(db, runId, attempt, "finalizing", { owner: opts.owner, reason: "verdict accepted" });
+      });
+    }
+    return finalize(db, run, getAttempt(db, runId, attempt), verdict, digest, opts.owner, a.status === "finalizing");
   });
 }

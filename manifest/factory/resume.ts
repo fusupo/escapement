@@ -47,9 +47,13 @@ export type ResumeResult = {
   released_locks: string[];
 };
 
-/** Run transition owed once an attempt completes with this outcome (first release: no fix loop). */
+/**
+ * Run transition owed once an attempt completes with this outcome (first
+ * release: no fix loop). `pending_manual` is validated too: the PR can open
+ * while a human records the manual outcomes (§5.5).
+ */
 export function runStateForOutcome(outcome: string | null): RunState {
-  if (outcome === "pass") return "validated";
+  if (outcome === "pass" || outcome === "pending_manual") return "validated";
   if (outcome === "blocked") return "blocked";
   return "escalated";
 }
