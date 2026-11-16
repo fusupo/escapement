@@ -32,6 +32,7 @@ bash "$PLUGIN_ROOT/scripts/factory.sh" schema contract --print  # prints the sch
 Some rules depend on more than one document, and only the runner checks them:
 
 - **Contract:** criterion and evidence IDs are unique, `stdout_matches` and `stdout_not_matches` compile as JavaScript regular expressions, and `run_id` equals the run being approved.
+- **Report:** `invocations` lists every command the attempt ran, with paths relative to the attempt directory. Each results file carries its digest, binding the evidence to the invocation that produced it (§4.4). Advisory findings with IDs `assertion:{file:line}` and `policy:{path}` are the modified assertions and execution-policy changes the reviewer must address (§4.6).
 - **Verdict:** completeness against the attempt. Every contract evidence ID is judged exactly once, every sensitive path in the diff is signed off, every modified assertion is justified, and `source_digest` matches the snapshot issued for the attempt.
 
 ## Contracts name no commands

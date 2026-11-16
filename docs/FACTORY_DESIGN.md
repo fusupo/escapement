@@ -4,7 +4,7 @@
 >
 > Captured: 2026-11-15
 > Revised: 2026-11-15 (r3.2, after three independent design reviews and a follow-up — see §13)
-> Status: Design settled for first release; build in progress (status in §10, updated 2026-11-15)
+> Status: Design settled for first release; build in progress (status in §10, updated 2026-11-16)
 > Builds on: `docs/MANIFEST_SYSTEM_DESIGN_V2.md`, existing skills (`setup-work`, `do-work`, `commit-changes`, `create-pr`, `review-pr`, `archive-work`)
 
 ---
@@ -283,6 +283,8 @@ If a check modified tracked files, the attempt is `error` ("checks are not side-
 
 **Invalidation:** a report applies only while branch head = `head_sha` and contract digest = approved. `create-pr` and the gate re-check before using it. Target movement does **not** invalidate a `branch`-scope report, which is why it is labeled as branch validation (§6.3).
 
+*As built (#61):* a failed precondition (dirty tree, contract mismatch, a required check with no command, invalid settings) is `blocked` before any attempt is allocated. It uses no attempt and leaves the run state alone, so a host that forgot to exclude a scratchpad can fix `.git/info/exclude` and retry; the blocked message names the files. The target tip is `origin/{target_ref}` when that ref exists, else the local branch; `validate` never fetches. Both locks are held for the whole command. The last successful `setup` is recorded per run, so the first attempt of a run always runs `setup`. Reference: [FACTORY_CLI.md](FACTORY_CLI.md#validate).
+
 ### 4.4 Phases
 
 | # | Phase | What it produces | Mechanism |
@@ -303,6 +305,8 @@ Deterministic phases stop at the first failure. The reviewer consumes captured o
 - Missing results after a zero exit, or results reporting **zero executed tests**, make the phase `error` — never `pass`.
 - Each results file is recorded with its digest, invocation ID, and command, binding evidence to the attempt that produced it.
 
+*As built (#61):* the binding is the report's `invocations` list. JUnit XML is parsed with `fast-xml-parser`. A selector `path::name` matches a case in that file whose name, or the end of its full name, is `name` (`*` is a wildcard; a bare path selects the whole file). Running an evidence item that `verify` doesn't cover separately needs a command for one test, and contracts name no commands (§5.2), so in the first release such an item is `not_found`; this returns with the fix loop. "Forbidden-file edits" has no setting yet and isn't checked. Drift is reported as flags.
+
 ### 4.5 Actual-diff tier recomputation
 
 After phase 1, recompute the tier from `merge_base_sha..head_sha`. If any sensitive path is touched or execution policy changed (§4.6), the run is `sensitive` regardless of the plan, the report records why, and the gate may never recommend auto-merge for this run.
@@ -320,6 +324,8 @@ At approval, the runner records a baseline at `merge_base_sha`: existing test fi
 Classification of "new" vs. "modified" uses the diff (added lines in new test blocks vs. changed/removed lines in existing ones); ambiguous cases default to **modified**.
 
 Limits: these measures make tampering visible, not impossible. An agent with shell access can read the context dir and the DB.
+
+*As built (#61):* the baseline isn't stored at approval; `validate` reads it from git at the merge base, so a rebase onto a newer target is classified against the new merge base. Test files are those matching the new `test-files` setting (§8) or named by a contract selector. `test-files`, `validation-files` and `sensitive-paths` are read at both revisions, so a branch can't hide a change by editing the pattern that would catch it. Any change to the factory settings counts as execution policy, with a dropped required check called out. Hunks are classified from `git diff -U0`: only a pure addition that starts a new test block, with no skip/only/todo marker, is new evidence. Modified assertions and policy changes are advisory findings in the report, located as `file:line`, for the reviewer (§4.9) to justify.
 
 ### 4.7 Run state machine
 
@@ -673,6 +679,7 @@ Extends `## Escapement Settings` in each project's CLAUDE.md:
 - **required-checks**: static, verify
 - **sensitive-paths**: src/auth/**, migrations/**, src/billing/**, .github/**
 - **validation-files**: jest.config.*, tsconfig*.json, .eslintrc*, package.json
+- **test-files**: *.test.*, *.spec.*, tests/
 - **max-attempts**: 3
 - **command-timeout**: 15m
 - **lock-timeout**: 30m
@@ -684,6 +691,8 @@ Extends `## Escapement Settings` in each project's CLAUDE.md:
 All keys optional. Missing `static`/`verify` → `blocked` ("not configured"). `required-checks` cannot be narrowed by a contract. `test-results` should reference `$FACTORY_RESULTS_DIR` (for jest-junit, set `JEST_JUNIT_OUTPUT_DIR` from it). If a test runner can only write to a fixed path inside the worktree, it must be gitignored; the runner clears it before each invocation and moves results into the artifact dir afterward (§4.4). `run-budget` sets the enforced run deadline; agent time and token figures are advisory.
 
 *As built (#60):* settings are read from the CLAUDE.md of the run's worktree whenever a command needs them, not copied per run. Each report records their digest in `policy_version`, and a branch that changes them, or weakens `required-checks`, is an execution-policy change (§4.6), so a weakened setting is flagged for review rather than silently used. `factory check` reports a required check with no command as a readiness question. Reference: [FACTORY_CLI.md](FACTORY_CLI.md#settings).
+
+*As built (#61):* `test-files` (glob list) names test files for classification (§4.6); its default covers common layouts (`*.test.*`, `*.spec.*`, `test/`, `tests/`, `__tests__/`, `test_*.py`, `*_test.py`, `*_test.go`). `base-branch` is the default target for `factory start`.
 
 ---
 
@@ -714,8 +723,8 @@ Status as of 2026-11-16; tracked in #66.
 2. **#58 Shared manifest location + versioned schema** — one per-user manifest database independent of plugin and project location; `PRAGMA user_version` and ordered migrations replacing `ensureSchema` (§2.5). **Done.**
 3. **#59 `factory` CLI core** — run/attempt/authorization tables, state machines, `start`/`approve`/`exec`/`status`/`resume`/`revoke`, build and worktree locks, command and run deadlines, process-group cleanup, artifact dir. **Done.** Locks are SQLite rows (§4.1); CLI reference in [FACTORY_CLI.md](FACTORY_CLI.md).
 4. **#60 Contract + settings + readiness + tiers** — schema, evidence types, settings parsing. **Done.** Published JSON Schemas in `schemas/factory/`, `factory check` (readiness) and `factory schema`; contracts name no commands (§5.2).
-5. **#61 `factory validate`** — identity (clean tree + HEAD), setup policy, static + evidence phases, fresh results dirs, single structured test run, change classification, actual-diff tier, draft reports. **Next.**
-6. **#62 Reviewer** — `validation-reviewer` agent, bundle, `record-review` completeness checks and idempotency. Open.
+5. **#61 `factory validate`** — identity (clean tree + HEAD), setup policy, static + evidence phases, fresh results dirs, single structured test run, change classification, actual-diff tier, draft reports. **Done.** Blocked preconditions use no attempt (§4.3); the classification baseline comes from git (§4.6); new `test-files` setting (§8).
+6. **#62 Reviewer** — `validation-reviewer` agent, bundle, `record-review` completeness checks and idempotency. **Next.**
 7. **#63 `setup-work`** produces contract + authorization. Open.
 8. **#64 Authorized path** — `do-work`, `commit-changes`, `create-pr`, `factory pr`, `record-manual`. Open.
 9. **#65 Release acceptance test** — a real issue end to end, plus deliberate interruptions at each boundary: during checks, between checks and review, during finalization, and between PR creation and recording. The first release is complete only when this passes; fix what breaks before moving on. Open. → *first release complete*
