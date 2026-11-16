@@ -6,6 +6,7 @@ import { getRun } from "./factory/state.ts";
 import { loadSettings, SETTING_DEFAULTS, type FactorySettings } from "./factory/settings.ts";
 import { execCommand, execExitCode } from "./factory/exec.ts";
 import { resumeRun } from "./factory/resume.ts";
+import { validateRun } from "./factory/validate.ts";
 import { currentOwner } from "./factory/owner.ts";
 import { FactoryError, parseDuration } from "./factory/util.ts";
 import { checkReadiness } from "./factory/readiness.ts";
@@ -22,7 +23,8 @@ import { resolve } from "node:path";
  *   {"ok": false, "command": "...", "error": {"code": "...", "kind": "error"|"blocked", "message": "..."}}
  *
  * Exit status: 0 ok, 1 error, 2 blocked. `exec` exits with the command's
- * own status, or 124 when the runner killed it.
+ * own status, or 124 when the runner killed it. `validate` exits 0 when
+ * it recorded an attempt, whatever its outcome: route on the JSON.
  */
 
 const USAGE = `Usage: factory [options] <command> [args]
@@ -34,6 +36,8 @@ Commands:
                                 Record the contract and authorize the run
   exec <run_id> -- <cmd> [args...]
                                 Run a build/test command under the locks
+  validate <run_id>             Run the deterministic checks for a new attempt and
+                                write its draft report (static, then evidence)
   status [run_id]               List open runs (--all: include closed), or show one
   resume <run_id>               Reconcile an interrupted run
   revoke <run_id>               End the run's active authorization
@@ -55,9 +59,9 @@ Options:
   --contract <file>     approve, check: the contract
   --run-budget <dur>    approve: run deadline after first approval
                         (default: run-budget setting, else ${SETTING_DEFAULTS["run-budget"]})
-  --timeout <dur>       exec: command timeout
+  --timeout <dur>       exec, validate: timeout per command
                         (default: command-timeout setting, else ${SETTING_DEFAULTS["command-timeout"]})
-  --lock-timeout <dur>  exec, resume: how long to wait for locks
+  --lock-timeout <dur>  exec, validate, resume: how long to wait for locks
                         (default: lock-timeout setting, else ${SETTING_DEFAULTS["lock-timeout"]})
   --all                 status: include closed runs
   --print               schema: print the schema instead of its path
@@ -231,6 +235,21 @@ async function dispatch(db: Database, command: string, p: Parsed, json: boolean)
         exitCode: execExitCode(r),
       };
     }
+    case "validate": {
+      const runId = need(arg, "run_id");
+      const timeout = str(p, "--timeout");
+      const r = await validateRun(db, runId, {
+        owner,
+        timeoutMs: timeout === undefined ? undefined : parseDuration(timeout),
+        lockWaitMs: duration(db, p, "--lock-timeout", runId, (s) => s.lockTimeoutMs),
+        echo: !json,
+      });
+      const what = r.outcome === null ? "checks passed, awaiting review" : `${r.outcome} (${r.failed_phase ?? "post-check"})`;
+      return {
+        result: r,
+        text: `${r.run_id} attempt ${r.attempt}: ${what}\n  run:    ${r.run_state}\n  tier:   ${r.tier.actual}${r.tier.reasons.length ? ` (${r.tier.reasons.join("; ")})` : ""}\n  report: ${r.report_path}`,
+      };
+    }
     case "status": {
       if (arg) {
         const s = runStatus(db, arg);
@@ -318,8 +337,8 @@ async function main(argv: string[]): Promise<number> {
     if (jsonRequested) {
       process.stdout.write(JSON.stringify({ ok: true, command, result: out.result }) + "\n");
     } else {
-      // exec's own output was streamed; its summary goes to stderr.
-      (command === "exec" ? console.error : console.log)(out.text);
+      // exec's and validate's command output was streamed; their summary goes to stderr.
+      (command === "exec" || command === "validate" ? console.error : console.log)(out.text);
     }
     return out.exitCode ?? 0;
   } catch (err) {
