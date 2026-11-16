@@ -5,6 +5,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync,
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { FactoryError, atomicWrite, blocked, nowIso } from "./util.ts";
+import { faultPoint } from "./fault.ts";
 import { attemptDir, verdictPath } from "./attempts.ts";
 import { changedFiles, identityHolds } from "./revision.ts";
 import { settingsAt } from "./classify.ts";
@@ -364,6 +365,7 @@ export async function reviewInput(
       reused_snapshot: reused,
       owner: opts.owner,
     });
+    faultPoint("review-input.issued");
     return {
       run_id: runId,
       attempt,
@@ -570,6 +572,7 @@ function finalize(
   const problems = schemaErrors("report", final);
   if (problems.length) throw new FactoryError("internal", `final report for attempt ${a.attempt} is invalid: ${problems.join("; ")}`);
   atomicWrite(reportPath, JSON.stringify(final, null, 2) + "\n");
+  faultPoint("record-review.report_written");
 
   return tx(db, () => {
     db.prepare("UPDATE factory_attempts SET report_path = ?, findings_json = ? WHERE run_id = ? AND attempt = ?").run(
@@ -661,6 +664,7 @@ export async function recordReview(
         db.prepare("UPDATE factory_attempts SET verdict_digest = ? WHERE run_id = ? AND attempt = ?").run(digest, runId, attempt);
         transitionAttempt(db, runId, attempt, "finalizing", { owner: opts.owner, reason: "verdict accepted" });
       });
+      faultPoint("record-review.verdict_stored");
     }
     return finalize(db, run, getAttempt(db, runId, attempt), verdict, digest, opts.owner, a.status === "finalizing");
   });

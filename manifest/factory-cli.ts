@@ -15,6 +15,7 @@ import { recordManual } from "./factory/manual.ts";
 import { archiveRun } from "./factory/archive.ts";
 import { syncGuard } from "./factory/guard.ts";
 import { currentOwner } from "./factory/owner.ts";
+import { parseFaultSpec, FAULT_ENV } from "./factory/fault.ts";
 import { FactoryError, parseDuration } from "./factory/util.ts";
 import { checkReadiness } from "./factory/readiness.ts";
 import { SCHEMA_NAMES, schemaPath, isSchemaName } from "./factory/schemas.ts";
@@ -596,7 +597,10 @@ async function main(argv: string[]): Promise<number> {
 
   try {
     parsed = parseArgs(argv);
+    // A mistyped fault spec must fail loudly up front, not mid-command.
+    if (process.env[FAULT_ENV]) parseFaultSpec(process.env[FAULT_ENV]!);
   } catch (err) {
+    if (err instanceof Error && !(err instanceof FactoryError)) err = new FactoryError("usage", err.message);
     return fail(err);
   }
   command = parsed.positional.shift() ?? "";
