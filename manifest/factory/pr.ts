@@ -140,8 +140,11 @@ export async function openPr(
     let number: number;
     let url: string;
     if (existing) {
-      const args = ["pr", "edit", String(existing.number), "-R", remote.ghRepo, "--body-file", bodyPath];
-      if (opts.title?.trim()) args.push("--title", opts.title.trim());
+      // The REST API, not `gh pr edit`: pr edit also queries classic Projects
+      // over GraphQL and fails wherever that API is deprecated (#65).
+      const args = ["api", "-X", "PATCH", `repos/${run.repo}/pulls/${existing.number}`, "-F", `body=@${bodyPath}`];
+      if (remote.host && remote.host !== "github.com") args.push("--hostname", remote.host);
+      if (opts.title?.trim()) args.push("-f", `title=${opts.title.trim()}`);
       gh(args, { token, env });
       number = existing.number;
       url = existing.url;

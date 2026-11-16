@@ -310,7 +310,12 @@ case "$1 $2" in
     echo "https://github.com/o/r/pull/$n" ;;
   "pr view") jq -c --argjson n "$3" '.[] | select(.number == $n) | {state, mergedAt: (.mergedAt // null)}' "$state" ;;
   "pr edit")
-    jq --argjson n "$3" --rawfile b "$(flag --body-file "$@")" 'map(if .number == $n then .body = $b else . end)' "$state" > "$state.tmp" && mv "$state.tmp" "$state" ;;
+    # as in a repository where classic Projects are deprecated (#65)
+    echo "GraphQL: Projects (classic) is being deprecated in favor of the new Projects experience" >&2; exit 1 ;;
+  "api -X")
+    n="${4##*/}"; body="$(flag -F "$@")"
+    jq --argjson n "$n" --rawfile b "${body#body=@}" 'map(if .number == $n then .body = $b else . end)' "$state" > "$state.tmp" && mv "$state.tmp" "$state"
+    jq -c --argjson n "$n" '.[] | select(.number == $n) | {number, html_url: .url}' "$state" ;;
   *) echo "stub gh: unsupported: $*" >&2; exit 2 ;;
 esac
 GH
