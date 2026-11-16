@@ -4,7 +4,7 @@
 >
 > Captured: 2026-11-15
 > Revised: 2026-11-15 (r3.2, after three independent design reviews and a follow-up — see §13)
-> Status: Design settled for first release; build next
+> Status: Design settled for first release; build in progress (status in §10, updated 2026-11-15)
 > Builds on: `docs/MANIFEST_SYSTEM_DESIGN_V2.md`, existing skills (`setup-work`, `do-work`, `commit-changes`, `create-pr`, `review-pr`, `archive-work`)
 
 ---
@@ -92,6 +92,25 @@ setup-work (contract) → approve → implement → commit → validate → PR w
 
 Success: on a real project, an issue goes from `setup-work` to a PR whose validation report the operator trusts, touching only plan approval and merge — **and an interrupted run resumes correctly.**
 
+#### The slice, step by step
+
+One run through the first release. This table only gathers what §3.6, §4.1, §4.7 and §6.1 specify; those sections are authoritative.
+
+| # | Step | Actor | Command | Run state after | Attempt state | Writes / records | Checks and guarantees |
+|---|---|---|---|---|---|---|---|
+| 1 | Readiness | agent (`setup-work`) | — | (no run) | — | `ready` \| `needs_human` + questions (§3.1) | a criterion that can't be given evidence → `needs_human` |
+| 2 | Plan + contract | agent (`setup-work`), runner | `factory start <issue>` | `planned` | — | run row, artifact dir, `contract.json`, proposed tier, `.git/info/exclude` entries | — |
+| 3 | Approve (**operator touch 1**) | operator, runner | `factory approve <run_id>` | `approved` | — | contract digest, test/policy baseline at `merge_base_sha`, `deadline_at`, authorization `active` (§3.6) | any later contract change revokes the authorization |
+| 4 | Implement | agent (`do-work`) | `factory exec <run_id> -- <cmd>` | `implementing` | — | command logs | build lock, command deadline, process-group kill; confirmations skipped only under a matching authorization |
+| 5 | Commit | agent (`commit-changes`) | — | `implementing` | — | commits | authorization matches repo, branch and contract digest |
+| 6 | Validate | runner (via `do-work` / `validate-work`) | `factory validate <run_id>` | `validating` | `checks_running → awaiting_review` (or `complete` on a deterministic failure) | draft report, logs, structured results | worktree lock, clean tree, contract digest, deadline; `HEAD` captured and re-checked (§4.3) |
+| 7 | Review | agent (`validation-reviewer`), runner | `factory review-input`, `factory record-review` | `validated` | `finalizing → complete` | source snapshot, `review.json`, final report | completeness rules and source digest (§4.9) |
+| 8 | PR | runner | `factory pr <run_id>` | `pr_open` | — | PR number; operator notified | idempotent lookup; branch head = report `head_sha` (§4.8) |
+| 9 | Merge (**operator touch 2**) | operator | — | `closed` (merged) | — | operator action and merge SHA (recorded by `manifest-sync`, next) | merge is never authorized |
+
+- Step 8 runs on `pass` or `pending_manual` (§6.1). Manual outcomes are recorded later with `factory record-manual` (§5.5).
+- **Failure path:** `fail`, `blocked` or `error` at step 6 or 7 moves the run to `escalated`. The report is kept, the operator is notified, and the run stops. The fix loop (§6.2) is next.
+
 ### 2.2 Next (in order)
 
 1. **Bounded fix loop** — on `fail`, implementer iterates on findings instead of stopping.
@@ -113,7 +132,7 @@ Success: on a real project, an issue goes from `setup-work` to a PR whose valida
 
 ### 2.5 Prerequisites
 
-- **#57** — context-path detection matches the documentation example `../myproject-ctx` before the real value; run artifacts would land in the wrong place.
+- **#57** — context-path detection matches the documentation example `../myproject-ctx` before the real value; run artifacts would land in the wrong place. *Resolved (PR #68).*
 - **Project identity in the manifest code.** `manifest/init.ts` `resolveContextPath()` reads the `CLAUDE.md` next to the *plugin* (`resolve(__dirname, "..")`), so without an explicit data dir every consuming project resolves to Escapement's own context path and DB. The CLI must take the target repo/worktree root explicitly (flag or cwd's git toplevel) and resolve context-path from that project's `CLAUDE.md`.
 - **Versioned schema.** `ensureSchema()` skips initialization whenever `work_items` exists, so factory tables would never be added to existing DBs. Replace with a `schema_version` table (or `PRAGMA user_version`) and ordered migrations.
 
@@ -682,15 +701,19 @@ All keys optional. Missing `static`/`verify` → `blocked` ("not configured"). `
 
 ## 10. Build Order
 
-1. **#57** — context-path detection.
-2. **Project identity + versioned schema** — explicit target root in the manifest/factory CLI; `schema_version` and ordered migrations replacing `ensureSchema` (§2.5).
-3. **`factory` CLI core** — run/attempt/authorization tables, state machines, `start`/`approve`/`exec`/`status`/`resume`/`revoke`, build and worktree locks, command and run deadlines, process-group cleanup, artifact dir.
-4. **Contract + settings + readiness + tiers** — schema, evidence types, settings parsing.
-5. **`factory validate`** — identity (clean tree + HEAD), setup policy, static + evidence phases, fresh results dirs, single structured test run, change classification, actual-diff tier, draft reports.
-6. **Reviewer** — `validation-reviewer` agent, bundle, `record-review` completeness checks and idempotency.
-7. **`setup-work`** produces contract + authorization.
-8. **Authorized path** — `do-work`, `commit-changes`, `create-pr`, `factory pr`, `record-manual`.
-9. **Release acceptance test** — a real issue end to end, plus deliberate interruptions at each boundary: during checks, between checks and review, during finalization, and between PR creation and recording. The first release is complete only when this passes; fix what breaks before moving on. → *first release complete*
+Status as of 2026-11-15; tracked in #66.
+
+1. **#57** — context-path detection. **Done** (PR #68). Found alongside it and also done: **#67**, the manifest skills run their CLI through a plugin-root wrapper, `scripts/manifest.sh` (PR #69).
+2. **#58 Project identity + versioned schema** — explicit target root in the manifest/factory CLI; `schema_version` and ordered migrations replacing `ensureSchema` (§2.5). **Next.**
+3. **#59 `factory` CLI core** — run/attempt/authorization tables, state machines, `start`/`approve`/`exec`/`status`/`resume`/`revoke`, build and worktree locks, command and run deadlines, process-group cleanup, artifact dir. Open.
+4. **#60 Contract + settings + readiness + tiers** — schema, evidence types, settings parsing. Open.
+5. **#61 `factory validate`** — identity (clean tree + HEAD), setup policy, static + evidence phases, fresh results dirs, single structured test run, change classification, actual-diff tier, draft reports. Open.
+6. **#62 Reviewer** — `validation-reviewer` agent, bundle, `record-review` completeness checks and idempotency. Open.
+7. **#63 `setup-work`** produces contract + authorization. Open.
+8. **#64 Authorized path** — `do-work`, `commit-changes`, `create-pr`, `factory pr`, `record-manual`. Open.
+9. **#65 Release acceptance test** — a real issue end to end, plus deliberate interruptions at each boundary: during checks, between checks and review, during finalization, and between PR creation and recording. The first release is complete only when this passes; fix what breaks before moving on. Open. → *first release complete*
+
+**Host-agnostic interface (added 2026-11-15 to #59–#62).** The factory must be usable by hosts other than the Escapement skills, for example Escapement Studio calling it as a subprocess. Requirements: `--json` output on every command; external work-item IDs (no required manifest `work_items` row; `manifest_id` optional in the contract); storage passed explicitly (`--project-root`, optional artifact-dir override); invocation through a plugin-root wrapper (`scripts/factory.sh`) with no skill calls from the runner; contract, report and verdict schemas published as standalone JSON Schema; the `.git/info/exclude` obligation for hosts documented and tested; the reviewer defined as a prompt plus verdict schema, with the Claude Code agent as a thin wrapper.
 10. **Bounded fix loop.**
 11. **Plan critique**, one round.
 12. **Gate, report-only.**
