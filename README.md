@@ -37,6 +37,16 @@ git clone https://github.com/fusupo/escapement.git
 claude --plugin-dir /path/to/escapement
 ```
 
+### Manifest Skills (Optional)
+
+The `manifest-*` skills run a TypeScript CLI in the plugin's `manifest/` directory. Its dependencies aren't committed, so install them once in the plugin directory, not in your project (needs Node.js and a C/C++ build toolchain for `better-sqlite3`):
+
+```bash
+cd /path/to/escapement/manifest && npm ci
+```
+
+Skills run the CLI through `scripts/manifest.sh`, which works from any project directory. `bash /path/to/escapement/scripts/manifest.sh --check` reports whether the dependencies are installed.
+
 ### From Marketplace (Coming Soon)
 
 ```bash
@@ -214,6 +224,7 @@ escapement/
 ├── scripts/
 │   ├── convert-session-log.py # JSONL→markdown session log converter
 │   ├── get-context-path.sh    # Shared context-path parser for skills
+│   ├── manifest.sh            # Runs the manifest CLI from any project directory
 │   ├── migrate-archives.py    # Migrate in-repo archives to context-path
 │   └── slice-session-log.sh   # Transcript slicing with a per-session cursor
 ├── agents/                   # Specialized subagents
@@ -359,6 +370,16 @@ ls -la /path/to/escapement/skills/
 
 # Restart Claude Code with plugin
 claude --plugin-dir /path/to/escapement
+```
+
+### Manifest skills fail with `Cannot find package 'tsx'` or `dependencies are not installed`
+
+```bash
+# Install the manifest CLI's dependencies in the plugin, not in your project
+cd /path/to/escapement/manifest && npm ci
+
+# Should exit 0
+bash /path/to/escapement/scripts/manifest.sh --check
 ```
 
 ### Hooks not working
