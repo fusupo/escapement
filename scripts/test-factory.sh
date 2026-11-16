@@ -256,5 +256,56 @@ touch "$fake/manifest/factory-cli.ts"
 err="$(cd "$project" && bash "$fake/scripts/factory.sh" status 2>&1 >/dev/null)"
 if [[ $? -ne 0 && "$err" == *"cd '$fake/manifest' && npm ci"* ]]; then ok; else bad "missing-deps" "$err"; fi
 
+# setup-work's factory path (skills/setup-work, Phases 0.5, 3.2 and 4.5), as
+# the skill runs it: an approved plan yields a contract whose digest is the
+# authorization's.
+sproject="$tmp/sproject"
+mkdir -p "$sproject"
+(
+  cd "$sproject" &&
+    git init -q -b main &&
+    printf '## Escapement Settings\n\n- **static**: true\n- **verify**: true\n- **test-results**: junit:$FACTORY_RESULTS_DIR/junit.xml\n' > CLAUDE.md &&
+    git add -A &&
+    git -c user.name=t -c user.email=t@example.invalid commit -q -m init
+)
+sf() { (cd "$sproject" && bash "$wrapper" "$@"); }
+out="$(sf --json check)"
+if [[ "$(jq -r '.result.status' <<<"$out")" == ready ]]; then ok; else bad "setup-factory-available" "$out"; fi
+
+# a criterion without evidence: readiness is needs_human, naming it
+cat > "$tmp/draft-bad.json" <<'JSON'
+{"version": 1, "run_id": "pending", "issue": 11, "risk_tier_proposed": "standard",
+ "criteria": [{"id": "AC-1", "text": "It works", "evidence": [{"id": "AC-1.e1", "type": "test", "kind": "new_behavior", "selector": "t.ts::works"}]},
+              {"id": "AC-2", "text": "It is fast", "evidence": []}]}
+JSON
+out="$(sf --json check --contract "$tmp/draft-bad.json")"
+if [[ "$(jq -r '.result.status == "needs_human" and ([.result.questions[] | select(.about == "criterion") | .ref] == ["AC-2"])' <<<"$out")" == true ]]; then ok; else bad "setup-criterion-without-evidence" "$out"; fi
+
+# the planned contract is ready before any run exists
+jq 'del(.criteria[1])' "$tmp/draft-bad.json" > "$tmp/draft.json"
+out="$(sf --json check --contract "$tmp/draft.json")"
+sroot="$(cd "$sproject" && pwd -P)"
+if [[ "$(jq -r '.result.status' <<<"$out")" == ready && "$(sf --json status --all | jq --arg w "$sroot" '[.result.runs[] | select(.worktree_path == $w)] | length')" == 0 ]]; then ok; else bad "setup-draft-ready-no-run" "$out"; fi
+
+# Approve + authorize run: check out, exclude, start, write, check, approve
+(cd "$sproject" && git checkout -q -b 11-thing && echo plan > SCRATCHPAD_11.md && echo '{}' > SESSION_LOG_1.jsonl)
+sf --json exclude 'SCRATCHPAD_*' 'SESSION_LOG_*' AGENT_CONSTRAINTS.md >/dev/null
+out="$(sf --json start '#11' --target-ref main)"
+run_id="$(jq -r .result.run_id <<<"$out")"
+art="$(jq -r .result.artifact_dir <<<"$out")"
+if [[ "$run_id" == "#11-r1" && -d "$art" ]]; then ok; else bad "setup-start" "$out"; fi
+jq --arg r "$run_id" '.run_id = $r' "$tmp/draft.json" > "$art/contract.draft.json"
+out="$(sf --json check --contract "$art/contract.draft.json")"
+if [[ "$(jq -r '.result.status' <<<"$out")" == ready ]]; then ok; else bad "setup-check-in-run" "$out"; fi
+out="$(sf --json approve "$run_id" --contract "$art/contract.draft.json")"
+approved="$(jq -r .result.authorization.contract_digest <<<"$out")"
+stored="sha256:$(sha256sum "$art/contract.json" | cut -d' ' -f1)"
+drafted="sha256:$(sha256sum "$art/contract.draft.json" | cut -d' ' -f1)"
+st="$(sf --json status "$run_id")"
+if [[ "$approved" == "$stored" && "$stored" == "$drafted" &&
+      "$(jq -r --arg d "$stored" '.result.run.state == "approved" and .result.authorization.status == "active" and .result.authorization.contract_digest == $d' <<<"$st")" == true ]]; then ok; else bad "setup-digest-matches-authorization" "approved=$approved stored=$stored drafted=$drafted
+$st"; fi
+if [[ -z "$(cd "$sproject" && git status --porcelain)" ]]; then ok; else bad "setup-tree-clean" "$(cd "$sproject" && git status --porcelain)"; fi
+
 echo "$pass passed, $fail failed"
 [[ $fail -eq 0 ]]
