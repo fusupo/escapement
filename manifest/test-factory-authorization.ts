@@ -87,7 +87,12 @@ async function run() {
   db.prepare("UPDATE factory_runs SET pr_number = 12 WHERE run_id = ?").run(r.run_id);
   m = matchAuthorization(db, here);
   assert(m.matched && m.next === "refresh_pr" && m.pr_number === 12, "a run with an open PR: next is refresh_pr, with its number");
-  assert(nextStep("implementing", { attempt: 1, status: "interrupted", outcome: null, head_sha: "x" }) === "implement", "after an interrupted attempt: implement");
+  const at = (status: string, outcome: string | null = null) => ({ attempt: 1, status, outcome, head_sha: "x" });
+  assert(nextStep("implementing", at("interrupted")) === "implement", "implementing after an interrupted attempt: implement");
+  assert(nextStep("validating", at("interrupted")) === "validate", "validating after an interrupted attempt (a crash during checks): validate again");
+  assert(nextStep("validating", null) === "validate", "validating with no attempt allocated: validate");
+  assert(nextStep("validating", at("finalizing")) === "resume", "an attempt left finalizing (a crash while recording the review): resume");
+  assert(nextStep("validating", at("complete", "pass")) === "resume", "a complete attempt whose run transition is owed: resume");
 
   transitionRun(db, r.run_id, "escalated", { reason: "test" });
   m = matchAuthorization(db, here);

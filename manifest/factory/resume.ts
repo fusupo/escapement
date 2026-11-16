@@ -42,6 +42,8 @@ export type ResumeAction = {
     | "needs_attention"
     | "advanced_run";
   detail?: string;
+  /** For record_review and refinalize: the verdict file to pass to record-review. */
+  file?: string;
 };
 
 export type ResumeResult = {
@@ -115,7 +117,7 @@ export async function resumeRun(
           const file = verdict ? stored : existsSync(written) ? written : null;
           actions.push(
             file
-              ? { attempt: a.attempt, found: a.status, action: "record_review", detail: record(file) }
+              ? { attempt: a.attempt, found: a.status, action: "record_review", detail: record(file), file }
               : { attempt: a.attempt, found: a.status, action: "reissue_review", detail: `factory review-input ${shq(runId)} ${a.attempt}` },
           );
         }
@@ -128,6 +130,7 @@ export async function resumeRun(
             found: a.status,
             action: verdict ? "refinalize" : "needs_attention",
             detail: verdict ? record(stored) : "finalizing without a verdict file",
+            ...(verdict ? { file: stored } : {}),
           });
         }
       }

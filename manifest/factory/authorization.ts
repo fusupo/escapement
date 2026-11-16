@@ -38,7 +38,7 @@ export const AUTH_REASONS = [
 export type AuthReason = (typeof AUTH_REASONS)[number];
 
 /** What the host should do next for a matched run. Advisory; the runner still checks each command. */
-export type NextStep = "implement" | "resume" | "review" | "pr" | "refresh_pr" | "await_merge";
+export type NextStep = "implement" | "validate" | "resume" | "review" | "pr" | "refresh_pr" | "await_merge";
 
 export type LatestAttempt = { attempt: number; status: string; outcome: string | null; head_sha: string };
 
@@ -72,13 +72,20 @@ export function noMatch(reason: AuthReason, run: RunRow | null = null): Authoriz
 }
 
 /**
- * `prCurrent`: the open PR already shows the current report (same attempt
- * and revision as when `factory pr` last wrote it), so there's nothing to
- * refresh and the run waits for the operator's merge.
+ * - `resume`: an attempt was left mid-way (checks running or finalizing,
+ *   e.g. after a crash), or a completed attempt's run transition is still
+ *   owed; `factory resume` reconciles it and names the follow-up command.
+ * - `review`: checks are done, the review is outstanding.
+ * - `validate`: the run is validating but has no usable attempt (the last
+ *   one was interrupted, or none was allocated): validate again.
+ * - `prCurrent`: the open PR already shows the current report (same attempt
+ *   and revision as when `factory pr` last wrote it), so there's nothing to
+ *   refresh and the run waits for the operator's merge.
  */
 export function nextStep(state: RunState, latest: LatestAttempt | null, prCurrent = false): NextStep {
-  if (latest && (latest.status === "awaiting_review" || latest.status === "finalizing")) return "review";
-  if (latest && latest.status === "checks_running") return "resume";
+  if (latest?.status === "checks_running" || latest?.status === "finalizing") return "resume";
+  if (latest?.status === "awaiting_review") return "review";
+  if (state === "validating") return latest?.status === "complete" ? "resume" : "validate";
   if (state === "validated") return "pr";
   if (state === "pr_open") return prCurrent ? "await_merge" : "refresh_pr";
   return "implement";

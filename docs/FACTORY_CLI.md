@@ -326,9 +326,10 @@ A matched answer carries the run, what the authorization allows (`authorizes`) a
 
 | `next` | When |
 |---|---|
-| `implement` | no attempt is open (none yet, or the last was interrupted) |
-| `resume` | the latest attempt's checks are running, or crashed |
-| `review` | the latest attempt awaits review, or its finalization was interrupted |
+| `implement` | the run is `approved` or `implementing`: nothing is being validated |
+| `validate` | the run is `validating` without a usable attempt: the last one was interrupted (a crash during checks), or none was allocated. Validate again |
+| `resume` | the latest attempt is left mid-way (checks running or crashed, or finalizing after a crash), or a complete attempt's run transition is still owed: run `resume` and follow its actions |
+| `review` | the latest attempt awaits review |
 | `pr` | the run is `validated` |
 | `refresh_pr` | the run is `pr_open`, and its report changed since `pr` last wrote the description (a manual outcome resolved it) |
 | `await_merge` | the run is `pr_open` and the PR shows the current report: nothing to do until the operator merges |
@@ -426,6 +427,7 @@ Each row records its holder: pid, process start time, command, host and run.
 - A holder whose process is gone, or whose pid now belongs to another process, is treated as dead.
 - The next caller takes a dead holder's lock over and logs the takeover as an event.
 - `resume` also removes dead holders' locks.
+- While `exec` or `validate` runs a command, the build lock's row also records the command's process group. A runner that dies mid-command leaves that group running; whoever takes the dead holder's lock over, or `resume`, kills the group first (`killed_groups` in resume's result). The group leader's start time guards against a reused pid.
 
 Locks are always taken worktree first, then build.
 
@@ -444,7 +446,7 @@ Locks are always taken worktree first, then build.
 | `finalizing`, no verdict file | `needs_attention` | none |
 | latest attempt `complete`, run still `validating` | `advanced_run` | run → `validated` (pass or pending_manual), `blocked` (blocked) or `escalated` (fail or error) |
 
-For the review actions, `detail` is the command to run. Past the deadline, resume still reconciles, escalates the run, and starts nothing. It never resets a budget.
+For the review actions, `detail` is the command to run (run ID and path single-quoted) and `file` the verdict file it records. Past the deadline, resume still reconciles, escalates the run, and starts nothing. It never resets a budget.
 
 ## JSON output
 
@@ -469,7 +471,7 @@ With `--json`, every command prints exactly one JSON object on stdout.
   - `outcome` is `pass`, `fail` or `pending_manual`.
 - **status** with a run ID: `{run, deadline_passed, authorization, authorizations, attempts, locks}`
 - **status** without one: `{runs: [run, …]}`
-- **resume:** `{run, deadline_passed, actions: [{attempt, found, action, detail?}], released_locks}`
+- **resume:** `{run, deadline_passed, actions: [{attempt, found, action, detail?, file?}], released_locks, killed_groups}`; `file` is the verdict file for `record_review` and `refinalize`
 - **revoke:** `{authorization}`
 - **escalate:** `{run, changed}`
 - **authorization:** `{matched: false, reasons, run_id, state}`, or `{matched: true, reasons: [], run_id, state, repo, branch, target_ref, worktree_path, artifact_dir, contract_path, contract_digest, authorizes, approved_at, deadline_at, issue_number, pr_number, latest_attempt: {attempt, status, outcome, head_sha} | null, next}`

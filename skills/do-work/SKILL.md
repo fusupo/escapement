@@ -101,7 +101,7 @@ bash "$FACTORY" --check && bash "$FACTORY" --json authorization
 | `next` | Do |
 |---|---|
 | `implement` | work through the unchecked tasks, then validate |
-| `resume`, `review` | validate (validate-work picks up where the attempt stopped) |
+| `validate`, `resume`, `review` | validate (validate-work picks up where the attempt stopped, after a crash too) |
 | `pr`, `refresh_pr` | open or refresh the PR (create-pr) |
 | `await_merge` | nothing: the PR is open and shows the current report. Report its number and stop |
 
@@ -365,12 +365,14 @@ After the last task:
    - `pass` or `pending_manual`: step C.
    - `fail` or `error`: the runner has already escalated the run. Step D, with the report's blocking findings.
    - `blocked`: when it is `dirty_tree` caused by your own uncommitted work, commit it and invoke validate-work once more. Anything else: escalate (step D).
+   - A runner crash inside validation is validate-work's to recover (it resumes and carries on); don't escalate for one. If the session itself was interrupted, re-entering do-work routes through Phase 0.5's `next` and continues.
 
 ### C. Open the PR
 
 Invoke create-pr. It writes the title and description, and `factory pr` pushes the branch and opens the PR as the agent, with the validation report. On success, tick the scratchpad's Quality Checks and the acceptance criteria the report shows as demonstrated (manual ones stay open until recorded), update the Work Log and notify (step E) with the PR URL. Merging is the operator's: never merge. Advisory findings don't block: list them in the summary. Don't change code after validation to address them, since that needs a new attempt.
 
 If `factory pr` fails, route on its code:
+- **No JSON, or exit status 128 or more:** the runner died mid-step, possibly after GitHub created the PR. Run the same `factory pr` command again: its lookup finds that PR and records it (`action: recovered`). Then route on that result as here.
 - **`gh_failed`, `push_failed`:** possibly transient, and GitHub may have acted before the failure. Run the same `factory pr` command once more: it finds a PR an earlier call created instead of opening a second one. If it fails again, notify (step E) and stop *without* escalating; the run stays `validated`, and create-pr can be run again later.
 - **`no_agent_token`, `agent_env_permissions`, `gh_missing`, `lock_timeout`:** setup, not the run. Notify with the fix and stop without escalating.
 - **Anything else** (`head_moved`, `pr_conflict`, `pr_not_open`, `contract_mismatch`, `not_validated`, `run_deadline`): escalate (step D).
@@ -481,10 +483,11 @@ Under an authorized run, `factory authorization` has already matched the branch,
 
 ---
 
-**Version:** 1.2.0
+**Version:** 1.3.0
 **Last Updated:** 2026-11-16
 **Maintained By:** Escapement
 **Changelog:**
+- v1.3.0: Authorized path: `next` `validate`; a crash inside validation is validate-work's to recover; a `factory pr` that dies is run again and recovers the PR (#65)
 - v1.2.0: Authorized path: under a matching active factory authorization, implement with builds and tests through `factory exec`, commit, validate (validate-work) and open the PR (create-pr) without questions; escalate and notify when it can't go on (#64)
 - v1.1.0: Added EnterPlanMode for complex tasks, Task delegation, LSP navigation
 - v1.0.0: Initial conversion from commands/start-work.md
