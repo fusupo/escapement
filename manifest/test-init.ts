@@ -1,9 +1,7 @@
-import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { execFileSync } from "node:child_process";
-import { tmpdir } from "node:os";
-import { resolve, dirname, join } from "node:path";
+import { readFileSync } from "node:fs";
+import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseContextPath, resolveDbPath, resolveProjectRoot } from "./init.ts";
+import { parseContextPath, resolveDbPath } from "./init.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Shared with scripts/test-get-context-path.sh; format described at its top.
@@ -56,85 +54,36 @@ function run() {
   console.log("\nAll parseContextPath tests passed.");
 }
 
-const SETTINGS = (ctx: string) => `# Project\n\n## Escapement Settings\n\n- **context-path**: ${ctx}\n`;
+function runDbPath() {
+  console.log("\nShared manifest location\n");
 
-function git(cwd: string, ...args: string[]) {
-  execFileSync("git", ["-C", cwd, "-c", "user.name=test", "-c", "user.email=test@example.com", ...args], {
-    stdio: "ignore",
-  });
-}
+  const home = "/home/someone";
+  const cwd = "/work/some-project";
+  assert(
+    resolveDbPath({ env: {}, home, cwd }) === "/home/someone/.local/share/escapement/manifest.db",
+    "default: ~/.local/share/escapement/manifest.db",
+  );
+  assert(
+    resolveDbPath({ env: { XDG_DATA_HOME: "/xdg" }, home, cwd }) === "/xdg/escapement/manifest.db",
+    "XDG_DATA_HOME is honoured",
+  );
+  assert(
+    resolveDbPath({ env: { XDG_DATA_HOME: "/xdg", ESCAPEMENT_MANIFEST_DIR: "/shared" }, home, cwd }) ===
+      "/shared/manifest.db",
+    "ESCAPEMENT_MANIFEST_DIR overrides the default",
+  );
+  assert(
+    resolveDbPath({ dataDir: "data", env: { ESCAPEMENT_MANIFEST_DIR: "/shared" }, home, cwd }) ===
+      "/work/some-project/data/manifest.db",
+    "--data-dir overrides everything, relative to the cwd",
+  );
+  assert(
+    resolveDbPath({ env: {}, home, cwd: "/work/other-project" }) === resolveDbPath({ env: {}, home, cwd }),
+    "every project gets the same database",
+  );
 
-function runRoot() {
-  console.log("\nProject root and DB path resolution\n");
-
-  // realpath: macOS tmpdir is a symlink, and git reports resolved paths.
-  const tmp = realpathSync(mkdtempSync(join(tmpdir(), "manifest-root-")));
-  try {
-    // A git project with its own context-path, plus a subdirectory.
-    const proj = join(tmp, "proj");
-    mkdirSync(join(proj, "src", "deep"), { recursive: true });
-    writeFileSync(join(proj, "CLAUDE.md"), SETTINGS("../proj-ctx"));
-    git(proj, "init", "-q");
-    git(proj, "add", "CLAUDE.md");
-    git(proj, "commit", "-q", "-m", "init");
-    const projDb = join(tmp, "proj-ctx", "manifest", "manifest.db");
-
-    let loc = resolveDbPath({ cwd: proj });
-    assert(loc.dbPath === projDb && !loc.inRepo, "repo root: DB under the project's context-path");
-
-    loc = resolveDbPath({ cwd: join(proj, "src", "deep") });
-    assert(loc.dbPath === projDb && loc.root === proj, "subdirectory resolves to the git toplevel");
-
-    const wt = join(tmp, "proj-worktrees", "feature");
-    git(proj, "worktree", "add", "-q", "-b", "feature", wt);
-    loc = resolveDbPath({ cwd: wt });
-    assert(loc.dbPath === projDb && loc.root === proj, "linked worktree resolves to the main worktree");
-
-    // A non-git project without a context-path: in-repo DB at the cwd.
-    const plain = join(tmp, "plain");
-    mkdirSync(plain);
-    writeFileSync(join(plain, "CLAUDE.md"), "# Plain\n\nNo settings here.\n");
-    loc = resolveDbPath({ cwd: plain });
-    assert(
-      loc.dbPath === join(plain, "manifest", "manifest.db") && loc.inRepo,
-      "no context-path: in-repo DB at {root}/manifest/manifest.db",
-    );
-    assert(resolveProjectRoot({ cwd: plain }) === plain, "outside git: root is the cwd");
-
-    // --project-root wins over the cwd, relative to the cwd.
-    loc = resolveDbPath({ cwd: plain, projectRoot: "../proj" });
-    assert(loc.dbPath === projDb, "--project-root overrides the cwd");
-
-    let threw = false;
-    try {
-      resolveDbPath({ cwd: plain, projectRoot: "../missing" });
-    } catch (err) {
-      threw = String(err).includes("project root does not exist");
-    }
-    assert(threw, "missing --project-root is an error, not a new empty manifest");
-
-    // --data-dir wins over everything.
-    loc = resolveDbPath({ cwd: proj, projectRoot: proj, dataDir: "data" });
-    assert(loc.dbPath === join(proj, "data", "manifest.db") && loc.root === null, "--data-dir overrides everything");
-
-    // An unfenced example outside the settings section is ignored with a warning.
-    const doc = join(tmp, "doc");
-    mkdirSync(doc);
-    writeFileSync(join(doc, "CLAUDE.md"), "# Doc\n\n- **context-path**: ../wrong\n\n## Escapement Settings\n\n- **context-path**: ../doc-ctx\n");
-    const warnings: string[] = [];
-    loc = resolveDbPath({ cwd: doc, warn: (m) => warnings.push(m) });
-    assert(
-      loc.dbPath === join(tmp, "doc-ctx", "manifest", "manifest.db") &&
-        warnings.length === 1 &&
-        warnings[0].includes(join(doc, "CLAUDE.md")),
-      "out-of-section setting ignored; warning names the project's CLAUDE.md",
-    );
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
-
-  console.log("\nAll root resolution tests passed.");
+  console.log("\nAll manifest location tests passed.");
 }
 
 run();
-runRoot();
+runDbPath();
