@@ -24,7 +24,7 @@ export type ReadinessDoc = {
 
 export type MirrorResult =
   | { mirrored: false; reason: "no_work_item"; repo: string; issue: number }
-  | { mirrored: true; id: string; status: ReadinessDoc["status"]; needs_human: boolean; questions: number };
+  | { mirrored: true; id: string; status: ReadinessDoc["status"]; needs_human: boolean; questions: number; changed: boolean };
 
 export function parseReadiness(text: string, source = "readiness"): ReadinessDoc {
   let data: unknown;
@@ -56,6 +56,7 @@ export function mirrorReadiness(db: Database, opts: { repo: string; issue: numbe
     meta = {};
   }
 
+  const before = JSON.stringify(meta);
   if (readiness.status === "needs_human") {
     meta.needs_human = true;
     meta.readiness_questions = readiness.questions;
@@ -66,15 +67,19 @@ export function mirrorReadiness(db: Database, opts: { repo: string; issue: numbe
     else delete meta.needs_human;
   }
 
-  db.prepare("UPDATE work_items SET meta = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?").run(
-    JSON.stringify(meta),
-    row.id,
-  );
+  const changed = JSON.stringify(meta) !== before;
+  if (changed) {
+    db.prepare("UPDATE work_items SET meta = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?").run(
+      JSON.stringify(meta),
+      row.id,
+    );
+  }
   return {
     mirrored: true,
     id: row.id,
     status: readiness.status,
     needs_human: meta.needs_human === true,
     questions: readiness.status === "needs_human" ? readiness.questions.length : 0,
+    changed,
   };
 }

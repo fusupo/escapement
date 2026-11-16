@@ -1,6 +1,7 @@
 import { schemaErrors, contractErrors, type Contract } from "./schemas.ts";
 import { readSettings, type CheckName } from "./settings.ts";
 import { assessTier, type TierAssessment } from "./tiers.ts";
+import { defaultTargetRef } from "./context.ts";
 
 /**
  * The mechanical half of the readiness check (docs/FACTORY_DESIGN.md §3.1).
@@ -24,6 +25,8 @@ export type Readiness = {
   questions: ReadinessQuestion[];
   tier?: TierAssessment;
   required_checks: { name: CheckName; command: string | null }[];
+  /** The branch `factory start` targets without --target-ref: base-branch, else develop when origin/develop exists, else main. */
+  target_ref: string;
   settings_digest: string;
 };
 
@@ -128,6 +131,7 @@ export function checkReadiness(opts: { contractText?: string | null; source: str
         }
       : {}),
     required_checks,
+    target_ref: settings.baseBranch ?? defaultTargetRef(opts.projectDir),
     settings_digest: loaded.digest,
   };
 

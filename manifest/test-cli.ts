@@ -225,7 +225,7 @@ function run() {
 
   const r1 = mirrorReadiness(db, { repo: "fusupo/escapement", issue: 63, readiness: needs });
   const m1 = metaOf("esc#63");
-  assert(r1.mirrored && r1.id === "esc#63" && r1.questions === 1, "needs_human is mirrored to the work item for repo#issue");
+  assert(r1.mirrored && r1.id === "esc#63" && r1.questions === 1 && r1.changed, "needs_human is mirrored to the work item for repo#issue");
   assert(m1.needs_human === true && m1.readiness_questions[0].ref === "AC-2" && m1.bootstrap_status === "active", "it sets needs_human and readiness_questions, keeping other meta");
   assert(!onFrontier("esc#63"), "so the item leaves the frontier");
 
@@ -233,6 +233,8 @@ function run() {
   const m2 = metaOf("esc#63");
   assert(!("needs_human" in m2) && !("readiness_questions" in m2) && m2.bootstrap_status === "active", "ready clears both");
   assert(onFrontier("esc#63"), "and the item is back on the frontier");
+  const again = mirrorReadiness(db, { repo: "fusupo/escapement", issue: 63, readiness: ready });
+  assert(again.mirrored && !again.changed, "mirroring ready again reports no change");
 
   mirrorReadiness(db, { repo: "fusupo/escapement", issue: 64, readiness: needs });
   mirrorReadiness(db, { repo: "fusupo/escapement", issue: 64, readiness: ready });

@@ -45,6 +45,11 @@
         }
       }
     },
+    "target_ref": {
+      "description": "The branch a run targets unless the host says otherwise: the base-branch setting, else develop when origin/develop exists, else main. Hosts create the feature branch from it.",
+      "type": "string",
+      "minLength": 1
+    },
     "settings_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
   },
   "if": { "properties": { "status": { "const": "ready" } } },

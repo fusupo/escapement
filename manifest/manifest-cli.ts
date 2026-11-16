@@ -584,6 +584,8 @@ function cmdReadiness(db: Database, args: string[]): void {
   }
   if (!r.mirrored) {
     console.log(`No work item for ${repo}#${issueText}; nothing mirrored.`);
+  } else if (!r.changed) {
+    console.log(`'${r.id}' already reflects readiness ${r.status}; nothing changed.`);
   } else if (r.status === "needs_human") {
     console.log(`Marked '${r.id}' needs_human with ${r.questions} readiness question(s).`);
   } else {

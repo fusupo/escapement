@@ -285,7 +285,7 @@ The commands in `verdict.record` and `runner.exec` carry no global options. A ho
 
 Whether the criteria capture the intent, and whether scope and dependencies are clear, is the planner's judgment; it adds those questions in the same shape. `check` exits 0 for both `ready` and `needs_human`; read `status`.
 
-Without `--contract`, `check` reports only the settings: a required check with no command, or an invalid setting. There are no contract questions and no `tier`. A host can run it before planning to see whether the project is set up for the factory at all; `setup-work` offers a run only when it is `ready`.
+Without `--contract`, `check` reports only the settings: a required check with no command, or an invalid setting. There are no contract questions and no `tier`. A host can run it before planning to see whether the project is set up for the factory at all; `setup-work` offers a run only when it is `ready`, and branches from its `target_ref`.
 
 The manifest mirrors a readiness document into a work item with `manifest.sh readiness <owner/repo> <issue> <file|->`: `needs_human` sets `meta.needs_human` and `meta.readiness_questions`, so the item leaves the frontier, and `ready` clears them. It does nothing when the issue has no work item.
 
@@ -354,7 +354,7 @@ With `--json`, every command prints exactly one JSON object on stdout.
 - **resume:** `{run, deadline_passed, actions: [{attempt, found, action, detail?}], released_locks}`
 - **revoke:** `{authorization}`
 - **exclude:** `{path, added, present}`: the exclude file, the patterns appended, and those already there
-- **check:** a readiness document (`schemas/factory/readiness.schema.json`): `{version, status, questions: [{about, question, ref?}], tier?: {tier, reasons}, required_checks: [{name, command}], settings_digest}`
+- **check:** a readiness document (`schemas/factory/readiness.schema.json`): `{version, status, questions: [{about, question, ref?}], tier?: {tier, reasons}, required_checks: [{name, command}], target_ref, settings_digest}`. `target_ref` is the branch `start` targets without `--target-ref`; hosts create the feature branch from it
 - **schema:** `{schemas: [{name, path}]}`, or `{name, path}`, plus `schema` with `--print`
 - **prompt:** `{prompts: [{name, path}]}`, or `{name, path}`, plus `content` with `--print`
 
