@@ -118,6 +118,25 @@ if [[ $? -eq 1 && "$(jq -r '.error.code' <<<"$out")" == "usage" ]]; then ok; els
 err="$(f approve '#5-r1' 2>&1 >/dev/null)"
 if [[ "$err" == *"missing --contract"* && "$err" == *"Usage: factory"* ]]; then ok; else bad "usage-text" "$err"; fi
 
+# check: readiness without a run or a database. The project sets no static
+# or verify command, and the contract has test evidence but no test-results.
+out="$(ESCAPEMENT_MANIFEST_DIR="$tmp/nodb" f --json check --contract ../contract.json)"
+status=$?
+if [[ $status -eq 0 && "$(jq -r '.ok and .result.status == "needs_human" and ([.result.questions[].ref] == ["static", "verify", "test-results"])' <<<"$out")" == true ]]; then ok; else bad "check-needs-human" "status=$status out=$out"; fi
+if [[ ! -e "$tmp/nodb" ]]; then ok; else bad "check-opens-no-db"; fi
+out="$(f check --contract ../bad-contract.json)"
+if [[ $? -eq 0 && "$out" == needs_human* && "$out" == *"[criterion]"* ]]; then ok; else bad "check-text" "$out"; fi
+
+# schema: published JSON Schema paths, or content with --print
+out="$(ESCAPEMENT_MANIFEST_DIR="$tmp/nodb" f --json schema)"
+if [[ "$(jq -r '[.result.schemas[].name] == ["contract", "report", "verdict", "readiness"]' <<<"$out")" == true && ! -e "$tmp/nodb" ]]; then ok; else bad "schema-list" "$out"; fi
+path="$(f schema contract)"
+if [[ -f "$path" && "$(jq -r '."$id"' "$path")" == *"/contract.schema.json" ]]; then ok; else bad "schema-path" "$path"; fi
+out="$(f --json schema verdict --print)"
+if [[ "$(jq -r '.result.schema.title' <<<"$out")" == *"verdict"* ]]; then ok; else bad "schema-print" "$out"; fi
+f schema nonsense >/dev/null 2>&1
+if [[ $? -eq 1 ]]; then ok; else bad "schema-unknown"; fi
+
 # Missing dependencies: a copy of the plugin layout without node_modules
 fake="$tmp/fake-plugin"
 mkdir -p "$fake/scripts" "$fake/manifest"

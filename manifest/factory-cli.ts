@@ -8,6 +8,10 @@ import { execCommand, execExitCode } from "./factory/exec.ts";
 import { resumeRun } from "./factory/resume.ts";
 import { currentOwner } from "./factory/owner.ts";
 import { FactoryError, parseDuration } from "./factory/util.ts";
+import { checkReadiness } from "./factory/readiness.ts";
+import { SCHEMA_NAMES, schemaPath, isSchemaName } from "./factory/schemas.ts";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 /**
  * The factory runner CLI (docs/FACTORY_CLI.md). Hosts call it through
@@ -33,6 +37,11 @@ Commands:
   status [run_id]               List open runs (--all: include closed), or show one
   resume <run_id>               Reconcile an interrupted run
   revoke <run_id>               End the run's active authorization
+  check --contract <file>       Readiness: is the contract valid and runnable in
+                                this project? Prints ready or needs_human with
+                                questions (no run needed)
+  schema [name]                 Path of a published JSON Schema (contract, report,
+                                verdict, readiness); --print for its content
 
 Options:
   --json                Print one JSON object (see docs/FACTORY_CLI.md)
@@ -43,7 +52,7 @@ Options:
   --manifest-id <id>    start: manifest work item, for reference only
   --target-ref <ref>    start: branch the work targets (default develop or main)
   --work-type <type>    start: e.g. feature, bug
-  --contract <file>     approve: the contract to approve
+  --contract <file>     approve, check: the contract
   --run-budget <dur>    approve: run deadline after first approval
                         (default: run-budget setting, else ${SETTING_DEFAULTS["run-budget"]})
   --timeout <dur>       exec: command timeout
@@ -51,6 +60,7 @@ Options:
   --lock-timeout <dur>  exec, resume: how long to wait for locks
                         (default: lock-timeout setting, else ${SETTING_DEFAULTS["lock-timeout"]})
   --all                 status: include closed runs
+  --print               schema: print the schema instead of its path
 
 Durations: 30s, 15m, 2h, 1d. Settings are read from the run's worktree
 CLAUDE.md, "## Escapement Settings" (docs/FACTORY_CLI.md).`;
@@ -68,7 +78,7 @@ const VALUE_FLAGS = new Set([
   "--timeout",
   "--lock-timeout",
 ]);
-const BOOL_FLAGS = new Set(["--json", "--all", "--help", "-h"]);
+const BOOL_FLAGS = new Set(["--json", "--all", "--print", "--help", "-h"]);
 
 type Parsed = { flags: Map<string, string | true>; positional: string[]; rest: string[] };
 
@@ -127,6 +137,48 @@ function need(value: string | undefined, what: string): string {
 }
 
 type Outcome = { result: unknown; text: string; exitCode?: number };
+
+/** Commands that don't touch the manifest database, so hosts can run them anywhere. */
+const NO_DB_COMMANDS = new Set(["check", "schema"]);
+
+function dispatchNoDb(command: string, p: Parsed): Outcome {
+  const [arg] = p.positional;
+  switch (command) {
+    case "check": {
+      const file = resolve(need(str(p, "--contract"), "--contract <file>"));
+      let text: string | null = null;
+      try {
+        text = readFileSync(file, "utf-8");
+      } catch {
+        text = null;
+      }
+      const ctx = projectContext(str(p, "--project-root"));
+      const r = checkReadiness({ contractText: text, source: file, projectDir: ctx.worktreePath });
+      const lines = [
+        r.status,
+        ...r.questions.map((q) => `  - [${q.about}${q.ref ? ` ${q.ref}` : ""}] ${q.question}`),
+        ...(r.tier ? [`  tier: ${r.tier.tier}${r.tier.reasons.length ? ` (${r.tier.reasons.join("; ")})` : ""}`] : []),
+        `  required checks: ${r.required_checks.map((c) => `${c.name}=${c.command ?? "(not configured)"}`).join(", ") || "none"}`,
+      ];
+      return { result: r, text: lines.join("\n") };
+    }
+    case "schema": {
+      if (arg === undefined) {
+        const schemas = SCHEMA_NAMES.map((name) => ({ name, path: schemaPath(name) }));
+        return { result: { schemas }, text: schemas.map((x) => `${x.name.padEnd(10)} ${x.path}`).join("\n") };
+      }
+      if (!isSchemaName(arg)) throw new FactoryError("usage", `unknown schema ${arg} (use ${SCHEMA_NAMES.join(", ")})`);
+      const path = schemaPath(arg);
+      if (p.flags.has("--print")) {
+        const content = readFileSync(path, "utf-8");
+        return { result: { name: arg, path, schema: JSON.parse(content) }, text: content.trimEnd() };
+      }
+      return { result: { name: arg, path }, text: path };
+    }
+    default:
+      throw new FactoryError("usage", `unknown command ${command}`);
+  }
+}
 
 async function dispatch(db: Database, command: string, p: Parsed, json: boolean): Promise<Outcome> {
   const owner = currentOwner(`factory ${command}`);
@@ -255,9 +307,14 @@ async function main(argv: string[]): Promise<number> {
 
   let db: Database | undefined;
   try {
-    db = initManifest({ dataDir: str(parsed, "--data-dir") });
-    db.pragma("busy_timeout = 10000");
-    const out = await dispatch(db, command, parsed, jsonRequested);
+    let out: Outcome;
+    if (NO_DB_COMMANDS.has(command)) {
+      out = dispatchNoDb(command, parsed);
+    } else {
+      db = initManifest({ dataDir: str(parsed, "--data-dir") });
+      db.pragma("busy_timeout = 10000");
+      out = await dispatch(db, command, parsed, jsonRequested);
+    }
     if (jsonRequested) {
       process.stdout.write(JSON.stringify({ ok: true, command, result: out.result }) + "\n");
     } else {
