@@ -480,7 +480,7 @@ ul.tight li{margin:.3rem 0}
           <tr><td><span class="state s-neutral">interrupted</span></td><td>The attempt didn't complete. Only resume sets this.</td></tr>
         </tbody>
       </table></div>
-      <p><b>Manual evidence</b> is recorded with <code>factory record-manual &lt;run&gt; &lt;evidence&gt; pass|fail --note …</code>. Each record is bound to the current report's revision and contract; a new commit invalidates it. When every manual item passes, the outcome moves from <code>pending_manual</code> to <code>pass</code> as a new report revision, and the original is kept.</p>
+      <p><b>Manual evidence</b> is recorded with <code>factory record-manual &lt;run&gt; &lt;evidence&gt; pass|fail --note …</code>. Each record is bound to the current report's revision and contract; a new commit invalidates it. When every manual item passes, the outcome moves from <code>pending_manual</code> to <code>pass</code> as a new report revision, and the original is kept. <i>As built (#62):</i> a <code>pending_manual</code> outcome moves the run to <code>validated</code>, so the PR can open while manual items are outstanding.</p>
     </section>
 
     <!-- 5 VALIDATE -->
@@ -533,7 +533,7 @@ ul.tight li{margin:.3rem 0}
   attempts/{n}/report.json    per-attempt report, append-only
   attempts/{n}/logs/…         full command logs
   attempts/{n}/results/…      structured test results
-  attempts/{n}/source/        read-only snapshot at head_sha, for the reviewer
+  attempts/{n}/review/        the reviewer's bundle: diff, issue, read-only snapshot at head_sha
   attempts/{n}/review.json    the reviewer's verdict</pre>
 
       <h3>Test and policy changes are classified, not banned</h3>
@@ -556,6 +556,7 @@ ul.tight li{margin:.3rem 0}
       <div class="eyebrow">6 · The reviewer <span class="src">md §4.9</span></div>
       <h2>The agent judges; the runner checks the judgment is complete</h2>
       <p><code>factory review-input</code> hands a fresh-context reviewer a fixed bundle: the issue, the approved contract, the exact diff, the draft report, paths to the full logs, and a read-only <code>git archive</code> snapshot at <code>head_sha</code> with its digest. The reviewer reads the snapshot, not the live worktree, because the worktree lock is released between CLI calls.</p>
+      <p><i>As built (#62):</i> the bundle is written to <code>attempts/{n}/review/</code>. The issue text comes only from the host's <code>--issue-file</code>. Execution-policy changes need a sign-off, just as sensitive paths do. A rejected verdict changes nothing. An accepted one is stored as <code>review.json</code>, and <code>report.json</code> becomes the final report; the draft is kept beside it. The reviewer is a prompt in <code>prompts/factory/</code> plus the verdict schema, so any runtime can run it. The Claude Code agent only wraps that prompt.</p>
       <p>The verdict goes back through <code>factory record-review</code>, which refuses anything incomplete. Try it below. The example run touched a sensitive path and modified one existing assertion.</p>
       <div class="plate">
         <div class="plate-h"><span class="t">Verdict checker</span><span class="hint">Fill in the verdict the way a reviewer would</span></div>
@@ -1023,8 +1024,8 @@ const BUILD=[
  [3,"#59","factory CLI core","Run, attempt and authorization tables; state machines; start, approve, exec, status, resume, revoke; locks; deadlines; cleanup.","done"],
  [4,"#60","Contract, settings, readiness, tiers","Published JSON Schemas, evidence types, settings parsing, factory check and factory schema.","done"],
  [5,"#61","factory validate","Identity, setup policy, static and evidence phases, fresh results, classification, actual tier, draft reports.","done"],
- [6,"#62","Reviewer","validation-reviewer, bundle, record-review completeness and idempotency.","next"],
- [7,"#63","setup-work produces the contract","Readiness, tier, contract and authorization.","open"],
+ [6,"#62","Reviewer","validation-reviewer prompt and agent, bundle, record-review completeness and idempotency.","done"],
+ [7,"#63","setup-work produces the contract","Readiness, tier, contract and authorization.","next"],
  [8,"#64","Authorized path","do-work, commit-changes, create-pr, factory pr, record-manual.","open"],
  [9,"#65","Release acceptance test","A real issue end to end, interrupted on purpose during checks, between checks and review, during finalization, and between PR creation and recording.","open"]
 ];

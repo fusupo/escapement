@@ -408,6 +408,20 @@ any non-complete → interrupted   (set only by resume, per the rules below)
 
 The agent supplies the judgment; the runner guarantees it is complete.
 
+*As built (#62):*
+- **Bundle.** It lives in `attempts/{n}/review/`: `bundle.json`, `diff.patch`, `source/` and `issue.md`. The issue text comes only from the host's `--issue-file`; the runner never fetches issues.
+- **Snapshot digest.** It covers each file's path, type and content. It is recorded in an event, so no schema change was needed.
+- **Policy sign-offs.** Execution-policy changes (`policy:{path}`) need a sign-off like sensitive paths, because they make the run sensitive (§4.5).
+- **Rejections.** A rejected verdict changes nothing; the rejection is logged as an event.
+- **Accepted verdict.**
+  - It is stored as `review.json`, and the draft is kept as `report.draft.json`.
+  - `report.json` becomes the final report, with a `review` block.
+  - Each fail condition becomes a blocking finding.
+  - The verdict digest is taken over canonical JSON, so formatting doesn't matter.
+- **The reviewer is data.** It is `prompts/factory/validation-reviewer.md` plus the verdict schema, and `factory prompt reviewer` finds it. `agents/validation-reviewer.md` is the Claude Code wrapper. The host runs `record-review`, not the reviewer.
+
+Reference: [FACTORY_CLI.md](FACTORY_CLI.md#review-input).
+
 ---
 
 ## 5. The Validation Contract
@@ -527,6 +541,8 @@ Contracts name no commands in the first release: every check comes from project 
 - Each record is bound to the current finalized report's `head_sha` and contract digest. A record for a superseded revision or contract is rejected; a new commit invalidates earlier manual records along with the report.
 - When every manual item is recorded `pass`, the report's outcome moves `pending_manual → pass` (appended as a new report revision; the original stays). Any `fail` → `fail`.
 - Manual outcomes are stored as `factory_events` (`kind: 'manual_outcome'`) with the recorder and note.
+
+*As built (#62):* `pending_manual` moves the run to `validated`, as `pass` does. The PR can open while manual outcomes are outstanding, and the report shows them as pending.
 
 ---
 
@@ -724,8 +740,8 @@ Status as of 2026-11-16; tracked in #66.
 3. **#59 `factory` CLI core** — run/attempt/authorization tables, state machines, `start`/`approve`/`exec`/`status`/`resume`/`revoke`, build and worktree locks, command and run deadlines, process-group cleanup, artifact dir. **Done.** Locks are SQLite rows (§4.1); CLI reference in [FACTORY_CLI.md](FACTORY_CLI.md).
 4. **#60 Contract + settings + readiness + tiers** — schema, evidence types, settings parsing. **Done.** Published JSON Schemas in `schemas/factory/`, `factory check` (readiness) and `factory schema`; contracts name no commands (§5.2).
 5. **#61 `factory validate`** — identity (clean tree + HEAD), setup policy, static + evidence phases, fresh results dirs, single structured test run, change classification, actual-diff tier, draft reports. **Done.** Blocked preconditions use no attempt (§4.3); the classification baseline comes from git (§4.6); new `test-files` setting (§8).
-6. **#62 Reviewer** — `validation-reviewer` agent, bundle, `record-review` completeness checks and idempotency. **Next.**
-7. **#63 `setup-work`** produces contract + authorization. Open.
+6. **#62 Reviewer** — `validation-reviewer` agent, bundle, `record-review` completeness checks and idempotency. **Done.** The reviewer is a prompt plus the verdict schema, with the Claude Code agent as a thin wrapper; policy changes need a sign-off; `pending_manual` validates the run (§4.9, §5.5).
+7. **#63 `setup-work`** produces contract + authorization. **Next.**
 8. **#64 Authorized path** — `do-work`, `commit-changes`, `create-pr`, `factory pr`, `record-manual`. Open.
 9. **#65 Release acceptance test** — a real issue end to end, plus deliberate interruptions at each boundary: during checks, between checks and review, during finalization, and between PR creation and recording. The first release is complete only when this passes; fix what breaks before moving on. Open. → *first release complete*
 

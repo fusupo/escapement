@@ -9,7 +9,7 @@ Escapement is an opinionated workflow and Claude Code plugin that provides reusa
 - **Meta-workflow**: A prescribed sequential process supported by the plugin modules
 - **Skills**: Automated workflow modules (issue setup, commits, PRs, etc.)
 - **Hooks**: Session archiving on compaction
-- **Agents**: Specialized AI assistants (scratchpad-planner for codebase analysis)
+- **Agents**: Specialized AI assistants (scratchpad-planner for codebase analysis, validation-reviewer for factory attempts)
 - **Multi-Project Support**: Works across all your repos simultaneously
 
 ## Workflow Overview
@@ -213,6 +213,17 @@ Specialized subagents for delegation and deep analysis:
 
 The scratchpad-planner agent transforms GitHub issues into concrete, well-structured implementation plans with atomic, reviewable tasks.
 
+### validation-reviewer
+
+A fresh-context reviewer for a factory attempt awaiting review. Given the `bundle.json` that `factory.sh review-input` writes, it does three things:
+- judges whether each piece of evidence demonstrates its criterion;
+- signs off sensitive and execution-policy changes;
+- justifies modified assertions.
+
+It writes a verdict file and never edits code. The host records the verdict with `factory.sh record-review`, which rejects an incomplete one.
+
+The agent is a thin wrapper: the reviewer's instructions are `prompts/factory/validation-reviewer.md`, runtime-neutral data that any host can run (`factory.sh prompt reviewer`). See `docs/FACTORY_CLI.md`.
+
 ## Structure
 
 ```
@@ -240,7 +251,7 @@ escapement/
 ├── manifest/                 # Manifest and factory CLIs (TypeScript, SQLite)
 │   ├── manifest-cli.ts       # Manifest entry point; run it through scripts/manifest.sh
 │   ├── factory-cli.ts        # Factory runner entry point; run it through scripts/factory.sh
-│   ├── factory/              # Runs, locks, exec, resume, settings, tiers, schemas, readiness, validate
+│   ├── factory/              # Runs, locks, exec, resume, settings, tiers, schemas, readiness, validate, review
 │   ├── init.ts               # Database setup and context-path resolution
 │   ├── plan.ts               # Dispatch plan generation
 │   ├── migrations.ts         # Ordered schema migrations (PRAGMA user_version)
@@ -256,8 +267,10 @@ escapement/
 │   ├── migrate-archives.py    # Migrate in-repo archives to context-path
 │   └── slice-session-log.sh   # Transcript slicing with a per-session cursor
 ├── schemas/factory/          # Published JSON Schemas: contract, report, verdict, readiness
+├── prompts/factory/          # Agent prompts the factory ships as data (validation-reviewer)
 ├── agents/                   # Specialized subagents
-│   └── scratchpad-planner.md # Codebase analysis for setup-work
+│   ├── scratchpad-planner.md # Codebase analysis for setup-work
+│   └── validation-reviewer.md # Claude Code wrapper for the factory reviewer prompt
 ├── docs/                     # Extended documentation
 │   ├── WORKFLOW.md           # Workflow explanation
 │   ├── CUSTOMIZATION.md      # How to customize
@@ -453,9 +466,14 @@ fusupo
 
 ## Version
 
-**Current:** 3.9.0
+**Current:** 3.10.0
 
 **Changelog:**
+- 3.10.0 (2026-11-16): Factory reviewer with runner-enforced completeness (#62)
+  - **`factory.sh review-input <run_id> <attempt>`** writes the reviewer's bundle. It holds the issue text the host passes with `--issue-file`, the approved contract, the exact diff, the draft report, every log and results path, a read-only snapshot of the validated revision with its digest, and the list of judgments a complete verdict needs
+  - **`factory.sh record-review <run_id> <attempt> <file>`** rejects a verdict that misses or repeats an evidence judgment, a sensitive or policy sign-off or a justification, or names the wrong snapshot. A rejected verdict changes nothing. An accepted one finalizes the report: `fail` on any negative judgment, concern or blocking finding, otherwise `pass` or `pending_manual`. Recording the same verdict again is a no-op, and a different one for a finished attempt is refused
+  - **The reviewer is data**: `prompts/factory/validation-reviewer.md` plus the verdict schema, found with `factory.sh prompt reviewer`, so any runtime can run it. The new `validation-reviewer` agent is the Claude Code wrapper
+  - **`pending_manual` validates the run**, so the PR can open while a human checks the manual items
 - 3.9.0 (2026-11-16): `factory validate` (#61)
   - **`factory.sh validate <run_id>`** runs one attempt's deterministic checks and writes its draft report: setup when the lockfile changed, `static`, then one `verify` run whose JUnit results resolve the contract's test evidence, plus command and manual evidence. `--json` returns the outcome and report path
   - **Revision-bound**: the report records HEAD, the target and the merge base. A check that moves HEAD or modifies tracked files makes the attempt an error, and results count only if this run produced them (stale files, missing results or zero executed tests are errors)
