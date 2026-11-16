@@ -6,7 +6,7 @@
 
 Escapement is an opinionated workflow and Claude Code plugin that provides reusable modules to streamline your development process:
 
-- **meta-workflow:** A prescribed sequential process supported by the plugin modules
+- **Meta-workflow**: A prescribed sequential process supported by the plugin modules
 - **Skills**: Automated workflow modules (issue setup, commits, PRs, etc.)
 - **Hooks**: Session archiving on compaction
 - **Agents**: Specialized AI assistants (scratchpad-planner for codebase analysis)
@@ -253,8 +253,13 @@ escapement/
 ├── docs/                     # Extended documentation
 │   ├── WORKFLOW.md           # Workflow explanation
 │   ├── CUSTOMIZATION.md      # How to customize
-│   └── CONTEXT_PATH.md       # Context path design and usage
-├── workflow.png              # Workflow diagram
+│   ├── CONTEXT_PATH.md       # Context path design and usage
+│   ├── SESSION-ARCHIVING.md  # What session logs cover and how they're archived
+│   ├── MANIFEST_SYSTEM_DESIGN_V2.md # Manifest design (current)
+│   ├── MANIFEST_SYSTEM_DESIGN.md    # Manifest design (original, superseded by V2)
+│   ├── FACTORY_DESIGN.md     # Design for contract-driven validation loops
+│   └── CODEX-PORT.md         # Plan for a Codex CLI port
+├── workflow*.png             # Workflow diagrams (overview, one per phase, full map)
 └── README.md                 # This file
 ```
 
@@ -338,8 +343,9 @@ The context directory is plain markdown files that can be optionally git-tracked
    ## Purpose
    ...
    ```
-3. Test: `claude --plugin-dir /path/to/escapement`
-4. Commit and push
+3. If the skill runs a plugin script, call it through the plugin root, e.g. `bash "${CLAUDE_PLUGIN_ROOT}/scripts/get-context-path.sh"`, and add `Bash:bash *` to `tools`. Paths like `scripts/...` or `manifest/...` resolve against the user's project, not the plugin
+4. Test: `claude --plugin-dir /path/to/escapement`
+5. Commit and push
 
 ### Adding a New Agent
 
@@ -364,7 +370,7 @@ claude --plugin-dir /path/to/escapement
 # Per-project customization
 ~/projects/project-a/CLAUDE.md    # Project A's conventions
 ~/projects/project-b/CLAUDE.md    # Project B's conventions
-~/projects/relica/CLAUDE.md       # Relica's conventions
+~/projects/project-c/CLAUDE.md    # Project C's conventions
 ```
 
 Skills automatically detect the current project and read its `CLAUDE.md` for project-specific settings.
