@@ -156,14 +156,13 @@ Behavior:
 
 ### 7. Manifest Database
 
-The manifest skills keep their SQLite database at `{context-path}/manifest/manifest.db`. The manifest CLI (`scripts/manifest.sh`) works out which project it serves and reads that project's `CLAUDE.md`, never the plugin's:
+The manifest database is **not** stored under context-path. It is one SQLite file per user, shared by every project, because work items carry their repo and dependencies cross repos. The manifest CLI (`scripts/manifest.sh`) finds it in this order:
 
-1. `--data-dir <path>` uses `{path}/manifest.db` directly
-2. `--project-root <path>` names the project root, which must exist
-3. Otherwise, the main worktree of the git repo containing the current directory, so linked worktrees share one manifest
-4. Otherwise, the current directory
+1. `--data-dir <path>` uses `{path}/manifest.db`
+2. `$ESCAPEMENT_MANIFEST_DIR/manifest.db`
+3. `${XDG_DATA_HOME:-~/.local/share}/escapement/manifest.db`
 
-Without a context-path, the database is `manifest/manifest.db` in the project root, and the CLI says so on stderr when it creates it. Add that path to `.gitignore`.
+`manifest.sh db-path` prints the location without opening the database. Seed files and other manifest artifacts that the skills write per project still go under `{context-path}/manifest/`.
 
 The schema is versioned with `PRAGMA user_version` and upgraded in place by ordered migrations (`manifest/migrations.ts`).
 
@@ -182,7 +181,7 @@ The schema is versioned with `PRAGMA user_version` and upgraded in place by orde
 - Context path set -> only archive-work, stash-artifact and the manifest skills change behavior
 - A `context-path` line that is not under `## Escapement Settings` is now ignored, with a warning (#57). Earlier versions accepted it anywhere in CLAUDE.md, including inside code examples
 - Existing archives in `docs/dev/cc-archive/` are not migrated automatically
-- Without a context-path, the manifest database now lives in the project's own repo. Before #58 every project fell back to Escapement's own database
+- Before #58 the manifest database was at `{context-path}/manifest/manifest.db`, found through the plugin's own CLAUDE.md. Copy an existing one to the shared location, or point `ESCAPEMENT_MANIFEST_DIR` at its directory
 
 ## Obsidian Compatibility
 

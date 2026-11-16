@@ -314,7 +314,8 @@ When set:
 - **`archive-work`** archives scratchpads and session logs to `{context-path}/{branch}/archive/` instead of `docs/dev/cc-archive/`
 - **`archive-work`** also maintains `{context-path}/INDEX.md` — a chronological table of all archived work across branches (oldest-first)
 - **`stash-artifact`** saves ad hoc scripts and notes to `{context-path}/{branch}/scripts/` or `{context-path}/{branch}/notes/`
-- **The manifest skills** keep their database at `{context-path}/manifest/manifest.db`. Without a context-path it is `manifest/manifest.db` inside the repo (add it to `.gitignore`). The manifest CLI reads the setting from the project it runs in (from a git worktree, the main repo), or from `--project-root <path>`
+
+The manifest database is not under context-path. One database per user is shared by every project, because work items carry their repo and dependencies cross repos. It lives at `${XDG_DATA_HOME:-~/.local/share}/escapement/manifest.db`, or `$ESCAPEMENT_MANIFEST_DIR/manifest.db` when that is set, and `scripts/manifest.sh db-path` prints the location.
 
 Note: The PreCompact hook always writes `SESSION_LOG_{N}.jsonl` to the project root (alongside the scratchpad). Session logs are converted to markdown and moved to the context directory by `archive-work` at archive time.
 
@@ -446,9 +447,9 @@ fusupo
 **Current:** 3.6.4
 
 **Changelog:**
-- 3.6.4 (2026-11-15): The manifest uses the calling project's database, and its schema can be upgraded (#58)
-  - **Project root**: the manifest CLI reads context-path from the project it runs in, not from the plugin's own CLAUDE.md. Linked git worktrees share the main repo's manifest, and `--project-root <path>` picks a project explicitly. `--data-dir` still overrides both
-  - **Behavior change**: a project without a context-path keeps its manifest at `manifest/manifest.db` in the repo. Before, it silently used Escapement's database
+- 3.6.4 (2026-11-15): One shared manifest per user, and its schema can be upgraded (#58)
+  - **Shared location**: every project uses `${XDG_DATA_HOME:-~/.local/share}/escapement/manifest.db`, overridable with `ESCAPEMENT_MANIFEST_DIR` or `--data-dir`. Before, the location came from the plugin's own CLAUDE.md and only worked when the plugin sat next to `escapement-ctx`. `manifest.sh db-path` prints it
+  - **Moving an existing manifest**: copy the old `{context-path}/manifest/manifest.db` to the new location, or set `ESCAPEMENT_MANIFEST_DIR` to its directory
   - **Versioned schema**: ordered migrations tracked in `PRAGMA user_version` replace `ensureSchema`. Existing databases are adopted as version 1 and upgraded in place
 - 3.6.3 (2026-11-15): Manifest skills can run their CLI again (#67)
   - **Wrapper**: `scripts/manifest.sh` runs `manifest/manifest-cli.ts` with tsx loaded from the plugin's `manifest/node_modules`, so the manifest skills work from any project directory. Relative `{context-path}` seed paths still resolve against the project root

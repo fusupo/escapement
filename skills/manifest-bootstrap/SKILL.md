@@ -62,7 +62,7 @@ CONTEXT_PATH=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/get-context-path.sh" CLAUDE.m
 
 It reads only the `## Escapement Settings` section of `CLAUDE.md` and ignores fenced code blocks, so documentation examples never match. Empty output means context-path is not configured. Don't grep CLAUDE.md for the setting yourself (#57).
 
-The manifest database lives at `{context-path}/manifest/manifest.db`, or at `manifest/manifest.db` in the project root when context-path is not configured. The CLI finds it from the project's own `CLAUDE.md` (inside a git worktree, the main repo's), so don't pass `--data-dir` (#58).
+There is one manifest database per user, shared by every project: work items record their repo, and dependencies can cross repos. `bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" db-path` prints its location (`~/.local/share/escapement/manifest.db` by default). Don't pass `--data-dir` (#58).
 
 ### 0.2 Verify Manifest CLI
 
@@ -76,11 +76,16 @@ The CLI lives in the plugin, not in this project. Always run it through `scripts
 
 If the check fails, it prints the install command (`cd '<plugin>/manifest' && npm ci`). **Show it to the user and stop until they have installed the dependencies.**
 
-### 0.3 Ensure Database Directory
+### 0.3 Locate Database
+
+Seed files for this project go in `{context-path}/manifest/`, and the database is shared:
 
 ```bash
 mkdir -p {context-path}/manifest
+DB_PATH=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" db-path)
 ```
+
+The CLI creates the database and its directory on first use. If it already exists, it may hold other projects' items, and this run adds to it.
 
 ### 0.4 Test CLI
 
@@ -94,7 +99,7 @@ If this fails, report the error and stop. If it succeeds (even with 0 items), th
 ```
 Manifest infrastructure verified:
   CLI: ${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh
-  Database: {context-path}/manifest/manifest.db
+  Database: {DB_PATH}
   Status: {item count} existing items
 ```
 
@@ -839,10 +844,12 @@ Because all seed SQL uses `INSERT ... ON CONFLICT (id) DO NOTHING`, re-running b
 - Existing edges are not duplicated
 - File predictions use UPDATE so they will refresh
 
-To force a full rebuild, delete the SQLite database file and re-run:
+To force a full rebuild, delete the SQLite database file and re-run. **The database is shared, so this deletes every project's items, not just this repo's.** Confirm with the user first, and keep a backup:
 
 ```bash
-rm -f {context-path}/manifest/manifest.db
+DB_PATH=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" db-path)
+cp "$DB_PATH" "$DB_PATH.bak"
+rm -f "$DB_PATH"
 manifest-bootstrap
 ```
 
@@ -896,6 +903,6 @@ If generated SQL has syntax issues:
 **Last Updated:** 2026-11-15
 **Maintained By:** Escapement
 **Changelog:**
-- v1.0.3: The CLI resolves the database from the calling project, not the plugin; without context-path it lives at manifest/manifest.db in the repo (#58)
+- v1.0.3: The manifest database is one per-user file shared by all projects, found with `manifest.sh db-path` instead of under context-path (#58)
 - v1.0.2: Run the manifest CLI through scripts/manifest.sh from the plugin root, so it works from any project directory (#67)
 - v1.0.1: Read context-path with scripts/get-context-path.sh instead of grep, which also matched documentation examples (#57)
