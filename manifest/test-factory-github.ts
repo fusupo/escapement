@@ -134,6 +134,12 @@ async function run() {
 
     const res = pushAsAgent({ worktree: w, env: agentEnv });
     const head = sh("git", ["rev-parse", "HEAD"], w);
+    assert(
+      sh("git", ["rev-parse", "refs/remotes/origin/80-work"], w) === head &&
+        sh("git", ["rev-parse", "--abbrev-ref", "80-work@{upstream}"], w) === "origin/80-work" &&
+        sh("git", ["rev-list", "--count", "@{upstream}..HEAD"], w) === "0",
+      "factory push records the pushed branch as origin's and sets it as upstream",
+    );
     const first =
       res.branch === "80-work" &&
       res.sha === head &&
@@ -158,6 +164,39 @@ async function run() {
     sh("git", ["checkout", "-q", "--detach"], w);
     assert(fails(() => pushAsAgent({ worktree: w, env: agentEnv }), "detached_head"), "factory push refuses a detached HEAD");
     sh("git", ["checkout", "-q", "80-work"], w);
+
+    sh("git", ["update-ref", "refs/remotes/origin/trunk", "HEAD"], w);
+    sh("git", ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk"], w);
+    sh("git", ["checkout", "-q", "-b", "trunk"], w);
+    const trunkRefused = fails(() => pushAsAgent({ worktree: w, env: agentEnv }), "push_base_branch");
+    sh("git", ["checkout", "-q", "80-work"], w);
+    assert(trunkRefused && pushed() === "refs/heads/80-work", "factory push refuses origin's default branch");
+
+    // Off github.com the token is never offered. insteadOf would carry each
+    // push to a local bare repo, so only the refusal keeps them empty.
+    const offHosts = [
+      { origin: "git@gitlab.com:acme/p.git", url: "https://gitlab.com/acme/p.git" },
+      { origin: "https://ghe.example.com/acme/p.git", url: "https://ghe.example.com/acme/p.git" },
+      { origin: "ssh://git@git.internal.example:2222/acme/p.git", url: "https://git.internal.example/acme/p.git" },
+    ];
+    const offResults = offHosts.map(({ origin, url }) => {
+      const r = realpathSync(makeRepo({ branch: "80-work", origin }));
+      const ob = join(tempDir(), "off.git");
+      sh("git", ["init", "-q", "--bare", ob], tempDir());
+      sh("git", ["config", `url.${ob}.insteadOf`, url], r);
+      const withToken = fails(() => pushAsAgent({ worktree: r, env: agentEnv }), "not_github");
+      const withoutToken = fails(() => pushAsAgent({ worktree: r, env: noToken }), "not_github");
+      const empty = sh("git", ["for-each-ref"], ob) === "";
+      return { r, ob, url, ok: withToken && withoutToken && empty };
+    });
+    assert(offResults.every((x) => x.ok), "factory push never sends the agent token to a host that isn't github.com");
+
+    const off = offResults[0];
+    const runPushRefused = fails(
+      () => pushBranch({ worktree: off.r, remote: remoteOf(off.r, "acme/p"), repo: "acme/p", branch: "80-work", token: TOKEN }),
+      "not_github",
+    );
+    assert(runPushRefused && sh("git", ["for-each-ref"], off.ob) === "", "the run's push refuses a host that isn't github.com before using the token");
 
     const plain = realpathSync(makeRepo({ branch: "develop", origin: "git@github.com:acme/q.git" }));
     sh("git", ["update-ref", "refs/remotes/origin/develop", "HEAD"], plain);

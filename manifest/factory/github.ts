@@ -173,15 +173,34 @@ export function remoteOf(worktree: string, repo: string): Remote {
   return { url, host, ghRepo: !host || host === "github.com" ? repo : `${host}/${repo}` };
 }
 
+/** The only host the agent token is ever sent to. */
+export const GITHUB_HOST = "github.com";
+
+/**
+ * The agent token is a github.com credential: a remote on any other host
+ * (GitLab, a self-hosted server, GitHub Enterprise) is refused before the
+ * token is used (`not_github`, #80). A local remote has no host and never
+ * gets the token.
+ */
+export function assertTokenHost(remote: Remote): void {
+  if (remote.host && remote.host !== GITHUB_HOST) {
+    throw blocked(
+      "not_github",
+      `origin is on ${remote.host}, not ${GITHUB_HOST}; the agent token is only ever sent to ${GITHUB_HOST}`,
+    );
+  }
+}
+
 /**
  * Push HEAD to `refs/heads/{branch}` and nothing else, never forced (the
- * authorization excludes force_push and push_other_branches). On a GitHub
- * remote the push goes to `https://{host}/{repo}.git` with the agent token
+ * authorization excludes force_push and push_other_branches). On github.com
+ * the push goes to `https://github.com/{repo}.git` with the agent token
  * from a credential helper that reads the environment variable, whatever
- * protocol origin uses, so it is the agent that pushes. A local remote is
- * pushed to as configured.
+ * protocol origin uses, so it is the agent that pushes. Any other host is
+ * refused first (`not_github`). A local remote is pushed to as configured.
  */
 export function pushBranch(opts: { worktree: string; remote: Remote; repo: string; branch: string; token: string }): void {
+  assertTokenHost(opts.remote);
   const refspec = `HEAD:refs/heads/${opts.branch}`;
   const env = { ...process.env, [TOKEN_VAR]: opts.token, GIT_TERMINAL_PROMPT: "0" };
   const args = opts.remote.host
@@ -211,25 +230,48 @@ export type PushResult = { branch: string; sha: string; repo: string; remote: st
  * way instead of `git push`, which would carry the operator's credentials.
  * The rules are the authorized push's: HEAD goes to the branch of the same
  * name and nothing else, never forced. A detached HEAD and the project's
- * base branch (the base-branch setting, else develop or main), `main` and
- * `master` are refused (`push_base_branch`): work reaches those through a
- * PR. Without the agent token it is `no_agent_token` and nothing is pushed;
- * the caller decides whether to fall back to the operator.
+ * base branch (the base-branch setting, else develop or main), origin's
+ * default branch, `main` and `master` are refused (`push_base_branch`):
+ * work reaches those through a PR. A remote off github.com is `not_github`
+ * and without the agent token it is `no_agent_token`; either way nothing is
+ * pushed and the caller decides whether to fall back to the operator. After
+ * the push the branch tracks origin's.
  */
 export function pushAsAgent(opts: { worktree: string; env?: NodeJS.ProcessEnv }): PushResult {
-  const branch = currentBranch(opts.worktree);
-  const base = (readSettings(opts.worktree).settings.baseBranch ?? defaultTargetRef(opts.worktree)).replace(/^origin\//, "");
-  if (new Set([base, "main", "master"]).has(branch)) {
+  const w = opts.worktree;
+  const branch = currentBranch(w);
+  const protectedBranches = new Set([
+    (readSettings(w).settings.baseBranch ?? defaultTargetRef(w)).replace(/^origin\//, ""),
+    "main",
+    "master",
+  ]);
+  const originHead = originDefaultBranch(w);
+  if (originHead) protectedBranches.add(originHead);
+  if (protectedBranches.has(branch)) {
     throw blocked("push_base_branch", `${branch} is a base branch; factory push pushes feature branches only (work reaches ${branch} through a PR)`);
   }
+  const repo = repoName(mainRepoRoot(w));
+  const remote = remoteOf(w, repo);
+  // Before the token is read: off github.com the caller's fallback must not
+  // depend on whether a token happens to be configured.
+  assertTokenHost(remote);
   const token = agentToken(opts.env);
-  const repo = repoName(mainRepoRoot(opts.worktree));
-  const remote = remoteOf(opts.worktree, repo);
-  pushBranch({ worktree: opts.worktree, remote, repo, branch, token });
-  return {
-    branch,
-    sha: git(["rev-parse", "HEAD"], opts.worktree),
-    repo,
-    remote: remote.host ? `https://${remote.host}/${repo}.git` : remote.url,
-  };
+  const sha = git(["rev-parse", "HEAD"], w);
+  pushBranch({ worktree: w, remote, repo, branch, token });
+  // A push to a URL updates no remote-tracking ref. Record the branch as
+  // origin's and make it the upstream, so "unpushed commits" and "is the
+  // branch pushed" read true afterwards.
+  git(["update-ref", `refs/remotes/origin/${branch}`, sha], w);
+  git(["config", `branch.${branch}.remote`, "origin"], w);
+  git(["config", `branch.${branch}.merge`, `refs/heads/${branch}`], w);
+  return { branch, sha, repo, remote: remote.host ? `https://${remote.host}/${repo}.git` : remote.url };
+}
+
+/** origin's default branch, from `refs/remotes/origin/HEAD`, when it is known locally. */
+function originDefaultBranch(worktree: string): string | null {
+  try {
+    return git(["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], worktree).replace(/^origin\//, "") || null;
+  } catch {
+    return null;
+  }
 }
