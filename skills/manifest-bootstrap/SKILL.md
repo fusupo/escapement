@@ -66,24 +66,15 @@ The manifest database lives at `{context-path}/manifest/manifest.db`.
 
 ### 0.2 Verify Manifest CLI
 
-Confirm the manifest CLI and dependencies exist:
+Confirm the manifest CLI and its dependencies are installed in the plugin:
 
 ```bash
-# Check CLI exists
-ls manifest/manifest-cli.ts
-
-# Check dependencies installed
-ls manifest/node_modules/.package-lock.json
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" --check
 ```
 
-If `node_modules` is absent:
-```
-The manifest CLI dependencies are not installed.
+The CLI lives in the plugin, not in this project. Always run it through `scripts/manifest.sh` from the project root, and never `cd` into `manifest/`: relative paths such as `{context-path}/...` are resolved against the current directory (#67).
 
-Run: cd manifest && npm install
-```
-
-**Stop and ask user to install before proceeding.**
+If the check fails, it prints the install command (`cd '<plugin>/manifest' && npm ci`). **Show it to the user and stop until they have installed the dependencies.**
 
 ### 0.3 Ensure Database Directory
 
@@ -94,7 +85,7 @@ mkdir -p {context-path}/manifest
 ### 0.4 Test CLI
 
 ```bash
-node --import tsx manifest/manifest-cli.ts status
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" status
 ```
 
 If this fails, report the error and stop. If it succeeds (even with 0 items), the infrastructure is ready.
@@ -102,7 +93,7 @@ If this fails, report the error and stop. If it succeeds (even with 0 items), th
 **Output:**
 ```
 Manifest infrastructure verified:
-  CLI: manifest/manifest-cli.ts
+  CLI: ${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh
   Database: {context-path}/manifest/manifest.db
   Status: {item count} existing items
 ```
@@ -398,13 +389,13 @@ Write: {context-path}/manifest/bootstrap-seed.sql
 Apply via the manifest CLI:
 
 ```bash
-node --import tsx manifest/manifest-cli.ts seed {context-path}/manifest/bootstrap-seed.sql
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" seed {context-path}/manifest/bootstrap-seed.sql
 ```
 
 ### 4.3 Verify Seeding
 
 ```bash
-node --import tsx manifest/manifest-cli.ts status
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" status
 ```
 
 Display the result:
@@ -490,7 +481,7 @@ Append all edge INSERT statements to the seed SQL or write a separate edges file
 
 ```bash
 Write: {context-path}/manifest/bootstrap-edges.sql
-node --import tsx manifest/manifest-cli.ts seed {context-path}/manifest/bootstrap-edges.sql
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" seed {context-path}/manifest/bootstrap-edges.sql
 ```
 
 ### 5.5 Verify Edges
@@ -498,7 +489,7 @@ node --import tsx manifest/manifest-cli.ts seed {context-path}/manifest/bootstra
 Run the frontier query to confirm the graph is connected:
 
 ```bash
-node --import tsx manifest/manifest-cli.ts frontier
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" frontier
 ```
 
 Display the frontier:
@@ -557,7 +548,7 @@ WHERE id = '{repo_short}#{number}';
 
 ```bash
 Write: {context-path}/manifest/bootstrap-files.sql
-node --import tsx manifest/manifest-cli.ts seed {context-path}/manifest/bootstrap-files.sql
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" seed {context-path}/manifest/bootstrap-files.sql
 ```
 
 ### 6.4 Check for Overlaps
@@ -783,8 +774,8 @@ WHERE id = '{id}';
 ### 9.1 Final Status
 
 ```bash
-node --import tsx manifest/manifest-cli.ts status
-node --import tsx manifest/manifest-cli.ts frontier
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" status
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" frontier
 ```
 
 ### 9.2 Display Summary
@@ -901,8 +892,9 @@ If generated SQL has syntax issues:
 
 ---
 
-**Version:** 1.0.1
+**Version:** 1.0.2
 **Last Updated:** 2026-11-15
 **Maintained By:** Escapement
 **Changelog:**
+- v1.0.2: Run the manifest CLI through scripts/manifest.sh from the plugin root, so it works from any project directory (#67)
 - v1.0.1: Read context-path with scripts/get-context-path.sh instead of grep, which also matched documentation examples (#57)

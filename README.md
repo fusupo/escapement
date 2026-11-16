@@ -6,7 +6,7 @@
 
 Escapement is an opinionated workflow and Claude Code plugin that provides reusable modules to streamline your development process:
 
-- **meta-workflow:** A prescribed sequential process supported by the plugin modules
+- **Meta-workflow**: A prescribed sequential process supported by the plugin modules
 - **Skills**: Automated workflow modules (issue setup, commits, PRs, etc.)
 - **Hooks**: Session archiving on compaction
 - **Agents**: Specialized AI assistants (scratchpad-planner for codebase analysis)
@@ -36,6 +36,16 @@ git clone https://github.com/fusupo/escapement.git
 # Run Claude Code with the plugin
 claude --plugin-dir /path/to/escapement
 ```
+
+### Manifest Skills (Optional)
+
+The `manifest-*` skills run a TypeScript CLI in the plugin's `manifest/` directory. Its dependencies aren't committed, so install them once in the plugin directory, not in your project (needs Node.js and a C/C++ build toolchain for `better-sqlite3`):
+
+```bash
+cd /path/to/escapement/manifest && npm ci
+```
+
+Skills run the CLI through `scripts/manifest.sh`, which works from any project directory. `bash /path/to/escapement/scripts/manifest.sh --check` reports whether the dependencies are installed.
 
 ### From Marketplace (Coming Soon)
 
@@ -154,6 +164,20 @@ Skills are invoked automatically by Claude Code when relevant, or you can refere
 | `manifest-check` | "check manifest health"         | Detect stale items, reconcile predictions, find drift |
 | `manifest-dispatch` | "dispatch work"              | Create worktrees, constraint blocks, launch parallel agents |
 
+### Manifest Skills
+
+The `manifest-*` skills are an optional layer for running several issues in parallel. The core workflow above handles one issue at a time and never calls them.
+
+The manifest is a SQLite dependency graph of a project's open issues, recording which issues block which and which files each is expected to touch:
+
+1. **`manifest-bootstrap`** builds the graph from open GitHub issues and a codebase analysis
+2. **`manifest-plan`** finds the issues whose dependencies are done and groups those that don't touch the same files
+3. **`manifest-dispatch`** does `setup-work`'s job for a whole group: a worktree, branch, scratchpad and file-ownership constraints per issue, then launches an agent for each
+4. **`manifest-sync`** runs after `archive-work`: it marks the item done, records the archive path and the files actually changed, and recomputes what is ready next
+5. **`manifest-check`** can run at any time to catch drift: new issues, superseded items, wrong file predictions
+
+The skills need the CLI's dependencies installed (see [Manifest Skills (Optional)](#manifest-skills-optional)) and the database lives under the context path. Until [#58](https://github.com/fusupo/escapement/issues/58) is fixed, the CLI always uses Escapement's own database, whichever project it runs in. Design: `docs/MANIFEST_SYSTEM_DESIGN_V2.md`.
+
 ## Hooks
 
 Escapement includes a **PreCompact hook** that captures your raw session transcript before Claude Code compacts it (auto or manual). The hook writes only the conversation since the previous log to `SESSION_LOG_{N}.jsonl` in the **project root**, so a long session spanning many issues doesn't repeat itself in every log. See [Session Archiving](docs/SESSION-ARCHIVING.md#what-a-session-log-covers) for exactly what each log covers.
@@ -211,9 +235,17 @@ escapement/
 ├── hooks/
 │   ├── hooks.json            # Hook configuration
 │   └── archive-session-log.sh # PreCompact hook (JSONL slice)
+├── manifest/                 # Manifest CLI (TypeScript, SQLite) used by the manifest-* skills
+│   ├── manifest-cli.ts       # Entry point; run it through scripts/manifest.sh
+│   ├── init.ts               # Database setup and context-path resolution
+│   ├── plan.ts               # Dispatch plan generation
+│   ├── schema.sql            # Database schema
+│   ├── queries/              # SQL for frontier, overlap, reconcile, etc.
+│   └── test-*.ts             # Tests (`npm run test:*`, run one at a time)
 ├── scripts/
 │   ├── convert-session-log.py # JSONL→markdown session log converter
 │   ├── get-context-path.sh    # Shared context-path parser for skills
+│   ├── manifest.sh            # Runs the manifest CLI from any project directory
 │   ├── migrate-archives.py    # Migrate in-repo archives to context-path
 │   └── slice-session-log.sh   # Transcript slicing with a per-session cursor
 ├── agents/                   # Specialized subagents
@@ -221,8 +253,13 @@ escapement/
 ├── docs/                     # Extended documentation
 │   ├── WORKFLOW.md           # Workflow explanation
 │   ├── CUSTOMIZATION.md      # How to customize
-│   └── CONTEXT_PATH.md       # Context path design and usage
-├── workflow.png              # Workflow diagram
+│   ├── CONTEXT_PATH.md       # Context path design and usage
+│   ├── SESSION-ARCHIVING.md  # What session logs cover and how they're archived
+│   ├── MANIFEST_SYSTEM_DESIGN_V2.md # Manifest design (current)
+│   ├── MANIFEST_SYSTEM_DESIGN.md    # Manifest design (original, superseded by V2)
+│   ├── FACTORY_DESIGN.md     # Design for contract-driven validation loops
+│   └── CODEX-PORT.md         # Plan for a Codex CLI port
+├── workflow*.png             # Workflow diagrams (overview, one per phase, full map)
 └── README.md                 # This file
 ```
 
@@ -277,6 +314,7 @@ When set:
 - **`archive-work`** archives scratchpads and session logs to `{context-path}/{branch}/archive/` instead of `docs/dev/cc-archive/`
 - **`archive-work`** also maintains `{context-path}/INDEX.md` — a chronological table of all archived work across branches (oldest-first)
 - **`stash-artifact`** saves ad hoc scripts and notes to `{context-path}/{branch}/scripts/` or `{context-path}/{branch}/notes/`
+- **The manifest skills** keep their database at `{context-path}/manifest/manifest.db`
 
 Note: The PreCompact hook always writes `SESSION_LOG_{N}.jsonl` to the project root (alongside the scratchpad). Session logs are converted to markdown and moved to the context directory by `archive-work` at archive time.
 
@@ -305,8 +343,9 @@ The context directory is plain markdown files that can be optionally git-tracked
    ## Purpose
    ...
    ```
-3. Test: `claude --plugin-dir /path/to/escapement`
-4. Commit and push
+3. If the skill runs a plugin script, call it through the plugin root, e.g. `bash "${CLAUDE_PLUGIN_ROOT}/scripts/get-context-path.sh"`, and add `Bash:bash *` to `tools`. Paths like `scripts/...` or `manifest/...` resolve against the user's project, not the plugin
+4. Test: `claude --plugin-dir /path/to/escapement`
+5. Commit and push
 
 ### Adding a New Agent
 
@@ -331,7 +370,7 @@ claude --plugin-dir /path/to/escapement
 # Per-project customization
 ~/projects/project-a/CLAUDE.md    # Project A's conventions
 ~/projects/project-b/CLAUDE.md    # Project B's conventions
-~/projects/relica/CLAUDE.md       # Relica's conventions
+~/projects/project-c/CLAUDE.md    # Project C's conventions
 ```
 
 Skills automatically detect the current project and read its `CLAUDE.md` for project-specific settings.
@@ -359,6 +398,16 @@ ls -la /path/to/escapement/skills/
 
 # Restart Claude Code with plugin
 claude --plugin-dir /path/to/escapement
+```
+
+### Manifest skills fail with `Cannot find package 'tsx'` or `dependencies are not installed`
+
+```bash
+# Install the manifest CLI's dependencies in the plugin, not in your project
+cd /path/to/escapement/manifest && npm ci
+
+# Should exit 0
+bash /path/to/escapement/scripts/manifest.sh --check
 ```
 
 ### Hooks not working
@@ -394,9 +443,12 @@ fusupo
 
 ## Version
 
-**Current:** 3.6.2
+**Current:** 3.6.3
 
 **Changelog:**
+- 3.6.3 (2026-11-15): Manifest skills can run their CLI again (#67)
+  - **Wrapper**: `scripts/manifest.sh` runs `manifest/manifest-cli.ts` with tsx loaded from the plugin's `manifest/node_modules`, so the manifest skills work from any project directory. Relative `{context-path}` seed paths still resolve against the project root
+  - **Setup**: the CLI's dependencies must be installed once with `npm ci` in the plugin's `manifest/` directory. `manifest.sh --check` reports whether they are
 - 3.6.2 (2026-11-15): context-path is no longer read from documentation examples (#57)
   - **Shared parser**: `scripts/get-context-path.sh` reads the setting only from the first `## Escapement Settings` section and skips fenced code blocks. `archive-work`, `stash-artifact` and the manifest skills use it, and `manifest/init.ts` and `scripts/migrate-archives.py` follow the same rules
   - **Behavior change**: a `context-path` line outside `## Escapement Settings` is now ignored, with a warning

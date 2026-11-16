@@ -6,7 +6,7 @@
  * along with phase and track hierarchy entities.
  *
  * Usage:
- *   node --import tsx manifest/seed.ts          # seed real SQLite DB
+ *   cd manifest && npm run seed                 # seed real SQLite DB
  *   import { seed } from "./seed.ts"            # programmatic use
  */
 

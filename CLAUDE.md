@@ -41,6 +41,7 @@ escapement/
 ├── scripts/             # Reusable utility scripts for skills
 │   ├── convert-session-log.py  # JSONL→markdown session log converter
 │   ├── get-context-path.sh     # Shared context-path parser (section- and fence-aware)
+│   ├── manifest.sh             # Runs the manifest CLI from any cwd (skills call this, never manifest-cli.ts directly)
 │   └── slice-session-log.sh    # Writes the transcript part no earlier session log covers
 ├── agents/              # Future: specialized subagents
 ├── docs/                # Extended documentation

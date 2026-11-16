@@ -69,11 +69,10 @@ The manifest database lives at `{context-path}/manifest/manifest.db`.
 ### 0.2 Verify Manifest CLI
 
 ```bash
-ls manifest/manifest-cli.ts
-ls manifest/node_modules/.package-lock.json
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" --check
 ```
 
-If `node_modules` is absent, stop and ask user to run `cd manifest && npm install`.
+If the check fails, show the user the install command it prints and stop. Run the CLI through `scripts/manifest.sh` from the project root, and never `cd` into `manifest/` (#67).
 
 ### 0.3 Verify Database Exists
 
@@ -90,7 +89,7 @@ No manifest database found. Run manifest-bootstrap first to initialize.
 ### 0.4 Current Status Baseline
 
 ```bash
-node --import tsx manifest/manifest-cli.ts status
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" status
 ```
 
 Display the baseline before making any changes.
@@ -104,7 +103,7 @@ Display the baseline before making any changes.
 ### 1.1 Run Supersession Check
 
 ```bash
-node --import tsx manifest/manifest-cli.ts check superseded
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" check superseded
 ```
 
 This queries all `in_progress` items and compares their `predicted_files` and `scope_hint` against newer `planned` or `in_progress` items. If a newer item covers the same files or references the same scope, the older item is flagged as potentially superseded.
@@ -145,7 +144,7 @@ AskUserQuestion:
 For deferred/cancelled items, update via CLI:
 
 ```bash
-node --import tsx manifest/manifest-cli.ts check apply-superseded {id} {new_state}
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" check apply-superseded {id} {new_state}
 ```
 
 ---
@@ -157,7 +156,7 @@ node --import tsx manifest/manifest-cli.ts check apply-superseded {id} {new_stat
 ### 2.1 Run Reconciliation
 
 ```bash
-node --import tsx manifest/manifest-cli.ts check reconcile
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" check reconcile
 ```
 
 This finds all `done` items that have both `predicted_files` and `actual_files` populated, then computes:
@@ -218,7 +217,7 @@ mcp__github__list_issues:
 ### 3.2 Compare Against Manifest
 
 ```bash
-node --import tsx manifest/manifest-cli.ts check new-issues
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" check new-issues
 ```
 
 This lists all `issue_number` values currently in the manifest for the repo. Any open GitHub issue not present is a candidate for ingestion.
@@ -259,7 +258,7 @@ For each issue to ingest, follow the same pattern as manifest-bootstrap Phase 4-
 Generate and apply SQL via:
 
 ```bash
-node --import tsx manifest/manifest-cli.ts seed {context-path}/manifest/check-ingest.sql
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" seed {context-path}/manifest/check-ingest.sql
 ```
 
 ---
@@ -271,7 +270,7 @@ node --import tsx manifest/manifest-cli.ts seed {context-path}/manifest/check-in
 ### 4.1 Run Overlap Query
 
 ```bash
-node --import tsx manifest/manifest-cli.ts check overlap
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" check overlap
 ```
 
 This re-runs the `manifest/queries/overlap.sql` query against the current frontier.
@@ -297,7 +296,7 @@ Total frontier items: {count}
 ### 5.1 Analyze Drift
 
 ```bash
-node --import tsx manifest/manifest-cli.ts check drift
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" check drift
 ```
 
 This examines all reconciliation data across completed items. Files that appear as misses in multiple items are "drift files" -- the prediction model consistently fails to predict them.
@@ -365,7 +364,7 @@ Same confirmation flow as manifest-bootstrap Phase 8.
 ### 7.1 Final Status
 
 ```bash
-node --import tsx manifest/manifest-cli.ts status
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" status
 ```
 
 ### 7.2 Display Summary
@@ -437,8 +436,9 @@ No in_progress items to check for supersession.
 
 ---
 
-**Version:** 1.0.1
+**Version:** 1.0.2
 **Last Updated:** 2026-11-15
 **Maintained By:** Escapement
 **Changelog:**
+- v1.0.2: Run the manifest CLI through scripts/manifest.sh from the plugin root, so it works from any project directory (#67)
 - v1.0.1: Read context-path with scripts/get-context-path.sh instead of grep, which also matched documentation examples (#57)
