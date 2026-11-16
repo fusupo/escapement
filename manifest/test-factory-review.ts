@@ -3,11 +3,26 @@ import { join } from "node:path";
 import type { Database } from "better-sqlite3";
 import { validateRun, type Report } from "./factory/validate.ts";
 import { parseContract } from "./factory/schemas.ts";
-import { requiredJudgments, exportSnapshot, snapshotDigest, reviewDir } from "./factory/review.ts";
-import { assert, sh, cleanup } from "./factory/testkit.ts";
+import { requiredJudgments, exportSnapshot, snapshotDigest, reviewDir, reviewInput, type Bundle } from "./factory/review.ts";
+import { getRun, getAttempt } from "./factory/state.ts";
+import { assert, sh, tempDir, cleanup } from "./factory/testkit.ts";
 import { owner, SETTINGS, TEST_EV, TEST_FILE, project } from "./factory/fixtures.ts";
 
 const validate = (db: Database, runId: string) => validateRun(db, runId, { owner, lockWaitMs: 5_000, graceMs: 200 });
+const issue = (db: Database, runId: string, attempt = 1, issueFile?: string) =>
+  reviewInput(db, runId, attempt, { owner, lockWaitMs: 5_000, issueFile });
+
+async function rejects(fn: () => Promise<unknown>, pattern: RegExp, msg: string): Promise<void> {
+  try {
+    await fn();
+  } catch (err) {
+    const text = `${(err as { code?: string }).code ?? ""} ${String(err)}`;
+    assert(pattern.test(text), `${msg} (${String(err)})`);
+    return;
+  }
+  assert(false, `${msg}: expected an error`);
+}
+
 const readJson = <T>(path: string): T => JSON.parse(readFileSync(path, "utf-8"));
 
 const CMD_EV = { id: "AC-2.e1", type: "command", kind: "regression", run: "true", expect: { exit_code: 0 } };
@@ -88,10 +103,75 @@ async function snapshot() {
   assert(exportSnapshot(root, draft.merge_base_sha, dir) !== d1, "another revision has another digest");
 }
 
+async function bundle() {
+  console.log("\nreview-input\n");
+  {
+    const { db, run, draft } = await awaiting();
+    const issueFile = join(tempDir(), "issue.md");
+    writeFileSync(issueFile, "# Reject expired tokens\n");
+    const r = await issue(db, run.run_id, 1, issueFile);
+    const b = readJson<Bundle>(r.bundle_path);
+    assert(r.bundle_path === join(reviewDir(run.artifact_dir, 1), "bundle.json"), "the bundle is written to attempts/{n}/review/bundle.json");
+    assert(b.head_sha === draft.head_sha && b.merge_base_sha === draft.merge_base_sha, "bound to the attempt's revisions");
+    assert(readFileSync(b.issue!.path, "utf-8") === "# Reject expired tokens\n", "with the issue text the host passed");
+    assert(b.contract.content.criteria.length === 3 && b.contract.digest === getAttempt(db, run.run_id, 1).contract_digest, "the approved contract");
+    const diff = readFileSync(b.diff, "utf-8");
+    assert(diff.includes("+export const refresh = 1;") && diff.includes("src/app.ts"), "the exact merge_base..head diff");
+    assert(b.source.digest === r.source_digest && snapshotDigest(b.source.path) === r.source_digest, "the snapshot and its digest");
+    assert(b.report.path.endsWith("report.json") && b.report.tier.actual === "sensitive", "the draft report, tier and flags");
+    assert(b.logs.length > 0 && b.logs.every((l) => existsSync(l)) && b.results.length === 1 && existsSync(b.results[0]), "paths to every log and results file");
+    assert(b.required.evidence.length === 3 && b.required.sensitive_paths.length === 2 && b.required.modified_assertions.length === 1, "the required judgments");
+    assert(b.verdict.schema.endsWith("schemas/factory/verdict.schema.json") && b.verdict.record.startsWith(`factory record-review ${run.run_id} 1 `), "where the verdict goes and how to record it");
+    assert(b.reviewer_prompt.endsWith("prompts/factory/validation-reviewer.md"), "and the reviewer prompt");
+    assert(!r.reused_snapshot && getAttempt(db, run.run_id, 1).status === "awaiting_review", "the attempt still awaits review");
+    const ev = db.prepare("SELECT detail_json FROM factory_events WHERE json_extract(detail_json, '$.entity') = 'review'").all() as { detail_json: string }[];
+    assert(ev.length === 1 && JSON.parse(ev[0].detail_json).source_digest === r.source_digest, "a review event records the issued digest");
+
+    const again = await issue(db, run.run_id);
+    assert(again.reused_snapshot && again.source_digest === r.source_digest, "re-issuing keeps an unchanged snapshot");
+    assert(readJson<Bundle>(again.bundle_path).issue !== null, "and the issue text given earlier");
+    chmodSync(join(b.source.path, "src", "app.ts"), 0o644);
+    writeFileSync(join(b.source.path, "src", "app.ts"), "tampered\n");
+    const fresh = await issue(db, run.run_id);
+    assert(!fresh.reused_snapshot && fresh.source_digest === r.source_digest, "a changed snapshot is re-exported, with the same digest");
+  }
+  {
+    const { db, run } = await awaiting();
+    const b = readJson<Bundle>((await issue(db, run.run_id)).bundle_path);
+    assert(b.issue === null, "without --issue-file the bundle says no issue text was given");
+  }
+
+  console.log("\nreview-input preconditions\n");
+  {
+    const { db, run } = await awaiting();
+    await rejects(() => issue(db, run.run_id, 2), /no_such_attempt/, "an unknown attempt");
+    db.prepare("UPDATE factory_runs SET deadline_at = ? WHERE run_id = ?").run(new Date(Date.now() - 1000).toISOString(), run.run_id);
+    await rejects(() => issue(db, run.run_id), /run_deadline/, "past the run deadline it starts nothing (§4.1)");
+  }
+  {
+    const { db, run } = await awaiting();
+    writeFileSync(join(run.artifact_dir, "contract.json"), readFileSync(join(run.artifact_dir, "contract.json"), "utf-8") + " ");
+    await rejects(() => issue(db, run.run_id), /contract_mismatch/, "a changed contract");
+  }
+  {
+    const { db, root, run } = await awaiting();
+    sh("git", ["commit", "-q", "--allow-empty", "-m", "later"], root);
+    await rejects(() => issue(db, run.run_id), /revision_changed/, "a moved HEAD");
+    assert(getAttempt(db, run.run_id, 1).outcome === "error" && getRun(db, run.run_id).state === "escalated", "completes the attempt as error and escalates the run");
+    await rejects(() => issue(db, run.run_id), /run_halted|wrong_state/, "and it can't be reviewed afterwards");
+  }
+  {
+    const p = await project({ branch: { "ci/static-exit": "1\n" } });
+    await validate(p.db, p.run.run_id);
+    await rejects(() => issue(p.db, p.run.run_id), /run_halted|wrong_state/, "an attempt that completed without review isn't reviewable");
+  }
+}
+
 try {
   await judgments();
   await sensitiveAtBase();
   await snapshot();
+  await bundle();
   console.log("\nAll factory review tests passed.");
 } finally {
   cleanup();
