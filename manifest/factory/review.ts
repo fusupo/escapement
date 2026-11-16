@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { FactoryError, atomicWrite, blocked, nowIso } from "./util.ts";
+import { FactoryError, atomicWrite, blocked, nowIso, shq } from "./util.ts";
 import { faultPoint } from "./fault.ts";
 import { attemptDir, verdictPath } from "./attempts.ts";
 import { changedFiles, identityHolds } from "./revision.ts";
@@ -193,10 +193,6 @@ export type Bundle = {
 
 const FACTORY_SH = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "scripts", "factory.sh");
 
-/** Quote for a POSIX shell: run IDs such as `#42-r1` start a comment unquoted. */
-function shq(text: string): string {
-  return `'${text.replace(/'/g, `'\\''`)}'`;
-}
 
 export type ReviewInputResult = {
   run_id: string;

@@ -2,6 +2,7 @@ import type { Database } from "better-sqlite3";
 import { blocked, nowIso, sleepSync } from "./util.ts";
 import { isAlive, parseOwner, type Owner } from "./owner.ts";
 import { tx, recordEvent } from "./state.ts";
+import { killOrphanGroup, type ChildGroup } from "./process.ts";
 
 /**
  * Advisory locks shared by every factory process (§4.1), stored as rows in
@@ -22,7 +23,32 @@ export function worktreeLock(worktreePath: string): string {
   return `worktree:${worktreePath}`;
 }
 
-export type LockHolder = Owner & { run_id: string | null };
+/** `child`: the command group the holder is running under this lock, if any (see setLockChild). */
+export type LockHolder = Owner & { run_id: string | null; child?: ChildGroup | null };
+
+/**
+ * A dead holder's command group, killed before its lock is taken over or
+ * released. Returns the group when one was signalled.
+ */
+export function reapDeadHolder(holder: LockHolder): ChildGroup | null {
+  return holder.child && killOrphanGroup(holder.child) ? holder.child : null;
+}
+
+/**
+ * Record (or clear, with null) the command group this owner runs under
+ * `name`. A no-op when the owner doesn't hold the lock.
+ */
+export function setLockChild(db: Database, name: string, owner: Owner, child: ChildGroup | null): void {
+  tx(db, () => {
+    const row = db.prepare("SELECT owner_json FROM factory_locks WHERE name = ?").get(name) as
+      | { owner_json: string }
+      | undefined;
+    if (!row) return;
+    const holder = parseOwner(row.owner_json) as LockHolder;
+    if (!sameProcess(holder, owner)) return;
+    db.prepare("UPDATE factory_locks SET owner_json = ? WHERE name = ?").run(JSON.stringify({ ...holder, child }), name);
+  });
+}
 
 export type LockRow = { name: string; holder: LockHolder; acquired_at: string };
 
@@ -50,8 +76,9 @@ export function tryAcquire(
       if (sameProcess(holder, owner)) return { acquired: true, tookOverFrom: null };
       if (isAlive(holder)) return { acquired: false, holder };
       tookOverFrom = holder;
+      const killed = reapDeadHolder(holder);
       db.prepare("DELETE FROM factory_locks WHERE name = ?").run(name);
-      recordEvent(db, runId, "state_change", { entity: "lock", name, to: "taken_over", from_holder: holder });
+      recordEvent(db, runId, "state_change", { entity: "lock", name, to: "taken_over", from_holder: holder, killed_group: killed?.pgid ?? null });
     }
     const holder: LockHolder = { ...owner, run_id: runId };
     db.prepare("INSERT INTO factory_locks (name, owner_json, acquired_at) VALUES (?, ?, ?)").run(

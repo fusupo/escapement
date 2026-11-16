@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 import { FactoryError, atomicWrite, blocked } from "./util.ts";
 import { requireExecutable, contractDigest, type AuthorizationRow } from "./runs.ts";
 import { tx, getRun, getAttempt, transitionRun, transitionAttempt, recordEvent, type RunRow, type AttemptRow } from "./state.ts";
-import { withLocks, worktreeLock, BUILD_LOCK } from "./locks.ts";
+import { withLocks, worktreeLock, BUILD_LOCK, setLockChild } from "./locks.ts";
+import type { ChildGroup } from "./process.ts";
 import { allocateAttempt, attemptDir } from "./attempts.ts";
 import { runProcess, type ProcessResult } from "./process.ts";
 import { faultPoint } from "./fault.ts";
@@ -268,7 +269,7 @@ class Attempt {
   constructor(
     readonly run: RunRow,
     readonly attempt: number,
-    private readonly opts: ValidateOptions & { commandTimeoutMs: number },
+    private readonly opts: ValidateOptions & { commandTimeoutMs: number; trackChild: (child: ChildGroup | null) => void },
   ) {
     this.dir = attemptDir(run.artifact_dir, attempt);
     mkdirSync(join(this.dir, "logs"), { recursive: true });
@@ -307,7 +308,9 @@ class Attempt {
       graceMs: this.opts.graceMs,
       echo: this.opts.echo,
       captureStdout: opts.captureStdout,
+      onSpawn: (child) => this.opts.trackChild(child),
     });
+    this.opts.trackChild(null);
     const invocation: Invocation = {
       id,
       phase,
@@ -357,6 +360,7 @@ export async function validateRun(db: Database, runId: string, opts: ValidateOpt
     const at = new Attempt(run, row.attempt, {
       ...opts,
       commandTimeoutMs: opts.timeoutMs ?? settings.commandTimeoutMs,
+      trackChild: (child) => setLockChild(db, BUILD_LOCK, opts.owner, child),
     });
 
     try {

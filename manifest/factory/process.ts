@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { createWriteStream, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { nowIso } from "./util.ts";
+import { processStartTime } from "./owner.ts";
 
 export type ProcessResult = {
   exit_code: number | null;
@@ -17,6 +18,32 @@ export type ProcessResult = {
   /** Everything the command wrote to stdout, when `captureStdout` was set. */
   stdout?: string;
 };
+
+/**
+ * A command's process group, recorded while it runs so that a runner which
+ * dies without cleaning up (a crash, SIGKILL) doesn't leave it running: the
+ * next factory process to take over the dead runner's build lock kills it.
+ */
+export type ChildGroup = { pgid: number; start_time: string | null };
+
+/**
+ * Kill what is left of a dead runner's command group. The group leader's
+ * start time guards against a reused pid: a live leader that started at
+ * another time is a different process, left alone. A leader that has exited
+ * may have left members behind; Linux doesn't reuse a pid while its group
+ * exists, so the group is still the command's. Returns whether a group was
+ * signalled.
+ */
+export function killOrphanGroup(child: ChildGroup): boolean {
+  const now = processStartTime(child.pgid);
+  if (now !== null && child.start_time !== null && now !== child.start_time) return false;
+  try {
+    process.kill(-child.pgid, "SIGKILL");
+    return true;
+  } catch {
+    return false; // ESRCH: nothing left
+  }
+}
 
 function killGroup(pid: number, signal: NodeJS.Signals): void {
   try {
@@ -50,6 +77,8 @@ export async function runProcess(opts: {
   graceMs?: number;
   echo?: boolean;
   captureStdout?: boolean;
+  /** Called once the command has started, with its process group (see ChildGroup). */
+  onSpawn?: (child: ChildGroup) => void;
 }): Promise<ProcessResult> {
   const argv = typeof opts.command === "string" ? ["sh", "-c", opts.command] : opts.command;
   mkdirSync(dirname(opts.logPath), { recursive: true });
@@ -63,6 +92,8 @@ export async function runProcess(opts: {
     stdio: ["ignore", "pipe", "pipe"],
     env: opts.env ?? process.env,
   });
+
+  if (child.pid !== undefined) opts.onSpawn?.({ pgid: child.pid, start_time: processStartTime(child.pid) });
 
   let reason: string | null = null;
   let killTimer: NodeJS.Timeout | undefined;

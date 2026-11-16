@@ -538,6 +538,7 @@ async function dispatch(db: Database, command: string, p: Parsed, json: boolean)
         `${r.run.run_id}: ${r.run.state}${r.deadline_passed ? " (deadline passed: reconciled only)" : ""}`,
         ...(r.actions.length ? r.actions.map((a) => `  attempt ${a.attempt} (${a.found}): ${a.action}${a.detail ? ` — ${a.detail}` : ""}`) : ["  nothing to reconcile"]),
         ...r.released_locks.map((l) => `  released stale lock ${l}`),
+        ...r.killed_groups.map((g) => `  killed process group ${g}, left running by a crashed check`),
       ];
       return { result: r, text: lines.join("\n") };
     }
