@@ -20,7 +20,8 @@
     "test:factory-locks": "node --import tsx test-factory-locks.ts",
     "test:factory-runs": "node --import tsx test-factory-runs.ts",
     "test:factory-exec": "node --import tsx test-factory-exec.ts",
-    "test:factory-resume": "node --import tsx test-factory-resume.ts"
+    "test:factory-resume": "node --import tsx test-factory-resume.ts",
+    "test:factory-settings": "node --import tsx test-factory-settings.ts"
   },
   "dependencies": {
     "better-sqlite3": "^11.0.0"
