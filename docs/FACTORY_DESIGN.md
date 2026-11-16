@@ -226,8 +226,9 @@ Instructions cannot guarantee locking, deadlines, or cleanup; code can. A small 
 
 **Execution guarantees:**
 
-- **Build lock:** machine-wide `flock` on a file in the user's runtime dir, with a lock-wait deadline. Serializes builds and tests across all worktrees.
-- **Worktree lock:** one factory operation per worktree at a time (`flock` keyed on the worktree path), held for the whole of `validate`, `record-review`, and `pr`. The holder (pid, command, start time) is recorded in the DB so `resume` can tell a live owner from a dead one.
+- **Build lock:** one lock shared by every worktree, with a lock-wait deadline. Serializes builds and tests across all worktrees.
+- **Worktree lock:** one factory operation per worktree at a time (keyed on the worktree path), held for the whole of `validate`, `record-review`, and `pr`. The holder (pid, command, start time) is recorded in the DB so `resume` can tell a live owner from a dead one.
+- *As built (#59):* both locks are rows in a `factory_locks` table rather than `flock`s, because Node has no `flock` and the holder has to be in the DB anyway. A lock is claimed in an IMMEDIATE transaction. A holder whose process is gone, or whose pid has been reused (checked by process start time), is taken over by the next caller. Since the DB is per user, the build lock is per user. Reference: [FACTORY_CLI.md](FACTORY_CLI.md).
 - **Command deadlines:** per-command timeout; on expiry, the runner kills the **process group** (commands start in their own group), records `error`, and releases the locks.
 - **Run deadline:** an absolute `deadline_at` is stored at approval (`approved_at + run-budget`). Commands that **start execution** — `exec`, `validate`, `review-input`, `pr` — check it first and refuse past it (outcome `blocked`, reason `run_deadline`), moving the run to `escalated`. Bookkeeping stays available after expiry: `status`, `revoke`, `resume` (reconciliation only; it won't start checks), `record-review` for a review already in progress, and `record-manual`. This bounds *runner* activity; time an agent spends implementing or reviewing between runner calls is bounded only at the next runner call.
 - **Agent budgets:** implementation and review wall-clock and tokens are recorded per phase where available and reported against `run-budget`, but are **advisory** in the first release.
@@ -247,6 +248,8 @@ Instructions cannot guarantee locking, deadlines, or cleanup; code can. A small 
 ```
 
 Nothing the runner produces is written into the worktree, so validation can require a clean tree and committing never changes what a report describes. The approved contract digest is in the DB; the file in the artifact dir is checked against it.
+
+*As built (#59):* `--artifact-dir {dir}` puts a run in `{dir}/{run_id}/`. Without it and without a context-path, artifacts go in the main checkout at `.escapement/runs/{branch}/{run_id}/`, the same in-repo convention `archive-work` follows. `factory start` adds `/.escapement/` to `.git/info/exclude`, so the tree stays clean and the artifacts survive `git worktree remove`.
 
 Existing worktree artifacts (`SCRATCHPAD_*.md`, `SESSION_LOG_*`, `AGENT_CONSTRAINTS.md`) are excluded via the worktree's `.git/info/exclude` — added by `setup-work`, no change to the project's `.gitignore`.
 
@@ -561,7 +564,7 @@ On `fail`, the implementer receives findings only, fixes, commits, and re-valida
 
 ### 7.1 Tables
 
-In the manifest SQLite DB (created lazily in the context dir for projects not using the manifest).
+In the shared per-user manifest SQLite DB, added by schema migration 2 (#59). As built, `factory_runs` also records `work_item` (the external ID given to `factory start`), `artifact_dir` and `state_reason`. `factory_authorizations` allows only one `active` row per run, and a fifth table, `factory_locks`, holds the runner's locks (§4.1).
 
 ```sql
 CREATE TABLE factory_runs (
@@ -705,8 +708,8 @@ Status as of 2026-11-15; tracked in #66.
 
 1. **#57** — context-path detection. **Done** (PR #68). Found alongside it and also done: **#67**, the manifest skills run their CLI through a plugin-root wrapper, `scripts/manifest.sh` (PR #69).
 2. **#58 Shared manifest location + versioned schema** — one per-user manifest database independent of plugin and project location; `PRAGMA user_version` and ordered migrations replacing `ensureSchema` (§2.5). **Done.**
-3. **#59 `factory` CLI core** — run/attempt/authorization tables, state machines, `start`/`approve`/`exec`/`status`/`resume`/`revoke`, build and worktree locks, command and run deadlines, process-group cleanup, artifact dir. **Next.**
-4. **#60 Contract + settings + readiness + tiers** — schema, evidence types, settings parsing. Open.
+3. **#59 `factory` CLI core** — run/attempt/authorization tables, state machines, `start`/`approve`/`exec`/`status`/`resume`/`revoke`, build and worktree locks, command and run deadlines, process-group cleanup, artifact dir. **Done.** Locks are SQLite rows (§4.1); CLI reference in [FACTORY_CLI.md](FACTORY_CLI.md).
+4. **#60 Contract + settings + readiness + tiers** — schema, evidence types, settings parsing. **Next.**
 5. **#61 `factory validate`** — identity (clean tree + HEAD), setup policy, static + evidence phases, fresh results dirs, single structured test run, change classification, actual-diff tier, draft reports. Open.
 6. **#62 Reviewer** — `validation-reviewer` agent, bundle, `record-review` completeness checks and idempotency. Open.
 7. **#63 `setup-work`** produces contract + authorization. Open.

@@ -47,6 +47,8 @@ cd /path/to/escapement/manifest && npm ci
 
 Skills run the CLI through `scripts/manifest.sh`, which works from any project directory. `bash /path/to/escapement/scripts/manifest.sh --check` reports whether the dependencies are installed.
 
+The same install covers the factory runner, `scripts/factory.sh`, which is being built for contract-driven validation loops ([docs/FACTORY_DESIGN.md](docs/FACTORY_DESIGN.md)). Its commands and `--json` output are documented in [docs/FACTORY_CLI.md](docs/FACTORY_CLI.md).
+
 ### From Marketplace (Coming Soon)
 
 ```bash
@@ -235,17 +237,22 @@ escapement/
 ├── hooks/
 │   ├── hooks.json            # Hook configuration
 │   └── archive-session-log.sh # PreCompact hook (JSONL slice)
-├── manifest/                 # Manifest CLI (TypeScript, SQLite) used by the manifest-* skills
-│   ├── manifest-cli.ts       # Entry point; run it through scripts/manifest.sh
+├── manifest/                 # Manifest and factory CLIs (TypeScript, SQLite)
+│   ├── manifest-cli.ts       # Manifest entry point; run it through scripts/manifest.sh
+│   ├── factory-cli.ts        # Factory runner entry point; run it through scripts/factory.sh
+│   ├── factory/              # Runs, authorizations, attempts, locks, exec, resume
 │   ├── init.ts               # Database setup and context-path resolution
 │   ├── plan.ts               # Dispatch plan generation
-│   ├── schema.sql            # Database schema
+│   ├── migrations.ts         # Ordered schema migrations (PRAGMA user_version)
+│   ├── schema.sql            # Migration 1: work items and edges
+│   ├── migrations/           # Later migrations (002: factory tables)
 │   ├── queries/              # SQL for frontier, overlap, reconcile, etc.
 │   └── test-*.ts             # Tests (`npm run test:*`, run one at a time)
 ├── scripts/
 │   ├── convert-session-log.py # JSONL→markdown session log converter
 │   ├── get-context-path.sh    # Shared context-path parser for skills
 │   ├── manifest.sh            # Runs the manifest CLI from any project directory
+│   ├── factory.sh             # Runs the factory CLI from any project directory
 │   ├── migrate-archives.py    # Migrate in-repo archives to context-path
 │   └── slice-session-log.sh   # Transcript slicing with a per-session cursor
 ├── agents/                   # Specialized subagents
@@ -258,6 +265,7 @@ escapement/
 │   ├── MANIFEST_SYSTEM_DESIGN_V2.md # Manifest design (current)
 │   ├── MANIFEST_SYSTEM_DESIGN.md    # Manifest design (original, superseded by V2)
 │   ├── FACTORY_DESIGN.md     # Design for contract-driven validation loops
+│   ├── FACTORY_CLI.md        # Factory runner commands, JSON output, exit codes
 │   └── CODEX-PORT.md         # Plan for a Codex CLI port
 ├── workflow*.png             # Workflow diagrams (overview, one per phase, full map)
 └── README.md                 # This file
@@ -444,9 +452,13 @@ fusupo
 
 ## Version
 
-**Current:** 3.6.4
+**Current:** 3.7.0
 
 **Changelog:**
+- 3.7.0 (2026-11-15): Factory runner core (#59)
+  - **`scripts/factory.sh`**: `start`, `approve`, `exec`, `status`, `resume` and `revoke` for factory runs. Every command takes `--json`, and runs accept any external work-item ID, so hosts other than the skills can call it. See `docs/FACTORY_CLI.md`
+  - **Locks and deadlines**: `exec` runs build and test commands one at a time across all worktrees, under a per-command timeout and the run's deadline, and kills the whole process group when either runs out
+  - **Schema migration 2** adds the factory tables to the shared manifest database. Existing databases are upgraded the next time a CLI opens them
 - 3.6.4 (2026-11-15): One shared manifest per user, and its schema can be upgraded (#58)
   - **Shared location**: every project uses `${XDG_DATA_HOME:-~/.local/share}/escapement/manifest.db`, overridable with `ESCAPEMENT_MANIFEST_DIR` or `--data-dir`. Before, the location came from the plugin's own CLAUDE.md and only worked when the plugin sat next to `escapement-ctx`. `manifest.sh db-path` prints it
   - **Moving an existing manifest**: copy the old `{context-path}/manifest/manifest.db` to the new location, or set `ESCAPEMENT_MANIFEST_DIR` to its directory

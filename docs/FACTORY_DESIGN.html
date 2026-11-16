@@ -525,6 +525,7 @@ ul.tight li{margin:.3rem 0}
 
       <h3>Where run artifacts live</h3>
       <p>Nothing the runner writes goes into the worktree, so validation can demand a clean tree and committing never changes what a report describes. Scratchpads, session logs and constraint files are hidden through <code>.git/info/exclude</code>, without touching the project's <code>.gitignore</code>.</p>
+      <p><i>As built (#59):</i> <code>--artifact-dir {dir}</code> gives <code>{dir}/{run_id}/</code>. With no context-path, artifacts go in the main checkout at <code>.escapement/runs/{branch}/{run_id}/</code>, which <code>factory start</code> adds to <code>.git/info/exclude</code>.</p>
       <pre>{context-path}/{branch}/runs/{run_id}/
   contract.json               approved contract; the implementer reads it here
   attempts/{n}/report.json    per-attempt report, append-only
@@ -583,7 +584,8 @@ ul.tight li{margin:.3rem 0}
       </table></div>
 
       <h3>One build at a time, machine-wide</h3>
-      <p>A machine-wide <code>flock</code> serializes every build and test across all worktrees, with a lock-wait deadline. A second, per-worktree lock allows one factory operation per worktree, held through <code>validate</code>, <code>record-review</code> and <code>pr</code>; its holder is recorded so <code>resume</code> can tell a live owner from a dead one.</p>
+      <p>A build lock shared by every worktree serializes every build and test, with a lock-wait deadline. A second, per-worktree lock allows one factory operation per worktree, held through <code>validate</code>, <code>record-review</code> and <code>pr</code>; its holder is recorded so <code>resume</code> can tell a live owner from a dead one.</p>
+      <p><i>As built (#59):</i> both locks are rows in a <code>factory_locks</code> table rather than <code>flock</code>s. Node has no <code>flock</code>, and the holder has to be in the database anyway. A holder whose process is gone, or whose pid has been reused, is taken over by the next caller. Since the database is per user, the build lock is per user. See <code>docs/FACTORY_CLI.md</code>.</p>
       <div class="plate">
         <div class="plate-h"><span class="t">Three worktrees asking to run tests at once</span><span class="hint">minutes</span></div>
         <div class="plate-b scroll-x"><svg viewBox="0 0 640 150" width="640" height="150" role="img" aria-label="Build lock timeline: worktree A runs, B and C wait, then each runs in turn">
@@ -649,7 +651,7 @@ ul.tight li{margin:.3rem 0}
     <section id="metrics">
       <div class="eyebrow">10 · Metrics <span class="src">md §7</span></div>
       <h2>Starting the trust record</h2>
-      <p>Four tables in the manifest database, created lazily for projects that don't use the manifest. Every row carries enough identity (run, revision, contract, policy version) to attribute outcomes later.</p>
+      <p>Four tables in the shared manifest database, added by schema migration 2 (#59), plus a fifth, <code>factory_locks</code>, for the runner's locks. Every row carries enough identity (run, revision, contract, policy version) to attribute outcomes later.</p>
       <div class="tbl-wrap"><table>
         <thead><tr><th>Table</th><th>One row per</th><th>Key fields</th></tr></thead>
         <tbody>
@@ -1013,8 +1015,8 @@ $("#cfgRows").innerHTML=CFG.map(([k,v,d])=>`<tr><td><code>${k}</code></td><td cl
 const BUILD=[
  [1,"#57","Context-path detection","Ignore documentation examples; read only Escapement Settings.","done"],
  [2,"#58","Shared manifest location and versioned schema","One per-user manifest independent of plugin location; ordered migrations.","done"],
- [3,"#59","factory CLI core","Run, attempt and authorization tables; state machines; start, approve, exec, status, resume, revoke; locks; deadlines; cleanup.","next"],
- [4,"#60","Contract, settings, readiness, tiers","Schemas, evidence types, settings parsing.","open"],
+ [3,"#59","factory CLI core","Run, attempt and authorization tables; state machines; start, approve, exec, status, resume, revoke; locks; deadlines; cleanup.","done"],
+ [4,"#60","Contract, settings, readiness, tiers","Schemas, evidence types, settings parsing.","next"],
  [5,"#61","factory validate","Identity, setup policy, static and evidence phases, fresh results, classification, actual tier, draft reports.","open"],
  [6,"#62","Reviewer","validation-reviewer, bundle, record-review completeness and idempotency.","open"],
  [7,"#63","setup-work produces the contract","Readiness, tier, contract and authorization.","open"],
