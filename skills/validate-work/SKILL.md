@@ -90,7 +90,7 @@ bash "$FACTORY" --json validate '{run_id}'
 
 ### Phase 3: Review
 
-1. **The issue text.** When the run has an `issue_number`, fetch the issue's title and body with the GitHub tools, or `gh issue view {number} --json title,body`, and write them with the Write tool to `{artifact_dir}/issue.md` as `# {title}` followed by the body. Never write it in the worktree: validation needs a clean tree. Skip this, and `--issue-file` below, when there's no issue number.
+1. **The issue text.** When the run has an `issue_number`, fetch the issue's title and body with the GitHub MCP tools, `mcp__github__issue_read(method: "get", owner, repo, issue_number)`, and write them with the Write tool to `{artifact_dir}/issue.md` as `# {title}` followed by the body. Never write it in the worktree: validation needs a clean tree. Skip this, and `--issue-file` below, when there's no issue number.
 2. **The bundle:**
    ```bash
    bash "$FACTORY" --json review-input '{run_id}' {attempt} --issue-file '{artifact_dir}/issue.md'
@@ -167,9 +167,10 @@ Use `fail` instead of `pass` for a failed check. Single-quote the note (a `'` in
 
 ---
 
-**Version:** 1.1.0
+**Version:** 1.1.1
 **Last Updated:** 2026-11-16
 **Maintained By:** Escapement
 **Changelog:**
+- v1.1.1: Fetch the issue text with the GitHub MCP tools only (#80)
 - v1.1.0: Resume after a crash: `next` `validate` and `resume`, the Resuming table (resume's actions), and a runner that dies without JSON goes back through Phase 1 (#65)
 - v1.0.0: validate → fresh-context reviewer → record-review, with a bounded re-run on an incomplete verdict; manual outcomes (#64)

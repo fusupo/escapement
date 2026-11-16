@@ -108,7 +108,7 @@ Decide availability only from `check`, never by reading CLAUDE.md yourself: `che
    - Check current git status and branch
 
 2. **Issue Details:**
-   - Retrieve complete issue using GitHub tools:
+   - Retrieve complete issue with the GitHub MCP tools (they act as the agent account): `mcp__github__issue_read` (`get`, `get_comments`, `get_sub_issues`):
      - Title, body (description), labels
      - State (open/closed), assignees
      - Milestone, project associations
@@ -719,10 +719,10 @@ The branch, scratchpad and excludes stay as they are. Plain setup-work is unaffe
 
 ### Repository Access Issues
 If can't access repository:
-- Verify GitHub authentication (gh auth status)
+- Verify the GitHub MCP server is connected: `mcp__github__get_me` names the account it acts as (the agent)
 - Check repository exists (might be private)
 - Confirm repository name spelling
-- Ensure gh CLI is installed and configured
+- Confirm that account can read the repository
 
 ## Integration with Other Skills
 
@@ -804,9 +804,10 @@ plan mode to design the implementation approach before we proceed?
 
 ---
 
-**Version:** 1.2.0
+**Version:** 1.2.1
 **Last Updated:** 2026-11-16
 **Maintained By:** Escapement
 **Changelog:**
+- v1.2.1: Fetch the issue with the GitHub MCP tools by name; access problems are checked through the MCP account (#80)
 - v1.2.0: Factory path (docs/FACTORY_DESIGN.md §3): readiness, light context, proposed tier and validation contract when the project is set up for the factory; "Approve + authorize run" starts and approves a factory run. Unchanged otherwise (#63)
 - v1.1.0: Added Task delegation to Explore agent, parallel execution, LSP integration, EnterPlanMode triggers

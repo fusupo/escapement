@@ -286,6 +286,7 @@ Throughout the session:
      ```
      📤 You have {N} unpushed commits. Push to remote?
      ```
+   - Push as the agent, the way create-pr's Phase 6 step 1 does: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/factory.sh" --json push`. Only on `no_agent_token` fall back to `git push -u origin {branch}`, saying in one line that the push is the operator's.
 
 2. **Progress Persistence:**
    - Keep scratchpad updated with running notes
@@ -483,10 +484,11 @@ Under an authorized run, `factory authorization` has already matched the branch,
 
 ---
 
-**Version:** 1.3.0
+**Version:** 1.3.1
 **Last Updated:** 2026-11-16
 **Maintained By:** Escapement
 **Changelog:**
+- v1.3.1: Push reminders push as the agent with `factory push` (#80)
 - v1.3.0: Authorized path: `next` `validate`; a crash inside validation is validate-work's to recover; a `factory pr` that dies is run again and recovers the PR (#65)
 - v1.2.0: Authorized path: under a matching active factory authorization, implement with builds and tests through `factory exec`, commit, validate (validate-work) and open the PR (create-pr) without questions; escalate and notify when it can't go on (#64)
 - v1.1.0: Added EnterPlanMode for complex tasks, Task delegation, LSP navigation
