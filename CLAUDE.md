@@ -329,6 +329,16 @@ The `description` field should include natural language trigger patterns so Clau
 ## Escapement Settings
 
 - **context-path**: ../escapement-ctx
+- **base-branch**: develop
+- **static**: (cd manifest && npx tsc --noEmit) && for f in scripts/*.sh hooks/*.sh; do bash -n "$f" || exit 1; done
+- **verify**: bash scripts/run-tests.sh
+- **test-results**: junit:$FACTORY_RESULTS_DIR/junit.xml
+- **test-files**: manifest/test-*.ts, manifest/factory/testkit.ts, manifest/factory/fixtures.ts, scripts/test-*, scripts/fixtures/
+- **sensitive-paths**: skills/**, agents/**, hooks/**, CLAUDE.md, schemas/factory/**, prompts/factory/**, manifest/factory/**, manifest/migrations.ts
+- **validation-files**: scripts/run-tests.sh, manifest/run-suites.ts, manifest/package.json, manifest/package-lock.json, manifest/tsconfig.json, CLAUDE.md
+- **run-budget**: 4h
+
+These make Escapement a factory project itself (#65): `verify` runs every suite one at a time and writes JUnit (`manifest/run-suites.ts`), so a contract can select one assertion as `manifest/test-x.ts::<message>`. A new worktree needs `npm ci --prefix manifest` once; `setup` is left unset so validations stay fast.
 
 ## Project Context
 
