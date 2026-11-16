@@ -27,7 +27,8 @@
     "test:factory-readiness": "node --import tsx test-factory-readiness.ts",
     "test:factory-revision": "node --import tsx test-factory-revision.ts",
     "test:factory-classify": "node --import tsx test-factory-classify.ts",
-    "test:factory-junit": "node --import tsx test-factory-junit.ts"
+    "test:factory-junit": "node --import tsx test-factory-junit.ts",
+    "test:factory-validate": "node --import tsx test-factory-validate.ts"
   },
   "dependencies": {
     "ajv": "^8.17.1",

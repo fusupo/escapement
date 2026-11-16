@@ -298,6 +298,89 @@
           "minimum": 0
         }
       }
+    },
+    "invocations": {
+      "description": "Every command the attempt ran, binding logs and structured results to the invocation that produced them (§4.4). Paths are relative to the attempt directory.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "phase",
+          "command",
+          "started_at",
+          "exit_code",
+          "outcome",
+          "log"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "phase": {
+            "enum": [
+              "setup",
+              "static",
+              "verify",
+              "evidence"
+            ]
+          },
+          "command": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string"
+          },
+          "duration_s": {
+            "type": "number",
+            "minimum": 0
+          },
+          "exit_code": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "outcome": {
+            "description": "pass: exit 0; fail: non-zero exit; error: stopped by the runner (reason) or failed to start.",
+            "enum": [
+              "pass",
+              "fail",
+              "error"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "log": {
+            "type": "string"
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "path",
+                "digest"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "digest": {
+                  "$ref": "#/$defs/digest"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "$defs": {
