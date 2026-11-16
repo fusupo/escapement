@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# Tests for manifest.sh. Every CLI run uses a temporary --data-dir, so the
-# real manifest database is never opened.
+# Tests for manifest.sh. Every CLI run uses a temporary --data-dir or a
+# temporary project, so the real manifest database is never opened.
 #
 # Usage: bash scripts/test-manifest.sh
 #
@@ -42,6 +42,20 @@ if [[ "$out" == *"Total items: 1"* ]]; then ok; else bad "seed-applied" "$out"; 
 # Exit status passes through (no command -> usage, exit 1)
 (cd "$project" && bash "$wrapper" --data-dir "$tmp/data") >/dev/null 2>&1
 if [[ $? -ne 0 ]]; then ok; else bad "exit-status-passthrough"; fi
+
+# Without --data-dir, the DB comes from the calling project's own
+# context-path, not from the plugin's CLAUDE.md (#58).
+other="$tmp/other"
+mkdir -p "$other/sub"
+printf '# Other\n\n## Escapement Settings\n\n- **context-path**: ../other-ctx\n' > "$other/CLAUDE.md"
+git -C "$other" init -q
+out="$(cd "$other/sub" && bash "$wrapper" status 2>&1)"
+if [[ $? -eq 0 && -f "$tmp/other-ctx/manifest/manifest.db" ]]; then ok; else bad "db-from-calling-project" "$out"; fi
+
+# --project-root selects another project from anywhere
+out="$(cd "$tmp" && bash "$wrapper" --project-root other seed "$project/ctx/manifest/seed.sql" 2>&1)"
+out2="$(cd "$other" && bash "$wrapper" status 2>&1)"
+if [[ "$out2" == *"Total items: 1"* ]]; then ok; else bad "project-root-flag" "$out$out2"; fi
 
 # Missing dependencies: a copy of the plugin layout without node_modules
 fake="$tmp/fake-plugin"
