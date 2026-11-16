@@ -183,6 +183,8 @@ make_vproject() {
     (
       cd "$dir" &&
         git init -q -b main &&
+        git init -q --bare "$dir.origin.git" &&
+        git remote add origin "$dir.origin.git" &&
         printf '## Escapement Settings\n\n- **static**: true\n- **verify**: sh ci/verify.sh\n- **test-results**: junit:$FACTORY_RESULTS_DIR/junit.xml\n' > CLAUDE.md &&
         printf 'cp ci/junit.xml "$FACTORY_RESULTS_DIR/junit.xml"\nexit "$(cat ci/verify-exit)"\n' > ci/verify.sh &&
         echo "$verify_exit" > ci/verify-exit &&
@@ -259,6 +261,48 @@ jq '.findings = [{severity: "advisory", detail: "late thought"}]' "$tmp/verdict.
 out="$(CWD="$vproject" f --json record-review '#9-r1' 1 "$tmp/other-verdict.json")"
 status=$?
 if [[ $status -eq 2 && "$(jq -r '.error.code' <<<"$out")" == verdict_conflict ]]; then ok; else bad "record-review-conflict" "status=$status out=$out"; fi
+
+# pr: push and open the PR as the agent. A stub gh (state in a JSON file)
+# stands in for GitHub; the origin is a local bare repository (make_vproject).
+mkdir -p "$tmp/ghbin"
+cat > "$tmp/ghbin/gh" <<'GH'
+#!/usr/bin/env bash
+state="$GH_STUB_STATE"
+printf '%s\t%s\n' "${GH_TOKEN:-}" "$*" >> "$GH_STUB_STATE.log"
+flag() { local n="$1"; shift; while [[ $# -gt 0 ]]; do [[ "$1" == "$n" ]] && { echo "$2"; return; }; shift; done; }
+case "$1 $2" in
+  "pr list") jq -c --arg h "$(flag --head "$@")" '[.[] | select(.headRefName == $h and .state == "OPEN")]' "$state" ;;
+  "pr create")
+    n=$(( $(jq length "$state") + 1 ))
+    jq --argjson n "$n" --arg h "$(flag --head "$@")" --arg base "$(flag --base "$@")" --arg t "$(flag --title "$@")" --rawfile b "$(flag --body-file "$@")" \
+      '. + [{number: $n, url: ("https://github.com/o/r/pull/" + ($n | tostring)), headRefName: $h, baseRefName: $base, title: $t, body: $b, state: "OPEN", headRepositoryOwner: null}]' \
+      "$state" > "$state.tmp" && mv "$state.tmp" "$state"
+    echo "https://github.com/o/r/pull/$n" ;;
+  "pr edit")
+    jq --argjson n "$3" --rawfile b "$(flag --body-file "$@")" 'map(if .number == $n then .body = $b else . end)' "$state" > "$state.tmp" && mv "$state.tmp" "$state" ;;
+  *) echo "stub gh: unsupported: $*" >&2; exit 2 ;;
+esac
+GH
+chmod +x "$tmp/ghbin/gh"
+echo '[]' > "$tmp/prs.json"
+printf '## Summary\nMakes it work.\n' > "$tmp/narrative.md"
+ghf() { PATH="$tmp/ghbin:$PATH" GH_STUB_STATE="$tmp/prs.json" ESCAPEMENT_AGENT_GH_TOKEN=agent-token CWD="$vproject" f "$@"; }
+
+out="$(CWD="$vproject" f --json pr '#9-r1' --title 'feat: it works (#9)')"
+status=$?
+if [[ $status -eq 2 && "$(jq -r '.error.code' <<<"$out")" == no_agent_token ]]; then ok; else bad "pr-no-token" "status=$status out=$out"; fi
+out="$(ghf --json pr '#9-r1' --title 'feat: it works (#9)' --body-file "$tmp/narrative.md")"
+status=$?
+if [[ $status -eq 0 && "$(jq -r '.ok and .result.action == "created" and .result.pr_number == 1 and .result.state == "pr_open" and .result.outcome == "pass"' <<<"$out")" == true ]]; then ok; else bad "pr-created" "status=$status out=$out"; fi
+if [[ "$(git -C "$vproject.origin.git" rev-parse refs/heads/9-validate 2>/dev/null)" == "$(git -C "$vproject" rev-parse HEAD)" ]]; then ok; else bad "pr-pushed"; fi
+if [[ "$(jq -r '.[0] | .baseRefName == "main" and (.body | startswith("## Summary\nMakes it work.") and contains("<!-- escapement:factory-report:begin -->"))' "$tmp/prs.json")" == true ]]; then ok; else bad "pr-body" "$(cat "$tmp/prs.json")"; fi
+if [[ "$(cut -f1 "$tmp/prs.json.log" | sort -u)" == agent-token ]]; then ok; else bad "pr-as-agent" "$(cat "$tmp/prs.json.log")"; fi
+
+# again: the same PR is found and updated, not duplicated
+out="$(ghf --json pr '#9-r1')"
+if [[ "$(jq -r '.result.action == "updated" and .result.pr_number == 1' <<<"$out")" == true && "$(jq length "$tmp/prs.json")" == 1 ]]; then ok; else bad "pr-idempotent" "$out"; fi
+out="$(CWD="$vproject" f --json authorization)"
+if [[ "$(jq -r '.result.matched and .result.state == "pr_open" and .result.next == "refresh_pr" and .result.pr_number == 1' <<<"$out")" == true ]]; then ok; else bad "pr-authorization-next" "$out"; fi
 
 # a failing attempt still exits 0; the outcome is in the JSON
 fproject="$tmp/fproject"

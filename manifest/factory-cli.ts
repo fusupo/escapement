@@ -10,6 +10,7 @@ import { execCommand, execExitCode } from "./factory/exec.ts";
 import { resumeRun } from "./factory/resume.ts";
 import { validateRun } from "./factory/validate.ts";
 import { reviewInput, recordReview } from "./factory/review.ts";
+import { openPr } from "./factory/pr.ts";
 import { currentOwner } from "./factory/owner.ts";
 import { FactoryError, parseDuration } from "./factory/util.ts";
 import { checkReadiness } from "./factory/readiness.ts";
@@ -49,6 +50,10 @@ Commands:
   record-review <run_id> <attempt> <file>
                                 Check a reviewer verdict (- reads stdin) and
                                 finalize the attempt's report
+  pr <run_id> [--title <t>] [--body-file <f>]
+                                Push the branch and open or update the run's PR
+                                as the agent (idempotent; needs a validated run
+                                and ESCAPEMENT_AGENT_GH_TOKEN)
   status [run_id]               List open runs (--all: include closed), or show one
   resume <run_id>               Reconcile an interrupted run
   revoke <run_id>               End the run's active authorization
@@ -90,10 +95,13 @@ Options:
   --timeout <dur>       exec, validate: timeout per command
                         (default: command-timeout setting, else ${SETTING_DEFAULTS["command-timeout"]})
   --issue-file <file>   review-input: the issue text to put in the bundle
-  --lock-timeout <dur>  exec, validate, review-input, record-review, resume:
+  --lock-timeout <dur>  exec, validate, review-input, record-review, resume, pr:
                         how long to wait for locks
                         (default: lock-timeout setting, else ${SETTING_DEFAULTS["lock-timeout"]})
   --reason <text>       escalate: why the run needs a human
+  --title <text>        pr: the PR title (needed to create it)
+  --body-file <file>    pr: the host's PR description; the runner adds its
+                        report section (on update, only the section changes)
   --all                 status: include closed runs
   --print               schema, prompt: print the content instead of the path
 
@@ -114,6 +122,8 @@ const VALUE_FLAGS = new Set([
   "--lock-timeout",
   "--issue-file",
   "--reason",
+  "--title",
+  "--body-file",
 ]);
 const BOOL_FLAGS = new Set(["--json", "--all", "--print", "--help", "-h"]);
 
@@ -388,6 +398,28 @@ async function dispatch(db: Database, command: string, p: Parsed, json: boolean)
       return {
         result: r,
         text: `${runId} attempt ${attempt}: ${r.outcome}${how}\n  run:     ${r.run_state}\n  report:  ${r.report_path}\n  verdict: ${r.verdict_path}`,
+      };
+    }
+    case "pr": {
+      const runId = need(arg, "run_id");
+      const bodyFile = str(p, "--body-file");
+      let narrative: string | undefined;
+      if (bodyFile !== undefined) {
+        try {
+          narrative = readFileSync(resolve(bodyFile), "utf-8");
+        } catch (err) {
+          throw new FactoryError("usage", `cannot read --body-file ${bodyFile}: ${(err as Error).message}`);
+        }
+      }
+      const r = await openPr(db, runId, {
+        owner,
+        lockWaitMs: duration(db, p, "--lock-timeout", runId, (s) => s.lockTimeoutMs),
+        title: str(p, "--title"),
+        narrative,
+      });
+      return {
+        result: r,
+        text: `${runId}: PR #${r.pr_number} ${r.action} (${r.outcome}, attempt ${r.attempt})\n  ${r.url}\n  run:  ${r.state}\n  body: ${r.body_path}`,
       };
     }
     case "status": {

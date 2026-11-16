@@ -1,4 +1,5 @@
 import type { Database } from "better-sqlite3";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { blocked, nowIso } from "./util.ts";
 import { tx, getRun, getAttempt, recordEvent, type AttemptRow } from "./state.ts";
@@ -11,6 +12,23 @@ export function attemptDir(artifactDir: string, attempt: number): string {
 
 export function verdictPath(artifactDir: string, attempt: number): string {
   return join(attemptDir(artifactDir, attempt), "review.json");
+}
+
+/**
+ * The attempt's current report (§5.5): the highest revision
+ * `report.r{k}.json` that record-manual wrote, else `report.json`. Earlier
+ * revisions are never changed. Revision 1 is `report.json`.
+ */
+export function latestReportPath(artifactDir: string, attempt: number): { path: string; revision: number } {
+  const dir = attemptDir(artifactDir, attempt);
+  let best = 1;
+  if (existsSync(dir)) {
+    for (const name of readdirSync(dir)) {
+      const m = name.match(/^report\.r([1-9]\d*)\.json$/);
+      if (m && Number(m[1]) > best) best = Number(m[1]);
+    }
+  }
+  return { path: join(dir, best === 1 ? "report.json" : `report.r${best}.json`), revision: best };
 }
 
 /**
