@@ -26,11 +26,13 @@
     "test:factory-schemas": "node --import tsx test-factory-schemas.ts",
     "test:factory-readiness": "node --import tsx test-factory-readiness.ts",
     "test:factory-revision": "node --import tsx test-factory-revision.ts",
-    "test:factory-classify": "node --import tsx test-factory-classify.ts"
+    "test:factory-classify": "node --import tsx test-factory-classify.ts",
+    "test:factory-junit": "node --import tsx test-factory-junit.ts"
   },
   "dependencies": {
     "ajv": "^8.17.1",
-    "better-sqlite3": "^11.0.0"
+    "better-sqlite3": "^11.0.0",
+    "fast-xml-parser": "5.11.2"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.0",
