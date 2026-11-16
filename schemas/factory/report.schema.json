@@ -232,6 +232,10 @@
           },
           "excerpt": {
             "type": "string"
+          },
+          "rationale": {
+            "description": "The reviewer's rationale for its judgment; set once the verdict is recorded.",
+            "type": "string"
           }
         }
       }
@@ -376,6 +380,88 @@
                 "digest": {
                   "$ref": "#/$defs/digest"
                 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "review": {
+      "description": "The recorded review (§4.9), present once record-review has finalized the attempt. The draft report is kept beside it as report.draft.json.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "verdict",
+        "verdict_digest",
+        "source_digest",
+        "recorded_at",
+        "sensitive_paths",
+        "modified_assertions"
+      ],
+      "properties": {
+        "verdict": {
+          "description": "The recorded verdict, relative to the attempt directory.",
+          "type": "string"
+        },
+        "verdict_digest": {
+          "description": "Digest of the verdict's canonical JSON; re-recording the same verdict is a no-op.",
+          "$ref": "#/$defs/digest"
+        },
+        "source_digest": {
+          "description": "Digest of the source snapshot the reviewer read.",
+          "$ref": "#/$defs/digest"
+        },
+        "recorded_at": {
+          "type": "string",
+          "description": "When the verdict was recorded (ISO 8601, UTC)."
+        },
+        "sensitive_paths": {
+          "description": "The reviewer's sign-off for every changed sensitive path and execution-policy change.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "signoff",
+              "rationale"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "signoff": {
+                "enum": [
+                  "approve",
+                  "concern"
+                ]
+              },
+              "rationale": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "modified_assertions": {
+          "description": "The reviewer's justification for every modified-assertion location.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "location",
+              "justified",
+              "rationale"
+            ],
+            "properties": {
+              "location": {
+                "type": "string"
+              },
+              "justified": {
+                "type": "boolean"
+              },
+              "rationale": {
+                "type": "string"
               }
             }
           }

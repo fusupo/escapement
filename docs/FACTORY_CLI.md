@@ -4,7 +4,7 @@ The factory runner is a small deterministic CLI that owns a run's state, locks, 
 
 The Escapement skills are one client of the runner. Other hosts, such as Escapement Studio, can call it as a subprocess and read its `--json` output. The runner never invokes a skill or an agent. It only runs git and the commands you give it.
 
-First-release status: #59 provides `start`, `approve`, `exec`, `status`, `resume` and `revoke`. #60 adds contract validation, settings, `check` and `schema`. #61 adds `validate`. `review-input`, `record-review`, `record-manual` and `pr` arrive in #62 and #64.
+First-release status: #59 provides `start`, `approve`, `exec`, `status`, `resume` and `revoke`. #60 adds contract validation, settings, `check` and `schema`. #61 adds `validate`. #62 adds `review-input`, `record-review` and `prompt`. `record-manual` and `pr` arrive in #64.
 
 ## Running it
 
@@ -63,11 +63,14 @@ attempts/{n}/review.json        reviewer verdict (#62)
 | `approve <run_id> --contract <file>` | Store the contract and its digest, issue an active authorization, set the deadline on first approval; `planned` → `approved` | yes |
 | `exec <run_id> -- <cmd> [args…]` | Run a command under the worktree and build locks with a timeout | **no** |
 | `validate <run_id>` | Run the deterministic phases for a new attempt and write its draft report | **no** |
+| `review-input <run_id> <attempt>` | Write the reviewer's bundle for an attempt awaiting review | **no** |
+| `record-review <run_id> <attempt> <file>` | Check a reviewer verdict (`-` reads stdin), finalize the report and complete the attempt | yes, for a review in progress |
 | `status [run_id]` | List open runs (`--all` includes closed ones), or show one run | yes |
 | `resume <run_id>` | Reconcile an interrupted run (§4.7) | yes, reconciliation only |
 | `revoke <run_id>` | End the active authorization | yes |
 | `check --contract <file>` | Readiness: is the contract valid and runnable in this project? No run or database needed | n/a |
 | `schema [name]` | Path of a published JSON Schema, or its content with `--print`; no name lists them all. No database needed | n/a |
+| `prompt [name]` | Path of an agent prompt the factory ships (`reviewer`), or its content with `--print`. No database needed | n/a |
 
 Options:
 
@@ -84,9 +87,10 @@ Options:
 | `--contract <file>` | approve, check | required |
 | `--run-budget <dur>` | approve | `run-budget` setting, else `2h` |
 | `--timeout <dur>` | exec, validate (per command) | `command-timeout` setting, else `15m` |
-| `--lock-timeout <dur>` | exec, validate, resume | `lock-timeout` setting, else `30m` |
+| `--issue-file <file>` | review-input | none |
+| `--lock-timeout <dur>` | exec, validate, review-input, record-review, resume | `lock-timeout` setting, else `30m` |
 | `--all` | status | off |
-| `--print` | schema | off |
+| `--print` | schema, prompt | off |
 
 Durations are written like `30s`, `15m`, `2h` or `1d`.
 
@@ -171,7 +175,7 @@ The run must be `approved`, `implementing` or `validating` (otherwise `wrong_sta
   - modified assertion: a changed or removed line in an existing test file, a deleted test file, an added `skip`, `only` or `todo` marker, or any other addition, since ambiguous cases count as modified;
   - execution policy: a changed `validation-files` file, or changed factory settings in `CLAUDE.md`, including a dropped required check.
 - Test files are those matching `test-files`, plus the files the contract's test selectors name. Renames count as a delete plus an add.
-- Each modified assertion and policy change becomes an advisory finding (`assertion:{file:line}`, `policy:{path}`) that the reviewer (#62) must address.
+- Each modified assertion and policy change becomes an advisory finding (`assertion:{file:line}`, `policy:{path}`) that the reviewer must address (see record-review).
 - **Tier** from the actual diff: a sensitive path or a policy change makes it `sensitive`, whatever the contract proposed.
 - **Drift:** changed files the contract didn't predict, and predicted files left unchanged, become flags.
 
@@ -179,7 +183,8 @@ The run must be `approved`, `implementing` or `validating` (otherwise `wrong_sta
 - **verify** runs once. Each invocation gets a new, empty `attempts/{n}/results/{id}/` directory as `FACTORY_RESULTS_DIR`. `test-results` should point into it, for example `junit:$FACTORY_RESULTS_DIR/junit.xml`, or at a directory of `.xml` files.
 - A `test-results` path outside that directory is a **fixed path**. It must be gitignored. It is deleted before verify and must exist afterwards with a fresh mtime; it is then copied into the results directory.
 - Missing results, results that aren't JUnit XML, or results with zero executed tests make the phase `error`, never `pass`, whatever verify's exit status.
-- **test evidence** resolves `path::name` against the results: a case in that file (by its `file` attribute, a path-like classname or suite name, or pytest's dotted classname) whose name, or the end of its full name, is `name`. `*` is a wildcard, and a bare path selects every test in the file. No match is `not_found`; skipped and not_found are failures. jest-junit writes file paths only with `addFileAttribute` on (`JEST_JUNIT_ADD_FILE_ATTRIBUTE=true`).
+- **test evidence** resolves `path::name` against the results: a case in that file (by its `file` attribute, a path-like classname or suite name, or pytest's dotted classname) whose name, or the end of its full name, is `name`. `*` is a wildcard, and a bare path selects every test in the file. No match is `not_found`; skipped and not_found are failures.
+- **Results without file paths.** Some reporters write no path: node:test's `junit` reporter (`classname="test"`), and jest-junit unless `addFileAttribute` is on (`JEST_JUNIT_ADD_FILE_ATTRIBUTE=true`). A `path::name` selector that matches nothing by path may then match such cases by name alone, as long as the selector's file exists at `head_sha`. Cases that name another file never match this way, and a bare path never does. The report flags each name-only match, so the reviewer can check the test is in that file. Test cases written directly under `<testsuites>`, as node:test does for tests outside a `describe`, are read too.
 - A test that verify doesn't run is `not_found`. The runner can't run a single test on its own, because contracts name no commands.
 - **command evidence** runs on its own, in `cwd` (inside the worktree), checking `expect.exit_code`, `stdout_matches` and `stdout_not_matches`.
 - **manual evidence** is `pending_manual`.
@@ -189,11 +194,79 @@ The run must be `approved`, `implementing` or `validating` (otherwise `wrong_sta
 
 **7. Report and transitions.**
 - The report goes to `attempts/{n}/report.json` (`schemas/factory/report.schema.json`). Its `invocations` list binds each log and results file, with its digest, to the command that produced it.
-- All phases pass (or the evidence phase is `pending_manual`): the attempt is `awaiting_review` with outcome null, and the run stays `validating` until #62's reviewer records a verdict.
+- All phases pass (or the evidence phase is `pending_manual`): the attempt is `awaiting_review` with outcome null, and the run stays `validating` until `record-review` records a verdict.
 - A failure or error completes the attempt (`fail` or `error`) and escalates the run. There is no fix loop in the first release.
 - Phases stop at the first failure; evidence after a static failure is `not_run`.
 
 Commands run in the worktree with `FACTORY_RUN_ID` and `FACTORY_ATTEMPT` set, under the per-command timeout and the run deadline, like exec.
+
+### review-input
+
+`review-input <run_id> <attempt> [--issue-file <file>]` prepares the review (§4.9) of an attempt awaiting review. It holds the worktree lock. Like exec it starts work, so it refuses past the run deadline and on a halted run, and it needs an active authorization.
+
+1. The attempt must be `awaiting_review` (otherwise `wrong_state`) and `contract.json` must still have the digest the attempt was validated with (`contract_mismatch`).
+2. HEAD must still be the attempt's `head_sha` on a clean tree. Otherwise the attempt completes as `error`, the run escalates, and the command fails with `revision_changed`.
+3. It writes `attempts/{n}/review/`:
+   - `source/`: `git archive head_sha`, with read-only files. Its digest (`sha256:` over each file's path, type and content) is recorded in a `state_change` event (entity `review`, to `issued`).
+   - `diff.patch`: `git diff merge_base_sha..head_sha`.
+   - `issue.md`: a copy of `--issue-file`. The runner never fetches issues; without the flag the bundle's `issue` is null, unless an earlier call gave one.
+   - `bundle.json`: everything the reviewer reads (below).
+
+Calling it again for the same attempt, for example when `resume` reports `reissue_review`, keeps the snapshot if its digest is unchanged and re-exports it otherwise.
+
+**The bundle** (`bundle.json`):
+
+| Field | Holds |
+|---|---|
+| `run_id`, `attempt`, `head_sha`, `merge_base_sha`, `target_ref`, `target_sha` | The attempt and its revisions |
+| `issue` | `{path}` of `issue.md`, or null |
+| `contract` | `{path, digest, content}` |
+| `diff` | Path of `diff.patch` |
+| `source` | `{path, digest}` of the snapshot. The reviewer reads this, never the live worktree |
+| `report` | `{path, tier, changes, flags}` of the draft report |
+| `logs`, `results` | Absolute paths of every log and results file |
+| `required` | What a complete verdict must cover (below) |
+| `verdict` | `{schema, write_to, record}`: the verdict schema, where the reviewer writes the verdict (`review/verdict.json`), and the shell-quoted `record-review` command for the host to run |
+| `runner` | `{path, exec}`: `scripts/factory.sh`, and the shell-quoted prefix for any command the reviewer runs |
+| `reviewer_prompt` | Path of `prompts/factory/validation-reviewer.md` |
+
+The commands in `verdict.record` and `runner.exec` carry no global options. A host that uses `--data-dir` adds it.
+
+**Required judgments** (`required`), computed the same way by `record-review`:
+- `evidence`: every contract evidence ID with its criterion, type, the draft's `executed` result, its selector, command or instructions, and the judgment it takes: `supports_criterion` for test and command evidence, `procedure_adequate` for manual evidence.
+- `sensitive_paths`: every changed file matching `sensitive-paths` at the merge base or HEAD, and every execution-policy change (`policy:{path}`), each with its reasons. Both need a sign-off.
+- `modified_assertions`: every `assertion:{file:line}` location.
+
+**The reviewer** is data, so any runtime can run it: `prompts/factory/validation-reviewer.md` plus `schemas/factory/verdict.schema.json`. `factory prompt reviewer` prints the prompt's path, or its content with `--print`. The Claude Code agent `agents/validation-reviewer.md` reads the prompt named in the bundle and follows it. The reviewer writes the verdict; the host records it.
+
+### record-review
+
+`record-review <run_id> <attempt> <file>` records a verdict (`-` reads it from stdin). It holds the worktree lock. It is bookkeeping, so it works past the run deadline for a review in progress; it refuses only a closed run.
+
+1. **Shape.** The verdict must be JSON valid against `schemas/factory/verdict.schema.json`. Otherwise `invalid_verdict`.
+2. **Completeness** (§4.9), against the required judgments. Otherwise `incomplete_verdict`, listing every problem:
+   - `source_digest` is the digest `review-input` issued for this attempt (no review issued: `not_issued`);
+   - every required evidence ID is judged exactly once, with the judgment its type takes, and no unknown ID;
+   - every required sensitive path has exactly one sign-off, and no other path does;
+   - every modified-assertion location has exactly one justification, and no other location does.
+
+   A rejected verdict changes nothing: no file is written and the attempt stays `awaiting_review`. The rejection is logged as a `state_change` event (entity `verdict`, to `rejected`).
+3. **Identity.** HEAD must still be `head_sha` on a clean tree, as for review-input (`revision_changed`).
+4. **Finalization.**
+   - The verdict is stored as `attempts/{n}/review.json`, its digest goes on the attempt, and the attempt moves to `finalizing`.
+   - The draft report is kept as `report.draft.json`.
+   - `report.json` becomes the final report: `status: complete`, the outcome, each evidence item's judgment and `rationale`, a `review` phase, and a `review` block with the verdict and source digests, the sign-offs and the justifications.
+   - The attempt completes, and a `validating` run moves on.
+
+**Outcome:**
+- `fail` on any `supports_criterion` of `no` or `partial`, `procedure_adequate` of `no`, sign-off `concern`, `justified: false`, or blocking finding. Each one becomes a blocking finding in the report: `judgment:{id}`, `signoff:{path}`, `justification:{location}` or `review:{n}` (the verdict's own findings, in order).
+- Otherwise `pending_manual` when the contract has manual evidence, else `pass`.
+- `pass` and `pending_manual` move the run to `validated`, so a PR can open while a human records the manual outcomes (`record-manual`, #64). `fail` escalates it. A run that was halted meanwhile (for example by the deadline) keeps its state.
+
+**Idempotency.** The verdict digest is the `sha256:` of its canonical JSON (keys sorted), so formatting doesn't matter.
+- The same verdict for a `complete` attempt is a no-op (`noop: true`). A different one is `verdict_conflict`.
+- The same verdict for a `finalizing` attempt, left by a crash, finishes the finalization (`refinalized: true`). This is what `resume`'s `refinalize` asks for. A different one is `verdict_conflict`.
+- An attempt that completed without review (a deterministic failure) takes no verdict (`wrong_state`).
 
 ### check
 
@@ -213,7 +286,7 @@ Locks are rows in `factory_locks`, not `flock`s. They only serialize factory com
 | Lock | Guards | Held by |
 |---|---|---|
 | `build` | CPU: one build or test at a time across all worktrees (per user, since the DB is per user) | `exec` while its command runs; `validate` throughout |
-| `worktree:{path}` | One factory operation at a time on a worktree | `exec`, `validate`, `resume`; `record-review`, `pr` later |
+| `worktree:{path}` | One factory operation at a time on a worktree | `exec`, `validate`, `review-input`, `record-review`, `resume`; `pr` later |
 
 Each row records its holder: pid, process start time, command, host and run.
 - A holder whose process is gone, or whose pid now belongs to another process, is treated as dead.
@@ -231,13 +304,13 @@ Locks are always taken worktree first, then build.
 | `checks_running`, owner dead | `interrupted` | attempt → `interrupted` (still counts toward the attempt budget) |
 | `checks_running` or `finalizing`, owner alive | `running` | none |
 | `awaiting_review`, identity changed (HEAD moved or tree dirty) | `identity_error` | attempt → `complete`, outcome `error` |
-| `awaiting_review`, no verdict file | `reissue_review` | none: the caller re-issues the review |
-| `awaiting_review`, verdict file present | `record_review` | none: the caller records it |
-| `finalizing`, verdict file present | `refinalize` | none: the caller re-runs finalization (#62) |
+| `awaiting_review`, no verdict file | `reissue_review` | none: the caller runs `review-input` again |
+| `awaiting_review`, verdict file present (`review.json`, or the reviewer's `review/verdict.json`) | `record_review` | none: the caller runs `record-review` with that file |
+| `finalizing`, verdict file present | `refinalize` | none: the caller runs `record-review` with `review.json`, which finishes the finalization |
 | `finalizing`, no verdict file | `needs_attention` | none |
-| latest attempt `complete`, run still `validating` | `advanced_run` | run → `validated` (pass), `blocked` (blocked) or `escalated` (fail or error) |
+| latest attempt `complete`, run still `validating` | `advanced_run` | run → `validated` (pass or pending_manual), `blocked` (blocked) or `escalated` (fail or error) |
 
-Past the deadline, resume still reconciles, escalates the run, and starts nothing. It never resets a budget.
+For the review actions, `detail` is the command to run. Past the deadline, resume still reconciles, escalates the run, and starts nothing. It never resets a budget.
 
 ## JSON output
 
@@ -257,12 +330,16 @@ With `--json`, every command prints exactly one JSON object on stdout.
 - **validate:** `{run_id, attempt, status, outcome, failed_phase, report_path, tier: {proposed, actual, reasons}, run_state}`
   - `status` is `awaiting_review` (all deterministic phases passed; `outcome` null) or `complete` (`outcome` `fail` or `error`).
   - `failed_phase` is `static`, `evidence`, or null (none, or only the post-check failed).
+- **review-input:** `{run_id, attempt, bundle_path, source_digest, reused_snapshot, required: {evidence, sensitive_paths, modified_assertions}}` (counts)
+- **record-review:** `{run_id, attempt, status, outcome, report_path, verdict_path, verdict_digest, run_state, noop, refinalized}`
+  - `outcome` is `pass`, `fail` or `pending_manual`.
 - **status** with a run ID: `{run, deadline_passed, authorization, authorizations, attempts, locks}`
 - **status** without one: `{runs: [run, …]}`
 - **resume:** `{run, deadline_passed, actions: [{attempt, found, action, detail?}], released_locks}`
 - **revoke:** `{authorization}`
 - **check:** a readiness document (`schemas/factory/readiness.schema.json`): `{version, status, questions: [{about, question, ref?}], tier?: {tier, reasons}, required_checks: [{name, command}], settings_digest}`
 - **schema:** `{schemas: [{name, path}]}`, or `{name, path}`, plus `schema` with `--print`
+- **prompt:** `{prompts: [{name, path}]}`, or `{name, path}`, plus `content` with `--print`
 
 Run fields:
 - `run_id`, `work_item`, `repo`, `worktree_path`, `branch`, `target_ref`, `artifact_dir`
@@ -284,8 +361,8 @@ Error codes:
 
 | kind | codes |
 |---|---|
-| `blocked` (exit 2) | `run_deadline`, `not_authorized`, `run_halted`, `run_closed`, `lock_timeout`, `attempt_budget`; from validate also `attempt_open`, `bad_setting`, `contract_mismatch`, `not_configured`, `dirty_tree`, `no_target`, `no_merge_base` |
-| `error` (exit 1) | `usage`, `no_such_run`, `run_exists`, `wrong_state`, `illegal_transition`, `no_contract`, `bad_contract`, `bad_setting`, `no_active_authorization`, `bad_duration`, `bad_work_item`, `bad_project_root`, `not_a_repo`, `detached_head`, `git_failed`, `internal` |
+| `blocked` (exit 2) | `run_deadline`, `not_authorized`, `run_halted`, `run_closed`, `lock_timeout`, `attempt_budget`; from validate also `attempt_open`, `bad_setting`, `contract_mismatch`, `not_configured`, `dirty_tree`, `no_target`, `no_merge_base`; from review-input and record-review also `contract_mismatch`, `not_issued`, `invalid_verdict`, `incomplete_verdict`, `verdict_conflict` |
+| `error` (exit 1) | `usage`, `no_such_run`, `run_exists`, `wrong_state`, `illegal_transition`, `no_contract`, `bad_contract`, `bad_setting`, `no_active_authorization`, `bad_duration`, `bad_work_item`, `bad_project_root`, `not_a_repo`, `detached_head`, `git_failed`, `no_such_attempt`, `revision_changed`, `snapshot_failed`, `unreadable`, `internal` |
 
 ## Exit status
 
@@ -296,5 +373,6 @@ Error codes:
 | 2 | blocked (a precondition stopped it; see the codes above) |
 | `exec` | the command's own exit status, or 124 when the runner killed it |
 | `validate` | 0 whenever it recorded an attempt, whatever the outcome; read `outcome` from the JSON |
+| `record-review` | 0 when it recorded the verdict, or already had, whatever the outcome; 2 when the verdict is rejected |
 
 `exec`'s statuses can overlap with 1 and 2 when the command itself exits with them, so hosts should read the JSON. With `--json`, the command's output goes only to the log, never to stdout.

@@ -107,12 +107,19 @@ for (let i = 0; i < 5; i++) {
     transitionAttempt(db, v.runId, 1, "awaiting_review", { owner: null });
     const r = await resumeRun(db, v.runId, { owner: me, lockWaitMs: 1000 });
     assert(r.actions[0].action === "reissue_review", "awaiting_review without a verdict → reissue review");
+    assert(r.actions[0].detail === `factory review-input ${v.runId} 1`, "naming the command");
     assert(getAttempt(db, v.runId, 1).status === "awaiting_review", "awaiting_review is not interrupted");
 
-    mkdirSync(attemptDir(v.art, 1), { recursive: true });
+    const written = join(attemptDir(v.art, 1), "review", "verdict.json");
+    mkdirSync(dirname(written), { recursive: true });
+    writeFileSync(written, "{}");
+    const r1 = await resumeRun(db, v.runId, { owner: me, lockWaitMs: 1000 });
+    assert(r1.actions[0].action === "record_review" && r1.actions[0].detail === `factory record-review ${v.runId} 1 ${written}`, "a verdict the reviewer wrote to review/verdict.json → record it");
+
     writeFileSync(verdictPath(v.art, 1), "{}");
     const r2 = await resumeRun(db, v.runId, { owner: me, lockWaitMs: 1000 });
     assert(r2.actions[0].action === "record_review", "awaiting_review with a verdict file → record it");
+    assert(r2.actions[0].detail === `factory record-review ${v.runId} 1 ${verdictPath(v.art, 1)}`, "the stored verdict (a crash before finalizing) is preferred");
 
     writeFileSync(join(v.root, "README.md"), "changed\n");
     const r3 = await resumeRun(db, v.runId, { owner: me, lockWaitMs: 1000 });
@@ -138,6 +145,7 @@ for (let i = 0; i < 5; i++) {
     writeFileSync(verdictPath(v.art, 1), "{}");
     const r = await resumeRun(db, v.runId, { owner: me, lockWaitMs: 1000 });
     assert(r.actions[0].action === "refinalize", "finalizing with a verdict file → re-run finalization");
+    assert(r.actions[0].detail === `factory record-review ${v.runId} 1 ${verdictPath(v.art, 1)}`, "by recording the stored verdict again");
     assert(getAttempt(db, v.runId, 1).status === "finalizing", "the attempt stays finalizing for idempotent re-finalization");
   }
   {
@@ -152,6 +160,7 @@ for (let i = 0; i < 5; i++) {
   }
   {
     assert(runStateForOutcome("fail") === "escalated", "a failed attempt escalates the run (no fix loop yet)");
+    assert(runStateForOutcome("pending_manual") === "validated", "pending_manual validates the run: the PR opens while manual items await a human");
     assert(runStateForOutcome("blocked") === "blocked", "a blocked attempt blocks the run");
   }
 

@@ -11,7 +11,8 @@ import { FactoryError } from "./util.ts";
  * vitest, pytest, node:test and Go/Java tools write: a `<testsuites>` or
  * lone `<testsuite>` root, nested suites, `<testcase>` with `name`,
  * `classname` and sometimes `file`, and `<failure>`, `<error>` or
- * `<skipped>` children.
+ * `<skipped>` children. node:test writes top-level tests as `<testcase>`
+ * directly under `<testsuites>`, with `classname="test"` and no file.
  */
 
 export type CaseStatus = "passed" | "failed" | "error" | "skipped";
@@ -65,11 +66,8 @@ export function parseJUnit(xml: string, source = "(inline)"): TestCase[] {
   }
   const doc = parser.parse(xml) as Node;
   const cases: TestCase[] = [];
-  const walk = (suite: Node, names: string[], file: string | null) => {
-    const name = attr(suite, "name");
-    const here = name !== null ? [...names, name] : names;
-    const suiteFile = attr(suite, "file") ?? attr(suite, "filepath") ?? file;
-    for (const tc of (suite.testcase as Node[] | undefined) ?? []) {
+  const read = (parent: Node, here: string[], suiteFile: string | null) => {
+    for (const tc of (parent.testcase as Node[] | undefined) ?? []) {
       const node = (typeof tc === "object" && tc !== null ? tc : {}) as Node;
       const status: CaseStatus = node.error
         ? "error"
@@ -88,11 +86,19 @@ export function parseJUnit(xml: string, source = "(inline)"): TestCase[] {
         source,
       });
     }
+  };
+  const walk = (suite: Node, names: string[], file: string | null) => {
+    const name = attr(suite, "name");
+    const here = name !== null ? [...names, name] : names;
+    const suiteFile = attr(suite, "file") ?? attr(suite, "filepath") ?? file;
+    read(suite, here, suiteFile);
     for (const child of (suite.testsuite as Node[] | undefined) ?? []) walk(child, here, suiteFile);
   };
   if ("testsuites" in doc) {
     // An empty <testsuites/> parses as a string.
     const root = (typeof doc.testsuites === "object" && doc.testsuites !== null ? doc.testsuites : {}) as Node;
+    // Cases directly under the root (node:test's top-level tests) belong to no suite.
+    read(root, [], attr(root, "file"));
     for (const s of (root.testsuite as Node[] | undefined) ?? []) walk(s, [], null);
   } else if (doc.testsuite) {
     for (const s of doc.testsuite as Node[]) walk(s, [], null);
@@ -159,6 +165,16 @@ function inFile(c: TestCase, path: string): boolean {
   return false;
 }
 
+/** A classname or suite name that reads as a file path or a dotted module, not a test title. */
+function looksLikeLocation(s: string): boolean {
+  return !/\s/.test(s) && (s.includes("/") || /\.[A-Za-z_][\w]*$/.test(s));
+}
+
+/** Whether a case says where it lives: a file, or a path-like or dotted classname or suite. */
+export function isLocated(c: TestCase): boolean {
+  return c.file !== null || [c.classname ?? "", ...c.suites].some((s) => s !== "" && looksLikeLocation(s));
+}
+
 function wildcard(pattern: string): RegExp {
   return new RegExp(`^${pattern.split("*").map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`);
 }
@@ -183,16 +199,32 @@ export type Resolution = {
   cases: TestCase[];
   /** The first failure or skip message among the matches. */
   message: string | null;
+  /** Matched by test name alone: the matching cases carry no file information. */
+  by_name_only: boolean;
 };
 
-/** Resolve a contract `test` selector against executed cases (§4.4): skipped and not_found are failures. */
-export function resolveSelector(selector: string, cases: readonly TestCase[]): Resolution {
+/**
+ * Resolve a contract `test` selector against executed cases (§4.4):
+ * skipped and not_found are failures.
+ *
+ * With `nameOnly`, a selector that matches no case by path may match cases
+ * that carry no location at all (node:test, or jest-junit without
+ * `addFileAttribute`) by name alone; `by_name_only` says so. Cases that
+ * name another file never match, and a bare path never falls back.
+ */
+export function resolveSelector(selector: string, cases: readonly TestCase[], opts: { nameOnly?: boolean } = {}): Resolution {
   const s = parseSelector(selector);
-  const matches = cases.filter((c) => inFile(c, s.path) && (s.name === null || named(c, s.name)));
-  if (matches.length === 0) return { executed: "not_found", cases: [], message: null };
+  let matches = cases.filter((c) => inFile(c, s.path) && (s.name === null || named(c, s.name)));
+  let byNameOnly = false;
+  if (matches.length === 0 && opts.nameOnly && s.name !== null) {
+    const name = s.name;
+    matches = cases.filter((c) => !isLocated(c) && named(c, name));
+    byNameOnly = matches.length > 0;
+  }
+  if (matches.length === 0) return { executed: "not_found", cases: [], message: null, by_name_only: false };
   const worst = (["error", "failed", "skipped"] as const).find((st) => matches.some((c) => c.status === st));
   const message = worst ? (matches.find((c) => c.status === worst)!.message ?? null) : null;
-  return { executed: worst ?? "passed", cases: matches, message };
+  return { executed: worst ?? "passed", cases: matches, message, by_name_only: byNameOnly };
 }
 
 /** Cases that actually ran (passed, failed or errored); skipped cases didn't execute. */

@@ -179,6 +179,42 @@ if [[ $status -eq 0 && "$(jq -r '.ok and .result.status == "awaiting_review" and
 report="$(jq -r .result.report_path <<<"$out")"
 if [[ -f "$report" && "$(jq -r '.evidence[0].executed' "$report")" == passed ]]; then ok; else bad "validate-report" "$report"; fi
 
+# review-input writes the bundle; the issue text comes from the host
+echo '# Make it work' > "$tmp/issue.md"
+out="$(CWD="$vproject" f --json review-input '#9-r1' 1 --issue-file "$tmp/issue.md")"
+status=$?
+bundle="$(jq -r .result.bundle_path <<<"$out")"
+if [[ $status -eq 0 && -f "$bundle" && "$(jq -r '.ok and .result.required.evidence == 1' <<<"$out")" == true ]]; then ok; else bad "review-input-json" "status=$status out=$out"; fi
+if [[ "$(jq -r '.issue.path' "$bundle")" != null && -f "$(jq -r .diff "$bundle")" && -f "$(jq -r .reviewer_prompt "$bundle")" ]]; then ok; else bad "review-input-bundle" "$(cat "$bundle")"; fi
+if [[ -z "$(git -C "$vproject" status --porcelain)" ]]; then ok; else bad "review-input-tree-clean" "$(git -C "$vproject" status --porcelain)"; fi
+
+# a verdict missing its evidence judgment is blocked; the attempt still awaits review
+jq '{version: 1, source_digest: .source.digest, evidence: [], sensitive_paths: [], modified_assertions: [], findings: []}' "$bundle" > "$tmp/incomplete.json"
+out="$(CWD="$vproject" f --json record-review '#9-r1' 1 "$tmp/incomplete.json")"
+status=$?
+if [[ $status -eq 2 && "$(jq -r '.error.code == "incomplete_verdict" and (.error.message | contains("AC-1.e1: no judgment"))' <<<"$out")" == true ]]; then ok; else bad "record-review-incomplete" "status=$status out=$out"; fi
+out="$(CWD="$vproject" f --json status '#9-r1')"
+if [[ "$(jq -r '.result.attempts[0].status' <<<"$out")" == awaiting_review ]]; then ok; else bad "record-review-incomplete-state" "$out"; fi
+
+# a complete verdict built from the bundle, read from stdin, passes and validates the run
+jq '{version: 1, source_digest: .source.digest,
+     evidence: [.required.evidence[] | {id, (.judgment): "yes", rationale: "covers it"}],
+     sensitive_paths: [.required.sensitive_paths[] | {path, signoff: "approve", rationale: "ok"}],
+     modified_assertions: [.required.modified_assertions[] | {location, justified: true, rationale: "ok"}],
+     findings: []}' "$bundle" > "$tmp/verdict.json"
+out="$(CWD="$vproject" f --json record-review '#9-r1' 1 - < "$tmp/verdict.json")"
+status=$?
+if [[ $status -eq 0 && "$(jq -r '.ok and .result.outcome == "pass" and .result.run_state == "validated" and .result.noop == false' <<<"$out")" == true ]]; then ok; else bad "record-review-json" "status=$status out=$out"; fi
+if [[ "$(jq -r '.status == "complete" and .outcome == "pass" and .evidence[0].supports_criterion == "yes"' "$report")" == true ]]; then ok; else bad "record-review-final-report" "$(cat "$report")"; fi
+
+# the same verdict again is a no-op; a different one is a conflict
+out="$(CWD="$vproject" f --json record-review '#9-r1' 1 "$tmp/verdict.json")"
+if [[ $? -eq 0 && "$(jq -r '.result.noop' <<<"$out")" == true ]]; then ok; else bad "record-review-noop" "$out"; fi
+jq '.findings = [{severity: "advisory", detail: "late thought"}]' "$tmp/verdict.json" > "$tmp/other-verdict.json"
+out="$(CWD="$vproject" f --json record-review '#9-r1' 1 "$tmp/other-verdict.json")"
+status=$?
+if [[ $status -eq 2 && "$(jq -r '.error.code' <<<"$out")" == verdict_conflict ]]; then ok; else bad "record-review-conflict" "status=$status out=$out"; fi
+
 # a failing attempt still exits 0; the outcome is in the JSON
 fproject="$tmp/fproject"
 make_vproject "$fproject" 1
@@ -189,6 +225,14 @@ CWD="$fproject" f --json approve '#9-r2' --contract "$tmp/fcontract.json" >/dev/
 out="$(CWD="$fproject" f --json validate '#9-r2')"
 status=$?
 if [[ $status -eq 0 && "$(jq -r '.result.outcome == "fail" and .result.failed_phase == "evidence" and .result.run_state == "escalated"' <<<"$out")" == true ]]; then ok; else bad "validate-fail-json" "status=$status out=$out"; fi
+
+# prompt: the reviewer prompt ships as data, found through the runner
+out="$(f prompt reviewer)"
+if [[ "$out" == */prompts/factory/validation-reviewer.md && -f "$out" ]]; then ok; else bad "prompt-path" "$out"; fi
+out="$(f --json prompt reviewer --print)"
+if [[ "$(jq -r '.ok and (.result.content | contains("# Validation reviewer"))' <<<"$out")" == true ]]; then ok; else bad "prompt-print" "$out"; fi
+out="$(f --json prompt nope)"
+if [[ $? -eq 1 && "$(jq -r .error.code <<<"$out")" == usage ]]; then ok; else bad "prompt-unknown" "$out"; fi
 
 # Missing dependencies: a copy of the plugin layout without node_modules
 fake="$tmp/fake-plugin"

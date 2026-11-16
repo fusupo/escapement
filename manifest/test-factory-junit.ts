@@ -35,6 +35,19 @@ const VITEST = `<testsuite name="src/math.test.ts" tests="2">
   </testsuite>
 </testsuite>`;
 
+/** node:test's junit reporter (Node 22): top-level tests directly under <testsuites>, no file, classname "test". */
+const NODE_TEST = `<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+	<testcase name="refreshes a valid token" time="0.0004" classname="test"/>
+	<testcase name="rejects an expired token" time="0.0001" classname="test">
+		<failure type="testCodeFailure" message="Expected values to be strictly equal">trace</failure>
+	</testcase>
+	<testsuite name="refresh" time="0.001" disabled="0" errors="0" tests="1" failures="0" skipped="0" hostname="h">
+		<testcase name="keeps the id" time="0.0001" classname="test"/>
+	</testsuite>
+	<!-- tests 3 -->
+</testsuites>`;
+
 function run() {
   console.log("Parsing\n");
 
@@ -51,6 +64,9 @@ function run() {
   assert(vi.length === 2 && vi[0].suites.join() === "src/math.test.ts,add", "a lone <testsuite> root with nested suites");
   assert(parseJUnit(`<testsuites><testsuite name="s"><testcase name="t"><failure>boom</failure></testcase></testsuite></testsuites>`)[0].message === "boom", "a failure message from element text");
   assert(parseJUnit("<testsuites/>").length === 0, "an empty <testsuites/> has no cases");
+  const node = parseJUnit(NODE_TEST);
+  assert(node.length === 3 && node[0].suites.length === 0 && node[1].status === "failed", "node:test: testcases directly under <testsuites> are read");
+  assert(node[2].suites.join() === "refresh" && executedCount(node) === 3, "alongside nested suites");
   throws(() => parseJUnit("<html><body/></html>", "x.xml"), /bad_results.*no <testsuites>/, "a document that isn't JUnit is rejected");
   throws(() => parseJUnit("<testsuites><testsuite>", "y.xml"), /bad_results/, "malformed XML is rejected");
 
@@ -76,6 +92,23 @@ function run() {
   assert(r("src/math.test.ts::adds numbers", vi) === "passed", "vitest: a test name matches the end of 'add > adds numbers'");
   assert(r("src/math.test.ts::add > adds numbers", vi) === "passed", "vitest: classname is the path");
   assert(executedCount(jest) === 3, "skipped cases don't count as executed");
+
+  console.log("\nResults without file paths\n");
+
+  const nameOnly = (sel: string, cases = node) => resolveSelector(sel, cases, { nameOnly: true });
+  assert(r("tests/token.test.js::refreshes a valid token", node) === "not_found", "node:test: no file path, so a selector doesn't match by default");
+  const n1 = nameOnly("tests/token.test.js::refreshes a valid token");
+  assert(n1.executed === "passed" && n1.by_name_only, "with nameOnly it matches by name, and says so");
+  assert(nameOnly("tests/token.test.js::rejects an expired token").executed === "failed", "a failure still fails");
+  assert(nameOnly("tests/token.test.js::keeps the id").executed === "passed", "a nested test matches by the end of its full name");
+  assert(nameOnly("tests/token.test.js").executed === "not_found", "a bare path never falls back");
+  assert(nameOnly("tests/token.test.js::no such test").executed === "not_found", "an unknown name is still not_found");
+  const viByName = nameOnly("src/other.test.ts::adds numbers", vi);
+  assert(viByName.executed === "not_found", "cases that name another file never match by name alone");
+  const pyByName = nameOnly("tests/test_other.py::test_boom", py);
+  assert(pyByName.executed === "not_found", "nor do pytest's dotted classnames");
+  const located = nameOnly("tests/auth/refresh.test.ts::refreshes valid token", jest);
+  assert(located.executed === "passed" && !located.by_name_only, "a path match is preferred and not flagged");
 
   console.log("\nResults directories\n");
 

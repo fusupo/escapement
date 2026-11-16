@@ -7,10 +7,12 @@ import { loadSettings, SETTING_DEFAULTS, type FactorySettings } from "./factory/
 import { execCommand, execExitCode } from "./factory/exec.ts";
 import { resumeRun } from "./factory/resume.ts";
 import { validateRun } from "./factory/validate.ts";
+import { reviewInput, recordReview } from "./factory/review.ts";
 import { currentOwner } from "./factory/owner.ts";
 import { FactoryError, parseDuration } from "./factory/util.ts";
 import { checkReadiness } from "./factory/readiness.ts";
 import { SCHEMA_NAMES, schemaPath, isSchemaName } from "./factory/schemas.ts";
+import { PROMPT_NAMES, promptPath, isPromptName } from "./factory/prompts.ts";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -24,7 +26,8 @@ import { resolve } from "node:path";
  *
  * Exit status: 0 ok, 1 error, 2 blocked. `exec` exits with the command's
  * own status, or 124 when the runner killed it. `validate` exits 0 when
- * it recorded an attempt, whatever its outcome: route on the JSON.
+ * it recorded an attempt, and `record-review` when it recorded a verdict,
+ * whatever the outcome: route on the JSON.
  */
 
 const USAGE = `Usage: factory [options] <command> [args]
@@ -38,6 +41,12 @@ Commands:
                                 Run a build/test command under the locks
   validate <run_id>             Run the deterministic checks for a new attempt and
                                 write its draft report (static, then evidence)
+  review-input <run_id> <attempt>
+                                Write the reviewer's bundle for an attempt
+                                awaiting review (--issue-file: the issue text)
+  record-review <run_id> <attempt> <file>
+                                Check a reviewer verdict (- reads stdin) and
+                                finalize the attempt's report
   status [run_id]               List open runs (--all: include closed), or show one
   resume <run_id>               Reconcile an interrupted run
   revoke <run_id>               End the run's active authorization
@@ -46,6 +55,8 @@ Commands:
                                 questions (no run needed)
   schema [name]                 Path of a published JSON Schema (contract, report,
                                 verdict, readiness); --print for its content
+  prompt [name]                 Path of an agent prompt the factory ships
+                                (reviewer); --print for its content
 
 Options:
   --json                Print one JSON object (see docs/FACTORY_CLI.md)
@@ -61,10 +72,12 @@ Options:
                         (default: run-budget setting, else ${SETTING_DEFAULTS["run-budget"]})
   --timeout <dur>       exec, validate: timeout per command
                         (default: command-timeout setting, else ${SETTING_DEFAULTS["command-timeout"]})
-  --lock-timeout <dur>  exec, validate, resume: how long to wait for locks
+  --issue-file <file>   review-input: the issue text to put in the bundle
+  --lock-timeout <dur>  exec, validate, review-input, record-review, resume:
+                        how long to wait for locks
                         (default: lock-timeout setting, else ${SETTING_DEFAULTS["lock-timeout"]})
   --all                 status: include closed runs
-  --print               schema: print the schema instead of its path
+  --print               schema, prompt: print the content instead of the path
 
 Durations: 30s, 15m, 2h, 1d. Settings are read from the run's worktree
 CLAUDE.md, "## Escapement Settings" (docs/FACTORY_CLI.md).`;
@@ -81,6 +94,7 @@ const VALUE_FLAGS = new Set([
   "--run-budget",
   "--timeout",
   "--lock-timeout",
+  "--issue-file",
 ]);
 const BOOL_FLAGS = new Set(["--json", "--all", "--print", "--help", "-h"]);
 
@@ -135,6 +149,12 @@ function duration(
   return setting(loadSettings(getRun(db, runId).worktree_path).settings);
 }
 
+function attemptArg(value: string | undefined): number {
+  const text = need(value, "attempt");
+  if (!/^[1-9]\d*$/.test(text)) throw new FactoryError("usage", `attempt must be a positive number, not ${text}`);
+  return Number(text);
+}
+
 function need(value: string | undefined, what: string): string {
   if (!value) throw new FactoryError("usage", `missing ${what}`);
   return value;
@@ -143,7 +163,7 @@ function need(value: string | undefined, what: string): string {
 type Outcome = { result: unknown; text: string; exitCode?: number };
 
 /** Commands that don't touch the manifest database, so hosts can run them anywhere. */
-const NO_DB_COMMANDS = new Set(["check", "schema"]);
+const NO_DB_COMMANDS = new Set(["check", "schema", "prompt"]);
 
 function dispatchNoDb(command: string, p: Parsed): Outcome {
   const [arg] = p.positional;
@@ -176,6 +196,19 @@ function dispatchNoDb(command: string, p: Parsed): Outcome {
       if (p.flags.has("--print")) {
         const content = readFileSync(path, "utf-8");
         return { result: { name: arg, path, schema: JSON.parse(content) }, text: content.trimEnd() };
+      }
+      return { result: { name: arg, path }, text: path };
+    }
+    case "prompt": {
+      if (arg === undefined) {
+        const prompts = PROMPT_NAMES.map((name) => ({ name, path: promptPath(name) }));
+        return { result: { prompts }, text: prompts.map((x) => `${x.name.padEnd(10)} ${x.path}`).join("\n") };
+      }
+      if (!isPromptName(arg)) throw new FactoryError("usage", `unknown prompt ${arg} (use ${PROMPT_NAMES.join(", ")})`);
+      const path = promptPath(arg);
+      if (p.flags.has("--print")) {
+        const content = readFileSync(path, "utf-8");
+        return { result: { name: arg, path, content }, text: content.trimEnd() };
       }
       return { result: { name: arg, path }, text: path };
     }
@@ -248,6 +281,42 @@ async function dispatch(db: Database, command: string, p: Parsed, json: boolean)
       return {
         result: r,
         text: `${r.run_id} attempt ${r.attempt}: ${what}\n  run:    ${r.run_state}\n  tier:   ${r.tier.actual}${r.tier.reasons.length ? ` (${r.tier.reasons.join("; ")})` : ""}\n  report: ${r.report_path}`,
+      };
+    }
+    case "review-input": {
+      const runId = need(arg, "run_id");
+      const attempt = attemptArg(p.positional[1]);
+      const issueFile = str(p, "--issue-file");
+      const r = await reviewInput(db, runId, attempt, {
+        owner,
+        lockWaitMs: duration(db, p, "--lock-timeout", runId, (s) => s.lockTimeoutMs),
+        issueFile: issueFile === undefined ? undefined : resolve(issueFile),
+      });
+      const n = r.required;
+      return {
+        result: r,
+        text: `${r.bundle_path}\n  ${runId} attempt ${attempt}: ${n.evidence} evidence judgment(s), ${n.sensitive_paths} sign-off(s), ${n.modified_assertions} justification(s) required\n  source: ${r.source_digest}${r.reused_snapshot ? " (unchanged snapshot kept)" : ""}`,
+      };
+    }
+    case "record-review": {
+      const runId = need(arg, "run_id");
+      const attempt = attemptArg(p.positional[1]);
+      const file = need(p.positional[2], "verdict file (or - for stdin)");
+      let text: string;
+      try {
+        text = file === "-" ? readFileSync(0, "utf-8") : readFileSync(resolve(file), "utf-8");
+      } catch (err) {
+        throw new FactoryError("usage", `cannot read verdict ${file}: ${(err as Error).message}`);
+      }
+      const r = await recordReview(db, runId, attempt, text, {
+        owner,
+        lockWaitMs: duration(db, p, "--lock-timeout", runId, (s) => s.lockTimeoutMs),
+        source: file === "-" ? "(stdin)" : file,
+      });
+      const how = r.noop ? " (already recorded)" : r.refinalized ? " (finalization completed)" : "";
+      return {
+        result: r,
+        text: `${runId} attempt ${attempt}: ${r.outcome}${how}\n  run:     ${r.run_state}\n  report:  ${r.report_path}\n  verdict: ${r.verdict_path}`,
       };
     }
     case "status": {
