@@ -363,7 +363,7 @@ Run fields:
 - `deadline_at`
 - `issue_number`, `manifest_id`, `work_type`
 - `state`, `state_reason`
-- `tier_proposed`, `tier_actual`, `policy_version` (set by validate)
+- `tier_proposed` (from the contract, set by approve), `tier_actual` and `policy_version` (set by validate)
 - `contract_digest`, `operator_action`
 - `started_at`, `ended_at`
 

@@ -184,8 +184,8 @@ export function approveRun(
        ON CONFLICT (run_id, contract_digest) DO UPDATE SET status = 'active', approved_at = excluded.approved_at, ended_at = NULL`,
     ).run(runId, digest, JSON.stringify(AUTHORIZES), nowIso(now));
     db.prepare(
-      "UPDATE factory_runs SET contract_digest = ?, deadline_at = COALESCE(deadline_at, ?) WHERE run_id = ?",
-    ).run(digest, nowIso(new Date(now.getTime() + opts.budgetMs)), runId);
+      "UPDATE factory_runs SET contract_digest = ?, tier_proposed = ?, deadline_at = COALESCE(deadline_at, ?) WHERE run_id = ?",
+    ).run(digest, contract.risk_tier_proposed, nowIso(new Date(now.getTime() + opts.budgetMs)), runId);
     recordEvent(db, runId, "state_change", {
       entity: "authorization",
       to: "active",
