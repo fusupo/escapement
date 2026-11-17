@@ -187,6 +187,14 @@ async function bundle() {
     sh("git", ["commit", "-q", "--allow-empty", "-m", "later"], root);
     await rejects(() => issue(db, run.run_id), /revision_changed/, "a moved HEAD");
     assert(getAttempt(db, run.run_id, 1).outcome === "error" && getRun(db, run.run_id).state === "escalated", "completes the attempt as error and escalates the run");
+    const a = getAttempt(db, run.run_id, 1);
+    const rep = JSON.parse(readFileSync(a.report_path!, "utf-8"));
+    assert(
+      a.error_cause === "run" && rep.status === "complete" && rep.outcome === "error" && rep.error?.cause === "run" &&
+        rep.findings.some((f: { id: string; detail: string }) => f.id === "identity" && f.detail.startsWith("revision changed during validation")) &&
+        existsSync(join(run.artifact_dir, "attempts", "1", "report.draft.json")),
+      "a revision change at review time records error cause run",
+    );
     await rejects(() => issue(db, run.run_id), /run_halted|wrong_state/, "and it can't be reviewed afterwards");
   }
   {

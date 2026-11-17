@@ -163,6 +163,78 @@ async function run() {
     assert(rep.findings.some((f) => f.detail.startsWith("revision changed during validation")), "named as a revision change");
   }
 
+  console.log("\nError causes (§5.4)\n");
+  {
+    const { db, run } = await project({ branch: { "ci/static.sh": "sleep 5\n" } });
+    const r = await validateRun(db, run.run_id, { owner, lockWaitMs: 5_000, graceMs: 200, timeoutMs: 300 });
+    const rep = report(r.report_path);
+    const a = getAttempt(db, run.run_id, 1);
+    assert(
+      r.outcome === "error" && rep.error?.cause === "code" && rep.error.reason === "static timeout" && a.error_cause === "code" && r.error?.cause === "code",
+      "a timed-out check records error cause code",
+    );
+  }
+  {
+    const { db, run } = await project({ branch: { "ci/static.sh": "git commit -q --allow-empty -m sneaky\n" } });
+    const r = await validate(db, run.run_id);
+    const rep = report(r.report_path);
+    assert(
+      r.outcome === "error" && rep.error?.cause === "run" && getAttempt(db, run.run_id, 1).error_reason === "revision changed during validation",
+      "a revision change during validation records error cause run",
+    );
+  }
+  {
+    const { db, run } = await project({ branch: { "ci/static.sh": "echo touched >> README.md\n" } });
+    const rep = report((await validate(db, run.run_id)).report_path);
+    assert(rep.error?.cause === "code" && rep.error.reason === "checks are not side-effect free", "checks that write into the tree are the code's error");
+  }
+  {
+    const { db, run } = await project({ branch: { "ci/junit.xml": "<testsuites><testsuite name=\"empty\"/></testsuites>\n" } });
+    const rep = report((await validate(db, run.run_id)).report_path);
+    assert(rep.error?.cause === "code", "test results the change broke are the code's error");
+  }
+  {
+    const { db, run } = await project({
+      evidence: [{ id: "AC-1.e1", type: "command", kind: "new_behavior", run: "true", cwd: "no-such-dir", expect: { exit_code: 0 } }],
+    });
+    const r = await validate(db, run.run_id);
+    const rep = report(r.report_path);
+    assert(
+      r.outcome === "error" && rep.error?.cause === "environment" && rep.error.reason.includes("spawn_failed") && getAttempt(db, run.run_id, 1).error_cause === "environment",
+      "a check that cannot start records error cause environment",
+    );
+  }
+  {
+    const { db, run } = await project({ settings: SETTINGS + "- **setup**: exit 5\n" });
+    const rep = report((await validate(db, run.run_id)).report_path);
+    assert(rep.error?.cause === "environment" && rep.error.reason === "setup failed (exit 5)", "a failed setup is the environment's error");
+  }
+  {
+    const { db, run } = await project({ branch: { "ci/static-exit": "2\n" } });
+    const rep = report((await validate(db, run.run_id)).report_path);
+    assert(rep.outcome === "fail" && rep.error === undefined && getAttempt(db, run.run_id, 1).error_cause === null, "a fail has no error cause");
+  }
+
+  console.log("\nRegression flags (§6.2)\n");
+  {
+    const { db, root, run } = await project({});
+    const first = await validate(db, run.run_id);
+    assert(report(first.report_path).evidence[0].executed === "passed", "attempt 1: the evidence passes");
+    transitionAttempt(db, run.run_id, 1, "finalizing");
+    transitionAttempt(db, run.run_id, 1, "complete", { outcome: "fail" });
+    commit(root, { "ci/junit.xml": junit([{ name: "auth rejects expired", status: "failed" }]), "ci/verify-exit": "1\n" });
+    const rep = report((await validate(db, run.run_id)).report_path);
+    assert(
+      rep.outcome === "fail" && rep.flags.includes("regression: evidence AC-1.e1 passed in attempt 1 and is failed now"),
+      "evidence that passed in an earlier attempt and fails now is flagged regression",
+    );
+  }
+  {
+    const { db, run } = await project({ branch: { "ci/junit.xml": junit([{ name: "auth rejects expired", status: "failed" }]) } });
+    const rep = report((await validate(db, run.run_id)).report_path);
+    assert(!rep.flags.some((f) => f.startsWith("regression")), "evidence that never passed is not a regression");
+  }
+
   console.log("\nTier and classification\n");
   {
     const { db, run } = await project({ branch: { "src/auth/token.ts": "export const t = 1;\n" } });

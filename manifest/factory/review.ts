@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { FactoryError, atomicWrite, blocked, nowIso, shq } from "./util.ts";
 import { faultPoint } from "./fault.ts";
-import { attemptDir, verdictPath } from "./attempts.ts";
+import { attemptDir, verdictPath, completeWithError } from "./attempts.ts";
 import { changedFiles, identityHolds } from "./revision.ts";
 import { settingsAt } from "./classify.ts";
 import { parseFactorySettings } from "./settings.ts";
@@ -236,13 +236,13 @@ function attemptContract(run: RunRow, a: AttemptRow): { path: string; contract: 
 
 /**
  * HEAD must still be the attempt's head_sha on a clean tree (§4.3). If not,
- * the attempt completes as `error` and the run escalates, as `resume` does,
- * and this throws `revision_changed`.
+ * the attempt completes as `error`, caused by the run (§5.4), as `resume`
+ * does, the run moves on, and this throws `revision_changed`.
  */
 function requireIdentity(db: Database, run: RunRow, a: AttemptRow, owner: Owner): void {
   const id = identityHolds(run.worktree_path, a.head_sha);
   if (id.ok) return;
-  transitionAttempt(db, run.run_id, a.attempt, "complete", { owner: null, outcome: "error", reason: "revision changed during validation" });
+  completeWithError(db, run, a.attempt, { cause: "run", reason: "revision changed during validation" }, { detail: id.detail });
   if (getRun(db, run.run_id).state === "validating") {
     transitionRun(db, run.run_id, runStateForOutcome("error"), { owner, reason: `attempt ${a.attempt}: error` });
   }

@@ -5,7 +5,7 @@ import { tx, getRun, transitionRun, transitionAttempt, recordEvent, type Attempt
 import { deadlinePassed } from "./runs.ts";
 import { withLocks, listLocks, worktreeLock, reapDeadHolder, BUILD_LOCK } from "./locks.ts";
 import { isAlive, parseOwner, type Owner } from "./owner.ts";
-import { verdictPath } from "./attempts.ts";
+import { verdictPath, completeWithError } from "./attempts.ts";
 import { reviewDir } from "./review.ts";
 import { join } from "node:path";
 import { shq } from "./util.ts";
@@ -107,11 +107,7 @@ export async function resumeRun(
       } else if (a.status === "awaiting_review") {
         const id = identityHolds(run.worktree_path, a.head_sha);
         if (!id.ok) {
-          transitionAttempt(db, runId, a.attempt, "complete", {
-            owner: null,
-            outcome: "error",
-            reason: "revision changed during validation",
-          });
+          completeWithError(db, run, a.attempt, { cause: "run", reason: "revision changed during validation" }, { detail: id.detail });
           actions.push({ attempt: a.attempt, found: a.status, action: "identity_error", detail: id.detail });
         } else {
           const file = verdict ? stored : existsSync(written) ? written : null;
