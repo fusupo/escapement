@@ -148,7 +148,7 @@ stateDiagram-v2
     validating --> escalated: needs you
     implementing --> escalated: blocker
     pr_open --> escalated: a manual check fails
-    escalated --> implementing: after a failed attempt, you choose fix it and continue
+    escalated --> implementing: after a failed attempt, before any PR, you choose fix it and continue
     escalated --> closed: archive-work abandons it
     closed --> [*]
     note right of validating
