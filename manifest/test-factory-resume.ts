@@ -7,7 +7,8 @@ import { migrate } from "./migrations.ts";
 import { projectContext } from "./factory/context.ts";
 import { startRun, approveRun } from "./factory/runs.ts";
 import { allocateAttempt, verdictPath, attemptDir } from "./factory/attempts.ts";
-import { resumeRun, runStateForOutcome } from "./factory/resume.ts";
+import { resumeRun } from "./factory/resume.ts";
+import { decideAfterAttempt } from "./factory/fixloop.ts";
 import { getRun, getAttempt, transitionRun, transitionAttempt } from "./factory/state.ts";
 import { tryAcquire, listLocks, worktreeLock, setLockChild, BUILD_LOCK } from "./factory/locks.ts";
 import { processStartTime } from "./factory/owner.ts";
@@ -127,8 +128,8 @@ for (let i = 0; i < 5; i++) {
     const r3 = await resumeRun(db, v.runId, { owner: me, lockWaitMs: 1000 });
     const a = getAttempt(db, v.runId, 1);
     assert(r3.actions[0].action === "identity_error", "a dirty tree fails the identity re-check");
-    assert(a.status === "complete" && a.outcome === "error", "the attempt completes as error (revision changed)");
-    assert(getRun(db, v.runId).state === "escalated", "the completed error attempt escalates the run");
+    assert(a.status === "complete" && a.outcome === "error" && a.error_cause === "run", "the attempt completes as error (revision changed), caused by the run");
+    assert(getRun(db, v.runId).state === "implementing", "the run-caused error goes back to implementing (fix loop)");
   }
   {
     const v = validatingRun();
@@ -161,9 +162,26 @@ for (let i = 0; i < 5; i++) {
     assert(again.actions.length === 0, "resume is idempotent");
   }
   {
-    assert(runStateForOutcome("fail") === "escalated", "a failed attempt escalates the run (no fix loop yet)");
-    assert(runStateForOutcome("pending_manual") === "validated", "pending_manual validates the run: the PR opens while manual items await a human");
-    assert(runStateForOutcome("blocked") === "blocked", "a blocked attempt blocks the run");
+    // A crash after a failed attempt completed, before the run moved on.
+    const v = validatingRun();
+    v.alloc();
+    transitionAttempt(db, v.runId, 1, "complete", { owner: null, outcome: "fail" });
+    const r = await resumeRun(db, v.runId, { owner: me, lockWaitMs: 1000 });
+    const run = getRun(db, v.runId);
+    assert(
+      r.actions.at(-1)!.action === "advanced_run" && run.state === "implementing" && /fix_loop/.test(run.state_reason ?? ""),
+      "resume after a crash past a failed attempt sends the run back to implementing",
+    );
+  }
+  {
+    const outcomeTo = (outcome: string) => {
+      const v = validatingRun();
+      v.alloc();
+      transitionAttempt(db, v.runId, 1, "complete", { owner: null, outcome });
+      return decideAfterAttempt(db, v.runId, 1).to;
+    };
+    assert(outcomeTo("pending_manual") === "validated", "pending_manual validates the run: the PR opens while manual items await a human");
+    assert(outcomeTo("blocked") === "blocked", "a blocked attempt blocks the run");
   }
 
   console.log("\nResume past the deadline and with stale locks\n");

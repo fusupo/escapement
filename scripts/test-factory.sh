@@ -380,7 +380,8 @@ if [[ "$(jq -r --arg p "$tmp/archive/9" '.ok and .result.closed == "merged" and 
 out="$(CWD="$vproject" f --json authorization)"
 if [[ "$(jq -r '.result.reasons == ["no_run"]' <<<"$out")" == true ]]; then ok; else bad "archive-closed-no-run" "$out"; fi
 
-# a failing attempt still exits 0; the outcome is in the JSON
+# a failing attempt still exits 0; the outcome is in the JSON, and the fix
+# loop sends the run back to implementing (#92)
 fproject="$tmp/fproject"
 make_vproject "$fproject" 1
 # Run IDs are unique across the database, so this run of #9 is r2.
@@ -389,7 +390,7 @@ CWD="$fproject" f --json start '#9' --target-ref main >/dev/null
 CWD="$fproject" f --json approve '#9-r2' --contract "$tmp/fcontract.json" >/dev/null
 out="$(CWD="$fproject" f --json validate '#9-r2')"
 status=$?
-if [[ $status -eq 0 && "$(jq -r '.result.outcome == "fail" and .result.failed_phase == "evidence" and .result.run_state == "escalated"' <<<"$out")" == true ]]; then ok; else bad "validate-fail-json" "status=$status out=$out"; fi
+if [[ $status -eq 0 && "$(jq -r '.result.outcome == "fail" and .result.failed_phase == "evidence" and .result.run_state == "implementing" and (.result.run_reason | test("fix_loop"))' <<<"$out")" == true ]]; then ok; else bad "validate-fail-json" "status=$status out=$out"; fi
 
 # Crashes and resume (#65): ESCAPEMENT_FACTORY_FAULT kills the runner
 # (SIGKILL, exit 137, no JSON) at a named point; resume and the next command

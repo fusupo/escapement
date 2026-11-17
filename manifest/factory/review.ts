@@ -13,9 +13,9 @@ import { parseFactorySettings } from "./settings.ts";
 import { firstMatch } from "./glob.ts";
 import { parseContract, schemaPath, schemaErrors, type Contract } from "./schemas.ts";
 import { contractDigest, requireExecutable } from "./runs.ts";
-import { tx, getRun, getAttempt, transitionAttempt, transitionRun, recordEvent, type AttemptRow, type RunRow, type RunState } from "./state.ts";
+import { tx, getRun, getAttempt, transitionAttempt, recordEvent, type AttemptRow, type RunRow, type RunState } from "./state.ts";
 import { withLocks, worktreeLock } from "./locks.ts";
-import { runStateForOutcome } from "./resume.ts";
+import { advanceRun } from "./fixloop.ts";
 import { promptPath } from "./prompts.ts";
 import type { Owner } from "./owner.ts";
 import type { Report } from "./validate.ts";
@@ -243,9 +243,7 @@ function requireIdentity(db: Database, run: RunRow, a: AttemptRow, owner: Owner)
   const id = identityHolds(run.worktree_path, a.head_sha);
   if (id.ok) return;
   completeWithError(db, run, a.attempt, { cause: "run", reason: "revision changed during validation" }, { detail: id.detail });
-  if (getRun(db, run.run_id).state === "validating") {
-    transitionRun(db, run.run_id, runStateForOutcome("error"), { owner, reason: `attempt ${a.attempt}: error` });
-  }
+  advanceRun(db, run.run_id, a.attempt, { owner });
   throw new FactoryError("revision_changed", `attempt ${a.attempt} of ${run.run_id} is now error: revision changed during validation (${id.detail})`);
 }
 
@@ -399,6 +397,8 @@ export type RecordReviewResult = {
   verdict_path: string;
   verdict_digest: string;
   run_state: RunState;
+  /** Why the run is in run_state: after a fail, whether the fix loop goes again or why it escalated. */
+  run_reason: string | null;
   /** The same verdict was already recorded; nothing changed. */
   noop: boolean;
   /** An interrupted finalization was completed from the stored verdict. */
@@ -516,6 +516,7 @@ function recordedResult(db: Database, run: RunRow, a: AttemptRow, extra: { noop:
     verdict_path: verdictPath(run.artifact_dir, a.attempt),
     verdict_digest: a.verdict_digest!,
     run_state: getRun(db, run.run_id).state,
+    run_reason: getRun(db, run.run_id).state_reason,
     ...extra,
   };
 }
@@ -578,9 +579,7 @@ function finalize(
       a.attempt,
     );
     transitionAttempt(db, run.run_id, a.attempt, "complete", { owner: null, outcome, reason: "review recorded" });
-    if (getRun(db, run.run_id).state === "validating") {
-      transitionRun(db, run.run_id, runStateForOutcome(outcome), { owner, reason: `attempt ${a.attempt}: ${outcome}` });
-    }
+    advanceRun(db, run.run_id, a.attempt, { owner });
     recordEvent(db, run.run_id, "state_change", { entity: "verdict", to: "recorded", attempt: a.attempt, verdict_digest: digest, outcome, owner });
     return recordedResult(db, run, getAttempt(db, run.run_id, a.attempt), { noop: false, refinalized });
   });

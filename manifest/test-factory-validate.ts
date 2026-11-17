@@ -83,7 +83,7 @@ async function run() {
     const { db, run } = await project({ branch: { "ci/junit.xml": junit([{ name: "auth rejects expired", status: "failed" }]), "ci/verify-exit": "1\n" } });
     const r = await validate(db, run.run_id);
     assert(r.status === "complete" && r.outcome === "fail" && r.failed_phase === "evidence", "a failing evidence test fails the attempt");
-    assert(r.run_state === "escalated", "and escalates the run (no fix loop yet)");
+    assert(r.run_state === "implementing" && /fix_loop/.test(r.run_reason ?? ""), "and sends the run back to implementing (fix loop)");
     const rep = report(r.report_path);
     const f = rep.findings.find((x) => x.id === "evidence:AC-1.e1")!;
     assert(f.severity === "blocking" && f.detail.includes("expected 401") && /^sha256:/.test(f.evidence_digest!), "a blocking finding with the failure and its digest");

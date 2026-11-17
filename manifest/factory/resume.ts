@@ -1,7 +1,7 @@
 import type { Database } from "better-sqlite3";
 import { existsSync } from "node:fs";
 import { identityHolds } from "./revision.ts";
-import { tx, getRun, transitionRun, transitionAttempt, recordEvent, type AttemptRow, type RunRow, type RunState } from "./state.ts";
+import { tx, getRun, transitionRun, transitionAttempt, recordEvent, type AttemptRow, type RunRow } from "./state.ts";
 import { deadlinePassed } from "./runs.ts";
 import { withLocks, listLocks, worktreeLock, reapDeadHolder, BUILD_LOCK } from "./locks.ts";
 import { isAlive, parseOwner, type Owner } from "./owner.ts";
@@ -9,6 +9,7 @@ import { verdictPath, completeWithError } from "./attempts.ts";
 import { reviewDir } from "./review.ts";
 import { join } from "node:path";
 import { shq } from "./util.ts";
+import { advanceRun } from "./fixloop.ts";
 
 /**
  * What `resume` found for an attempt and did about it (§4.7):
@@ -55,17 +56,6 @@ export type ResumeResult = {
   /** Process groups a dead holder left running under those locks (a crashed check), now killed. */
   killed_groups: number[];
 };
-
-/**
- * Run transition owed once an attempt completes with this outcome (first
- * release: no fix loop). `pending_manual` is validated too: the PR can open
- * while a human records the manual outcomes (§5.5).
- */
-export function runStateForOutcome(outcome: string | null): RunState {
-  if (outcome === "pass" || outcome === "pending_manual") return "validated";
-  if (outcome === "blocked") return "blocked";
-  return "escalated";
-}
 
 function ownerAlive(a: AttemptRow): boolean {
   const owner = parseOwner(a.owner_json);
@@ -140,9 +130,9 @@ export async function resumeRun(
         .prepare("SELECT * FROM factory_attempts WHERE run_id = ? AND attempt = ?")
         .get(runId, last.attempt) as AttemptRow;
       if (latest.status === "complete") {
-        const to = runStateForOutcome(latest.outcome);
-        transitionRun(db, runId, to, { owner: opts.owner, reason: `attempt ${latest.attempt}: ${latest.outcome ?? "no outcome"}` });
-        actions.push({ attempt: latest.attempt, found: "complete", action: "advanced_run", detail: `validating → ${to}` });
+        // The same decision the crashed command would have made (fixloop.ts).
+        const d = advanceRun(db, runId, latest.attempt, { owner: opts.owner });
+        if (d) actions.push({ attempt: latest.attempt, found: "complete", action: "advanced_run", detail: `validating → ${d.to} (${d.reason})` });
       }
     }
 

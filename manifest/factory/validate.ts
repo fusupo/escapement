@@ -18,7 +18,7 @@ import { captureIdentity, treeStatus, describeDirty, identityHolds, lockfileDige
 import { classifyChanges, settingsAt, type Classification } from "./classify.ts";
 import { parseFactorySettings } from "./settings.ts";
 import { readResults, resultFiles, resolveSelector, executedCount, parseSelector, type TestCase } from "./junit.ts";
-import { runStateForOutcome } from "./resume.ts";
+import { advanceRun } from "./fixloop.ts";
 import type { Owner } from "./owner.ts";
 
 /**
@@ -41,6 +41,8 @@ import type { Owner } from "./owner.ts";
  *    for #62's reviewer; a failure or error completes it. Every `error`
  *    names its cause (code, run or environment, §5.4), and evidence that
  *    passed in an earlier attempt and fails now is flagged as a regression.
+ *    The run then moves on by the fix loop's rules (fixloop.ts): back to
+ *    implementing while the implementer can fix it, else escalated.
  *
  * Both locks are held throughout: every phase is a build command.
  */
@@ -128,6 +130,8 @@ export type ValidateResult = {
   report_path: string;
   tier: Report["tier"];
   run_state: RunRow["state"];
+  /** Why the run is in run_state: after a fail or error, whether the fix loop goes again or why it escalated. */
+  run_reason: string | null;
 };
 
 export type ValidateOptions = {
@@ -392,10 +396,7 @@ export async function validateRun(db: Database, runId: string, opts: ValidateOpt
           reason: why,
           error: { cause: "environment", reason: why },
         });
-        const r = getRun(db, runId);
-        if (r.state === "validating") {
-          transitionRun(db, runId, runStateForOutcome("error"), { owner: opts.owner, reason: `attempt ${row.attempt}: error` });
-        }
+        advanceRun(db, runId, row.attempt, { owner: opts.owner });
       }
       throw err;
     }
@@ -579,7 +580,7 @@ async function runPhases(
         reason: error?.reason ?? `${failedPhase} failed`,
         ...(outcome === "error" && error ? { error } : {}),
       });
-      transitionRun(db, run.run_id, runStateForOutcome(outcome), { reason: `attempt ${at.attempt}: ${outcome}` });
+      advanceRun(db, run.run_id, at.attempt, { maxAttempts: settings.maxAttempts });
     }
     return {
       run_id: run.run_id,
@@ -591,6 +592,7 @@ async function runPhases(
       report_path: reportPath,
       tier: report.tier,
       run_state: getRun(db, run.run_id).state,
+      run_reason: getRun(db, run.run_id).state_reason,
     };
   });
   faultPoint("validate.committed");
