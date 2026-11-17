@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { FactoryError, atomicWrite, blocked, nowIso, shq } from "./util.ts";
+import { FactoryError, atomicWrite, blocked, jsonDigest, nowIso, shq } from "./util.ts";
 import { faultPoint } from "./fault.ts";
 import { attemptDir, verdictPath, completeWithError } from "./attempts.ts";
 import { changedFiles, identityHolds } from "./revision.ts";
@@ -405,19 +405,9 @@ export type RecordReviewResult = {
   refinalized: boolean;
 };
 
-/** Stable JSON: object keys sorted, so the same verdict always digests the same. */
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  if (value !== null && typeof value === "object") {
-    const o = value as Record<string, unknown>;
-    return `{${Object.keys(o).sort().map((k) => `${JSON.stringify(k)}:${canonical(o[k])}`).join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
-
 /** Digest of a verdict's canonical JSON: formatting and key order don't change it. */
 export function verdictDigest(verdict: unknown): string {
-  return `sha256:${createHash("sha256").update(canonical(verdict)).digest("hex")}`;
+  return jsonDigest(verdict);
 }
 
 /**

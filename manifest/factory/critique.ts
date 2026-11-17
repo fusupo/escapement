@@ -1,5 +1,10 @@
+import type { Database } from "better-sqlite3";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { schemaErrors } from "./schemas.ts";
-import { FactoryError } from "./util.ts";
+import { FactoryError, atomicWrite, blocked, jsonDigest } from "./util.ts";
+import { tx, getRun, recordEvent } from "./state.ts";
+import type { Owner } from "./owner.ts";
 
 /**
  * The plan critique (docs/FACTORY_DESIGN.md §3.5, #99): a fresh-context
@@ -145,4 +150,110 @@ export function checkCritique(text: string, opts: { final?: boolean; source?: st
     dispositions: c.dispositions?.length ?? 0,
     unresolved: (c.dispositions ?? []).filter((d) => d.unresolved).map((d) => d.finding),
   };
+}
+
+export type RecordCritiqueResult = {
+  run_id: string;
+  path: string;
+  digest: string;
+  verdict: Critique["verdict"];
+  findings: number;
+  accepted: number;
+  rejected: number;
+  unresolved: string[];
+  /** The same critique was already recorded; nothing changed. */
+  noop: boolean;
+};
+
+function critiqueRecorded(db: Database, runId: string, digest: string): boolean {
+  return (
+    db
+      .prepare(
+        "SELECT 1 FROM factory_events WHERE run_id = ? AND kind = 'state_change' AND json_extract(detail_json, '$.entity') = 'critique' AND json_extract(detail_json, '$.digest') = ?",
+      )
+      .get(runId, digest) !== undefined
+  );
+}
+
+/**
+ * `factory record-critique <run_id> <file>` (#99, design §3.5, §7.2): attach
+ * the final plan critique to the run that plan approval created. The
+ * critique ran before the run existed, so the host records it here.
+ *
+ * - Checked as `--final`: every finding needs its disposition. A bad
+ *   document is `bad_critique` and nothing is written.
+ * - Writes `{artifact_dir}/critique.json`, one `critique_finding` event per
+ *   finding (§7.2: finding, severity, accepted, plan_change, tokens, plus
+ *   the checklist item, reason and who decided), and a `state_change`
+ *   event with `entity: critique`.
+ * - Idempotent by the document's canonical digest: the same critique again
+ *   is a no-op (or finishes a recording a crash interrupted); a different
+ *   one is `critique_conflict`. A closed run is refused (`run_closed`).
+ */
+export function recordCritique(
+  db: Database,
+  runId: string,
+  text: string,
+  opts: { owner?: Owner; source?: string } = {},
+): RecordCritiqueResult {
+  const run = getRun(db, runId);
+  if (run.state === "closed") throw blocked("run_closed", `run ${runId} is closed`);
+  const c = parseCritique(text, { final: true, source: opts.source });
+  const digest = jsonDigest(c);
+  const path = join(run.artifact_dir, "critique.json");
+  const dispositions = new Map((c.dispositions ?? []).map((d) => [d.finding, d]));
+  const result = (noop: boolean): RecordCritiqueResult => ({
+    run_id: runId,
+    path,
+    digest,
+    verdict: c.verdict,
+    findings: c.findings.length,
+    accepted: [...dispositions.values()].filter((d) => d.accepted).length,
+    rejected: [...dispositions.values()].filter((d) => !d.accepted).length,
+    unresolved: [...dispositions.values()].filter((d) => d.unresolved).map((d) => d.finding),
+    noop,
+  });
+
+  if (existsSync(path)) {
+    let stored: string;
+    try {
+      stored = jsonDigest(JSON.parse(readFileSync(path, "utf-8")));
+    } catch {
+      stored = "unreadable";
+    }
+    if (stored !== digest) {
+      throw blocked("critique_conflict", `run ${runId} already has a different critique (${stored}); a recorded critique can't change`);
+    }
+    if (critiqueRecorded(db, runId, digest)) return result(true);
+  } else {
+    atomicWrite(path, JSON.stringify(c, null, 2) + "\n");
+  }
+  return tx(db, () => {
+    if (critiqueRecorded(db, runId, digest)) return result(true);
+    for (const f of c.findings) {
+      const d = dispositions.get(f.id)!;
+      recordEvent(db, runId, "critique_finding", {
+        finding: f.id,
+        severity: f.severity,
+        checklist: f.checklist,
+        ...(f.ref ? { ref: f.ref } : {}),
+        accepted: d.accepted,
+        plan_change: d.plan_change ?? null,
+        reason: d.reason ?? null,
+        unresolved: d.unresolved ?? false,
+        decided_by: d.decided_by,
+        tokens: null,
+      });
+    }
+    recordEvent(db, runId, "state_change", {
+      entity: "critique",
+      to: "recorded",
+      digest,
+      verdict: c.verdict,
+      findings: c.findings.length,
+      tier_raise: c.tier_raise ?? null,
+      owner: opts.owner ?? null,
+    });
+    return result(false);
+  });
 }

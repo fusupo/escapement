@@ -21,7 +21,7 @@ import { FactoryError, parseDuration } from "./factory/util.ts";
 import { checkReadiness } from "./factory/readiness.ts";
 import { SCHEMA_NAMES, schemaPath, isSchemaName } from "./factory/schemas.ts";
 import { PROMPT_NAMES, promptPath, isPromptName } from "./factory/prompts.ts";
-import { checkCritique } from "./factory/critique.ts";
+import { checkCritique, recordCritique } from "./factory/critique.ts";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 
@@ -56,6 +56,11 @@ Commands:
   record-review <run_id> <attempt> <file>
                                 Check a reviewer verdict (- reads stdin) and
                                 finalize the attempt's report
+  record-critique <run_id> <file>
+                                Attach the final plan critique (- reads stdin;
+                                every finding with its disposition) to the run:
+                                critique.json and one critique_finding event per
+                                finding
   record-manual <run_id> <evidence_id> pass|fail --note <text>
                                 Record a human's outcome for manual evidence the
                                 report left pending; all pass (or any fail)
@@ -256,6 +261,7 @@ const GUARD_SYNC_COMMANDS = new Set([
 /** Every command that uses the manifest database. */
 const KNOWN_DB_COMMANDS = new Set([
   "start",
+  "record-critique",
   "approve",
   "exec",
   "validate",
@@ -505,6 +511,15 @@ async function dispatch(db: Database, command: string, p: Parsed, json: boolean)
       return {
         result: r,
         text: `${runId} attempt ${attempt}: ${r.outcome}${how}\n  run:     ${r.run_state}\n  report:  ${r.report_path}\n  verdict: ${r.verdict_path}`,
+      };
+    }
+    case "record-critique": {
+      const runId = need(arg, "run_id");
+      const file = need(p.positional[1], "critique file (or - for stdin)");
+      const r = recordCritique(db, runId, readInput(file, "critique"), { owner, source: file === "-" ? "(stdin)" : file });
+      return {
+        result: r,
+        text: `${runId}: critique ${r.verdict}${r.noop ? " (already recorded)" : ""}, ${r.findings} finding(s): ${r.accepted} accepted, ${r.rejected} rejected${r.unresolved.length ? `; decided by the operator: ${r.unresolved.join(", ")}` : ""}\n  ${r.path}`,
       };
     }
     case "record-manual": {

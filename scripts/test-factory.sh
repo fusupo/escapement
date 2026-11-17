@@ -133,6 +133,14 @@ if [[ "$(jq -r '.ok and .result.run.state == "approved" and (.result.authorizati
 out="$(f --json authorization)"
 if [[ "$(jq -r '.result.matched and .result.run_id == "#5-r1" and .result.next == "implement" and (.result.authorizes | index("open_pr") != null)' <<<"$out")" == true ]]; then ok; else bad "authorization-matched" "$out"; fi
 
+# record-critique: the final plan critique attached to the run (#99)
+out="$(f --json record-critique '#5-r1' "$here/fixtures/critique/valid.json")"
+if [[ $? -eq 0 && "$(jq -r '.ok and .result.findings == 2 and .result.accepted == 1 and .result.unresolved == ["F-2"] and (.result.noop | not)' <<<"$out")" == true && -f "$art/critique.json" ]]; then ok; else bad "record-critique" "$out"; fi
+out="$(f record-critique '#5-r1' "$here/fixtures/critique/valid.json")"
+if [[ $? -eq 0 && "$out" == *"(already recorded)"* ]]; then ok; else bad "record-critique-again" "$out"; fi
+out="$(jq 'del(.dispositions)' "$here/fixtures/critique/valid.json" | f --json record-critique '#5-r1' -)"
+if [[ $? -eq 1 && "$(jq -r .error.code <<<"$out")" == bad_critique ]]; then ok; else bad "record-critique-final" "$out"; fi
+
 # exec (text mode): streams output, exits with the command's status
 out="$(f exec '#5-r1' -- sh -c 'echo hello; exit 3' 2>/dev/null)"
 status=$?
