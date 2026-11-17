@@ -380,7 +380,8 @@ if [[ "$(jq -r --arg p "$tmp/archive/9" '.ok and .result.closed == "merged" and 
 out="$(CWD="$vproject" f --json authorization)"
 if [[ "$(jq -r '.result.reasons == ["no_run"]' <<<"$out")" == true ]]; then ok; else bad "archive-closed-no-run" "$out"; fi
 
-# a failing attempt still exits 0; the outcome is in the JSON
+# a failing attempt still exits 0; the outcome is in the JSON, and the fix
+# loop sends the run back to implementing (#92)
 fproject="$tmp/fproject"
 make_vproject "$fproject" 1
 # Run IDs are unique across the database, so this run of #9 is r2.
@@ -389,7 +390,7 @@ CWD="$fproject" f --json start '#9' --target-ref main >/dev/null
 CWD="$fproject" f --json approve '#9-r2' --contract "$tmp/fcontract.json" >/dev/null
 out="$(CWD="$fproject" f --json validate '#9-r2')"
 status=$?
-if [[ $status -eq 0 && "$(jq -r '.result.outcome == "fail" and .result.failed_phase == "evidence" and .result.run_state == "escalated"' <<<"$out")" == true ]]; then ok; else bad "validate-fail-json" "status=$status out=$out"; fi
+if [[ $status -eq 0 && "$(jq -r '.result.outcome == "fail" and .result.failed_phase == "evidence" and .result.run_state == "implementing" and (.result.run_reason | test("fix_loop"))' <<<"$out")" == true ]]; then ok; else bad "validate-fail-json" "status=$status out=$out"; fi
 
 # Crashes and resume (#65): ESCAPEMENT_FACTORY_FAULT kills the runner
 # (SIGKILL, exit 137, no JSON) at a named point; resume and the next command
@@ -484,6 +485,79 @@ if [[ -n "$check_pid" ]] && kill -0 "$check_pid" 2>/dev/null; then ok; else bad 
 out="$(CWD="$oproject" f --json resume '#13-r1')"
 for _ in $(seq 50); do kill -0 "$check_pid" 2>/dev/null || break; sleep 0.1; done
 if [[ "$(jq -r '(.result.killed_groups | length) == 1 and .result.actions[0].action == "interrupted"' <<<"$out")" == true ]] && ! kill -0 "$check_pid" 2>/dev/null; then ok; else bad "orphan-killed-by-resume" "$out"; [[ -n "$check_pid" ]] && kill "$check_pid" 2>/dev/null; fi
+
+# The fix loop survives a crash at each of its boundaries (#92): after a
+# failed attempt moved the run back to implementing, during the next
+# attempt's checks, after a review sent the run back, and after continue.
+# Budgets are never reset: interrupted attempts count, the deadline stays.
+lproject="$tmp/lproject"
+make_vproject "$lproject" 1
+(cd "$lproject" && printf -- '- **max-attempts**: 5\n' >> CLAUDE.md && git -c user.name=t -c user.email=t@example.invalid commit -qam 'five attempts')
+sed 's/#5-r1/#14-r1/' "$project/../contract.json" > "$tmp/lcontract.json"
+CWD="$lproject" f --json start '#14' --target-ref main >/dev/null
+CWD="$lproject" f --json approve '#14-r1' --contract "$tmp/lcontract.json" >/dev/null
+lf() { CWD="$lproject" f "$@"; }
+lcrash() { local spec="$1"; shift; ESCAPEMENT_FACTORY_FAULT="$spec" CWD="$lproject" f "$@" 2>"$tmp/lcrash.err"; }
+lcommit() { (cd "$lproject" && echo "$1" > ci/verify-exit && echo "$2" >> change.txt && git -c user.name=t -c user.email=t@example.invalid commit -qam "$2"); }
+lauth() { lf --json authorization | jq -c '.result'; }
+ldeadline="$(lf --json status '#14-r1' | jq -r '.result.run.deadline_at')"
+lverdict() {
+  jq --argjson findings "$1" '{version: 1, source_digest: .source.digest,
+     evidence: [.required.evidence[] | {id, (.judgment): "yes", rationale: "covers it"}],
+     sensitive_paths: [.required.sensitive_paths[] | {path, signoff: "approve", rationale: "ok"}],
+     modified_assertions: [.required.modified_assertions[] | {location, justified: true, rationale: "ok"}],
+     findings: $findings}' "$2"
+}
+
+# attempt 1 fails; the runner dies right after the run went back to implementing
+out="$(lcrash 'validate.committed' --json validate '#14-r1')"
+status=$?
+st="$(lf --json status '#14-r1')"
+auth="$(lauth)"
+if [[ $status -eq 137 && "$(jq -r '.result.run.state == "implementing" and .result.attempts[0].outcome == "fail"' <<<"$st")" == true &&
+      "$(jq -r '.next == "implement" and .fix.attempt == 1 and (.fix.blocking_findings | length) > 0' <<<"$auth")" == true ]]; then ok; else bad "loop-crash-after-fail" "status=$status $st $auth"; fi
+out="$(lf --json resume '#14-r1')"
+if [[ "$(jq -r '.result.run.state == "implementing" and (.result.actions | length) == 0' <<<"$out")" == true ]]; then ok; else bad "loop-crash-after-fail-resume" "$out"; fi
+
+# the fix is committed; attempt 2 dies during its checks, and resume interrupts it
+lcommit 0 fix-1
+out="$(lcrash 'validate.before_check' --json validate '#14-r1')"
+status=$?
+out="$(lf --json resume '#14-r1')"
+st="$(lf --json status '#14-r1')"
+if [[ $status -eq 137 && "$(jq -r '[.result.actions[] | select(.attempt == 2) | .action] == ["interrupted"]' <<<"$out")" == true &&
+      "$(jq -r '.result.run.state' <<<"$st")" == validating && "$(lauth | jq -r .next)" == validate ]]; then ok; else bad "loop-crash-during-checks" "status=$status $out $st"; fi
+
+# attempt 3: the reviewer blocks it; the runner dies after the run went back to implementing
+out="$(lf --json validate '#14-r1')"
+if [[ "$(jq -r '.result.attempt == 3 and .result.status == "awaiting_review"' <<<"$out")" == true ]]; then ok; else bad "loop-attempt-3" "$out"; fi
+lbundle="$(lf --json review-input '#14-r1' 3 | jq -r .result.bundle_path)"
+lverdict '[{"severity": "blocking", "detail": "the README diagram shows an edge the code never takes", "location": "README.md"}]' "$lbundle" > "$tmp/lverdict3.json"
+out="$(lcrash 'record-review.committed' --json record-review '#14-r1' 3 "$tmp/lverdict3.json")"
+status=$?
+auth="$(lauth)"
+if [[ $status -eq 137 && "$(jq -r '.state == "implementing" and .next == "implement" and .fix.attempt == 3 and (.fix.blocking_findings | map(.id) == ["review:1"])' <<<"$auth")" == true ]]; then ok; else bad "loop-crash-after-review" "status=$status $auth"; fi
+out="$(lf --json record-review '#14-r1' 3 "$tmp/lverdict3.json")"
+if [[ "$(jq -r '.result.noop and .result.outcome == "fail" and .result.run_state == "implementing"' <<<"$out")" == true ]]; then ok; else bad "loop-review-recorded-once" "$out"; fi
+
+# the operator steps in: escalated, then continue dies after taking it back
+lf --json escalate '#14-r1' --reason 'operator wants to look' >/dev/null
+out="$(lcrash 'continue.committed' --json continue '#14-r1' --reason 'looked: fix it')"
+status=$?
+auth="$(lauth)"
+if [[ $status -eq 137 && "$(jq -r '.state == "implementing" and .next == "implement" and .fix.attempt == 3' <<<"$auth")" == true ]]; then ok; else bad "loop-crash-after-continue" "status=$status $auth"; fi
+out="$(lf --json continue '#14-r1' --reason 'again')"
+if [[ "$(jq -r '.ok and (.result.changed | not) and .result.run.state_reason == "continue: looked: fix it" and .result.attempts_used == 3' <<<"$out")" == true ]]; then ok; else bad "loop-continue-again" "$out"; fi
+
+# attempt 4 passes; nothing was reset along the way
+lcommit 0 fix-2
+out="$(lf --json validate '#14-r1')"
+lbundle="$(lf --json review-input '#14-r1' 4 | jq -r .result.bundle_path)"
+lverdict '[]' "$lbundle" > "$tmp/lverdict4.json"
+out="$(lf --json record-review '#14-r1' 4 "$tmp/lverdict4.json")"
+st="$(lf --json status '#14-r1')"
+if [[ "$(jq -r '.result.outcome == "pass" and .result.run_state == "validated"' <<<"$out")" == true &&
+      "$(jq -r --arg d "$ldeadline" '[.result.attempts[] | "\(.status)/\(.outcome)"] == ["complete/fail", "interrupted/null", "complete/fail", "complete/pass"] and .result.run.deadline_at == $d' <<<"$st")" == true ]]; then ok; else bad "loop-passes-on-attempt-4" "$out $st"; fi
 
 # prompt: the reviewer prompt ships as data, found through the runner
 out="$(f prompt reviewer)"

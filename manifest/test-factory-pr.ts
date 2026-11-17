@@ -97,6 +97,24 @@ async function run() {
   );
   assert(count(forged, SECTION_BEGIN) === 1 && count(forged, SECTION_END) === 1, "reviewer text can't forge a marker");
   assert(forged.includes("❌ fail") && forged.includes("| AC-1 Works | `AC-1.e1` (test) | failed | no |") && forged.includes("sensitive"), "outcome, evidence table and tier are shown");
+  assert(!forged.includes("**Attempts**"), "a single attempt has no history table");
+  const passed = {
+    run_id: "r", attempt: 3, outcome: "pass", head_sha: "a".repeat(40), target_ref: "main", target_sha: "b".repeat(40),
+    contract_digest: "sha256:x", validation_scope: "branch", tier: { proposed: "standard", actual: "standard", reasons: [] },
+    evidence: [{ id: "AC-1.e1", executed: "passed", supports_criterion: "yes" }], findings: [], flags: [],
+  };
+  const none = { failed_phase: null, error_cause: null, error_reason: null, blocking: 0 };
+  const withHistory = renderSection(passed, [{ id: "AC-1", text: "Works", evidence: [{ id: "AC-1.e1", type: "test" }] }], "42-x", [
+    { attempt: 1, status: "complete", outcome: "fail", ...none, blocking: 1 },
+    { attempt: 2, status: "complete", outcome: "error", ...none, error_cause: "code", error_reason: "verify timeout <x>" },
+    { attempt: 3, status: "complete", outcome: "pass", ...none },
+  ]);
+  assert(
+    withHistory.includes("| 1 | ❌ fail | review: 1 blocking finding |") &&
+      withHistory.includes("| 2 | ⚠️ error | code: verify timeout &lt;x&gt; |") &&
+      withHistory.includes("| 3 | ✅ pass | - |"),
+    "the report section lists every attempt with its outcome",
+  );
 
   console.log("\nPreconditions\n");
   const db = await memDb();
@@ -165,6 +183,37 @@ async function run() {
   assert(r.action === "updated" && now[0].body.startsWith("## Summary\nRewritten.") && count(now[0].body, SECTION_END) === 1, "without --body-file the PR's own narrative is kept");
   m = matchAuthorization(db, here);
   assert(r.report_revision === 2 && m.matched && m.next === "await_merge", "refreshed from revision 2: await_merge again");
+
+  console.log("\nNo PR while the fix loop is going (#92)\n");
+  {
+    const l = setup(db, "acme/w#46", "46-l");
+    transitionRun(db, l.run.run_id, "implementing");
+    transitionRun(db, l.run.run_id, "validating");
+    db.prepare(
+      `INSERT INTO factory_attempts (run_id, attempt, status, outcome, head_sha, contract_digest, policy_version, started_at)
+         VALUES (?, 1, 'complete', 'fail', 'x', ?, 'p', ?)`,
+    ).run(l.run.run_id, l.run.contract_digest, new Date().toISOString());
+    transitionRun(db, l.run.run_id, "implementing", { reason: "attempt 1: fail; fix_loop" });
+    const before = stub.state().prs.length;
+    await rejects(openPr(db, l.run.run_id, { ...o, title: "t" }), /not_validated/, "a run back in implementing after a failed attempt can't open a PR");
+    assert(stub.state().prs.length === before && getRun(db, l.run.run_id).state === "implementing", "nothing is created, and the run stays implementing");
+  }
+
+  console.log("\nAttempt history in the PR (#92)\n");
+  {
+    const h = setup(db, "acme/w#45", "45-h");
+    db.prepare(
+      `INSERT INTO factory_attempts (run_id, attempt, status, outcome, head_sha, contract_digest, policy_version, failed_phase, findings_json, started_at)
+         VALUES (?, 1, 'complete', 'fail', 'x', ?, 'p', 'evidence', ?, ?)`,
+    ).run(h.run.run_id, h.run.contract_digest, JSON.stringify([{ id: "evidence:AC-1.e1", severity: "blocking", detail: "failed" }]), new Date().toISOString());
+    validated(db, h.run.run_id, "pass");
+    const res = await openPr(db, h.run.run_id, { ...o, title: "feat: h (#45)" });
+    const body = stub.state().prs.find((p) => p.number === res.pr_number)!.body;
+    assert(
+      res.attempt === 2 && body.includes("**Attempts**") && body.includes("| 1 | ❌ fail | evidence: 1 blocking finding |") && body.includes("| 2 | ✅ pass | - |"),
+      "factory pr writes every attempt into the PR body",
+    );
+  }
 
   console.log("\nCrash between create and record (AC-3)\n");
   const b = setup(db, "acme/w#43", "43-y");

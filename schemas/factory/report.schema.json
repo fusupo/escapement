@@ -86,6 +86,19 @@
         null
       ]
     },
+    "error": {
+      "description": "Present when outcome is error: why the attempt errored, and so who can fix it (docs/FACTORY_DESIGN.md §5.4). code and run errors go back to the implementer in the fix loop (§6.2); an environment error waits on the operator.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cause", "reason"],
+      "properties": {
+        "cause": {
+          "description": "code: the change caused it (a check timed out or hung, the checks wrote into the tree, test results the change broke). run: the revision changed during validation (HEAD moved, tree dirty). environment: only the operator can fix it (a check couldn't start, setup failed, a runner error).",
+          "enum": ["code", "run", "environment"]
+        },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    },
     "validation_scope": {
       "enum": [
         "branch",
@@ -302,6 +315,7 @@
       }
     },
     "flags": {
+      "description": "Notes for the reviewer and the operator, never a failure on their own: drift between predicted and changed files, name-only selector matches, and regression: evidence that passed in an earlier attempt and fails in this one (§6.2).",
       "type": "array",
       "items": {
         "type": "string",

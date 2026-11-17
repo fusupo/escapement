@@ -89,18 +89,41 @@ FACTORY="${CLAUDE_PLUGIN_ROOT}/scripts/factory.sh"
 bash "$FACTORY" --check && bash "$FACTORY" --json authorization
 ```
 
-- **`--check` fails, or `.result.matched` is false:** not authorized. Every phase below runs exactly as written. If `.result.run_id` is set, a run exists but can't continue on its own (`.result.reasons`, such as `run_halted` or `contract_changed`). Say so in one line, with the reason from `factory status '{run_id}' --json` (`.result.run.state_reason`), then continue interactively. An escalated or blocked run isn't resumed in the first release: the operator closes it (archive-work, or `factory archive '{run_id}' --path … --abandon`), and a new attempt at the work starts with setup-work.
+- **`--check` fails, or `.result.matched` is false:** not authorized. Every phase below runs exactly as written. If `.result.run_id` is set, a run exists but can't continue on its own (`.result.reasons`, such as `run_halted` or `contract_changed`). Say so in one line, with the reason from `factory status '{run_id}' --json` (`.result.run.state_reason`), then continue interactively. An escalated run whose latest attempt failed or errored can be taken back: see **Escalated after a failed attempt** below. Any other escalated or blocked run isn't resumed: the operator closes it (archive-work, or `factory archive '{run_id}' --path … --abandon`), and a new attempt at the work starts with setup-work.
 - **Matched:** authorized. Note `run_id`, `artifact_dir` and `next`, and check the agent identity commits will carry:
   ```bash
   bash "$FACTORY" --json agent
   ```
   If it fails (`no_agent_token`, or `agent_env_permissions`), stop before any work: "Factory run {run_id} commits and opens its PR as the AI agent: put ESCAPEMENT_AGENT_GH_TOKEN in ~/.config/escapement/agent.env (chmod 600) or export it, then resume." Nothing is escalated; this is setup, not a failure of the run.
 
+**Escalated after a failed attempt.** When `.result.state` is `escalated`, the run has no PR yet (`.result.run.pr_number` is null in `factory status '{run_id}' --json`), and the latest attempt there (`.result.attempts`, the last one) is `complete` with outcome `fail` or `error`, the run stopped to wait on the operator (docs/FACTORY_DESIGN.md §6.2). A run whose PR is open (escalated by a failed manual check, for example) can't go back to implementation yet (#97): offer only abandon and start over. Tell them in plain words why (`.result.run.state_reason`, and the attempt's blocking findings and error from its report), then ask; never show them runner commands:
+
+```
+AskUserQuestion:
+  question: "Factory run {run_id} stopped after attempt {n} {failed | errored}: {why, in plain words}. What now?"
+  header: "Run stopped"
+  options:
+    - label: "Fix it and continue"
+      description: "Keep this run, its approved plan and its remaining budget: fix what the last attempt found, then validate again"
+    - label: "Abandon"
+      description: "Close this run; the branch and commits stay"
+    - label: "Start over"
+      description: "Close this run and plan the work again with setup-work, under a new approval"
+```
+
+- **Fix it and continue:** take the run back, with the operator's words as the reason (single-quoted; a `'` inside is written `'\''`):
+  ```bash
+  bash "$FACTORY" --json continue '{run_id}' --reason '{what the operator decided}'
+  ```
+  On `.ok`, ask `factory authorization` again: it matches with `next: implement` and a `fix`, and the Authorized Path takes it from there. If it is refused, say why in plain words and offer the other two options: `run_deadline` (the run's time is up), `attempt_budget` (every attempt is used), `not_authorized` or `contract_mismatch` (the approval no longer holds), `no_failed_attempt` (nothing to fix), `has_pr` (the PR is already open).
+- **Abandon:** close the run with archive-work, or `factory archive '{run_id}' --path … --abandon`.
+- **Start over:** abandon it as above, then invoke setup-work for the issue.
+
 **The authorized path.** Follow the Authorized Path section below instead of the confirmations in Phases 1–6. In short:
 
 | `next` | Do |
 |---|---|
-| `implement` | work through the unchecked tasks, then validate |
+| `implement` | work through the unchecked tasks, then validate. With a `fix` (the run is back after a failed attempt), fix its findings first (step A) |
 | `validate`, `resume`, `review` | validate (validate-work picks up where the attempt stopped, after a crash too) |
 | `pr`, `refresh_pr` | open or refresh the PR (create-pr) |
 | `await_merge` | nothing: the PR is open and shows the current report. Report its number and stop |
@@ -347,6 +370,7 @@ Only after Phase 0.5 matched. The approved plan and contract stand in for every 
 ### A. Implement
 
 1. **Resume** from the first unchecked task in the scratchpad, without asking. TodoWrite and the Work Log are kept as usual.
+   **Back after a failed attempt** (`factory authorization` has a `fix`, from the fix loop or `factory continue`): the task list is the fix. Add a Work Log entry "Fix attempt {fix.attempt} ({fix.outcome})" listing each of `fix.blocking_findings` and, for an error, `fix.error` (its cause and reason); the report at `fix.report_path` has the details and logs. Fix exactly those (§6.2: the implementer works from the findings), commit with commit-changes, then validate (step B). A finding you can't fix inside the approved contract, such as one that would need a contract change or a change to the project's checks, test configuration or CI, is a blocker (step D).
 2. **No plan-mode or approach questions** (3.2): the approved plan is the plan. Explore agents and LSP are fine.
 3. **Builds and tests go through the runner**, so they wait their turn on the shared build lock:
    ```bash
@@ -364,7 +388,9 @@ After the last task:
 1. Make sure everything is committed: `git status --porcelain --untracked-files=all` lists nothing but working files excluded in `.git/info/exclude`. Commit what belongs to the work (commit-changes). Anything else is a blocker (step D).
 2. Invoke validate-work. Route on its result:
    - `pass` or `pending_manual`: step C.
-   - `fail` or `error`: the runner has already escalated the run. Step D, with the report's blocking findings.
+   - `fail` or `error`: the runner has already decided what follows (validate-work reports the run state and reason):
+     - run `implementing`: the fix loop goes again. Ask `factory authorization` again and go back to step A with its `fix`. Each loop is a new attempt; the runner stops it at `max-attempts`, the deadline, or the same failure twice.
+     - run `escalated`: the runner stopped it for a human (an environment error, the attempts used up, the deadline, a refused sign-off or unjustified assertion, or a stuck failure). Step D, with the report's blocking findings and the run's reason.
    - `blocked`: when it is `dirty_tree` caused by your own uncommitted work, commit it and invoke validate-work once more. Anything else: escalate (step D).
    - A runner crash inside validation is validate-work's to recover (it resumes and carries on); don't escalate for one. If the session itself was interrupted, re-entering do-work routes through Phase 0.5's `next` and continues.
 
@@ -385,6 +411,8 @@ bash "$FACTORY" --json escalate '{run_id}' --reason '{one line: what stopped the
 ```
 
 A run the runner already escalated stays as it is (no-op). Record the reason in the Work Log, notify (step E) with the reason and the report path when there is one, and stop. Don't try to work around a refusal.
+
+Escalate yourself, without retrying, when the next fix needs the operator rather than the implementer: it would change the contract (that needs `factory approve` again), the project's checks, test configuration or CI, or an assertion the reviewer won't accept as justified. The operator can take the run back later (Phase 0.5, **Escalated after a failed attempt**).
 
 ### E. Notify the operator
 
@@ -484,10 +512,11 @@ Under an authorized run, `factory authorization` has already matched the branch,
 
 ---
 
-**Version:** 1.3.1
-**Last Updated:** 2026-11-16
+**Version:** 1.4.0
+**Last Updated:** 2026-11-17
 **Maintained By:** Escapement
 **Changelog:**
+- v1.4.0: The fix loop (#92): after a failed or errored attempt the run comes back to implementing with `fix` (its blocking findings and error), and do-work fixes, commits and validates again; an escalated run after a failed attempt offers "fix it and continue" (`factory continue`), "abandon" or "start over"
 - v1.3.1: Push reminders push as the agent with `factory push` (#80)
 - v1.3.0: Authorized path: `next` `validate`; a crash inside validation is validate-work's to recover; a `factory pr` that dies is run again and recovers the PR (#65)
 - v1.2.0: Authorized path: under a matching active factory authorization, implement with builds and tests through `factory exec`, commit, validate (validate-work) and open the PR (create-pr) without questions; escalate and notify when it can't go on (#64)

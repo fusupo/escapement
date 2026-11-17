@@ -6,16 +6,16 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { FactoryError, atomicWrite, blocked, nowIso, shq } from "./util.ts";
 import { faultPoint } from "./fault.ts";
-import { attemptDir, verdictPath } from "./attempts.ts";
+import { attemptDir, verdictPath, completeWithError } from "./attempts.ts";
 import { changedFiles, identityHolds } from "./revision.ts";
 import { settingsAt } from "./classify.ts";
 import { parseFactorySettings } from "./settings.ts";
 import { firstMatch } from "./glob.ts";
 import { parseContract, schemaPath, schemaErrors, type Contract } from "./schemas.ts";
 import { contractDigest, requireExecutable } from "./runs.ts";
-import { tx, getRun, getAttempt, transitionAttempt, transitionRun, recordEvent, type AttemptRow, type RunRow, type RunState } from "./state.ts";
+import { tx, getRun, getAttempt, transitionAttempt, recordEvent, type AttemptRow, type RunRow, type RunState } from "./state.ts";
 import { withLocks, worktreeLock } from "./locks.ts";
-import { runStateForOutcome } from "./resume.ts";
+import { advanceRun } from "./fixloop.ts";
 import { promptPath } from "./prompts.ts";
 import type { Owner } from "./owner.ts";
 import type { Report } from "./validate.ts";
@@ -236,16 +236,14 @@ function attemptContract(run: RunRow, a: AttemptRow): { path: string; contract: 
 
 /**
  * HEAD must still be the attempt's head_sha on a clean tree (§4.3). If not,
- * the attempt completes as `error` and the run escalates, as `resume` does,
- * and this throws `revision_changed`.
+ * the attempt completes as `error`, caused by the run (§5.4), as `resume`
+ * does, the run moves on, and this throws `revision_changed`.
  */
 function requireIdentity(db: Database, run: RunRow, a: AttemptRow, owner: Owner): void {
   const id = identityHolds(run.worktree_path, a.head_sha);
   if (id.ok) return;
-  transitionAttempt(db, run.run_id, a.attempt, "complete", { owner: null, outcome: "error", reason: "revision changed during validation" });
-  if (getRun(db, run.run_id).state === "validating") {
-    transitionRun(db, run.run_id, runStateForOutcome("error"), { owner, reason: `attempt ${a.attempt}: error` });
-  }
+  completeWithError(db, run, a.attempt, { cause: "run", reason: "revision changed during validation" }, { detail: id.detail });
+  advanceRun(db, run.run_id, a.attempt, { owner });
   throw new FactoryError("revision_changed", `attempt ${a.attempt} of ${run.run_id} is now error: revision changed during validation (${id.detail})`);
 }
 
@@ -399,6 +397,8 @@ export type RecordReviewResult = {
   verdict_path: string;
   verdict_digest: string;
   run_state: RunState;
+  /** Why the run is in run_state: after a fail, whether the fix loop goes again or why it escalated. */
+  run_reason: string | null;
   /** The same verdict was already recorded; nothing changed. */
   noop: boolean;
   /** An interrupted finalization was completed from the stored verdict. */
@@ -516,6 +516,7 @@ function recordedResult(db: Database, run: RunRow, a: AttemptRow, extra: { noop:
     verdict_path: verdictPath(run.artifact_dir, a.attempt),
     verdict_digest: a.verdict_digest!,
     run_state: getRun(db, run.run_id).state,
+    run_reason: getRun(db, run.run_id).state_reason,
     ...extra,
   };
 }
@@ -578,9 +579,7 @@ function finalize(
       a.attempt,
     );
     transitionAttempt(db, run.run_id, a.attempt, "complete", { owner: null, outcome, reason: "review recorded" });
-    if (getRun(db, run.run_id).state === "validating") {
-      transitionRun(db, run.run_id, runStateForOutcome(outcome), { owner, reason: `attempt ${a.attempt}: ${outcome}` });
-    }
+    advanceRun(db, run.run_id, a.attempt, { owner });
     recordEvent(db, run.run_id, "state_change", { entity: "verdict", to: "recorded", attempt: a.attempt, verdict_digest: digest, outcome, owner });
     return recordedResult(db, run, getAttempt(db, run.run_id, a.attempt), { noop: false, refinalized });
   });
@@ -662,6 +661,8 @@ export async function recordReview(
       });
       faultPoint("record-review.verdict_stored");
     }
-    return finalize(db, run, getAttempt(db, runId, attempt), verdict, digest, opts.owner, a.status === "finalizing");
+    const done = finalize(db, run, getAttempt(db, runId, attempt), verdict, digest, opts.owner, a.status === "finalizing");
+    faultPoint("record-review.committed");
+    return done;
   });
 }

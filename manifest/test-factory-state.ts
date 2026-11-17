@@ -46,9 +46,27 @@ async function run() {
     );
     transitionRun(db, "r2", "escalated", { reason: "run_deadline" });
     assert(getRun(db, "r2").state_reason === "run_deadline", "the reason is stored on the run");
-    throws(() => transitionRun(db, "r2", "approved"), /illegal_transition/, "an escalated run can't resume in the first release");
+    throws(() => transitionRun(db, "r2", "approved"), /illegal_transition/, "an escalated run can't go back to approved");
     transitionRun(db, "r2", "closed", { action: "abandoned" });
     assert(getRun(db, "r2").state === "closed", "an escalated run can be closed");
+  }
+
+  console.log("\nThe fix loop's edges (#92)\n");
+  {
+    seedRun(db, "fl1", { state: "validating" });
+    transitionRun(db, "fl1", "implementing", { reason: "fix_loop" });
+    assert(getRun(db, "fl1").state === "implementing", "a validating run can go back to implementing");
+    transitionRun(db, "fl1", "validating");
+    transitionRun(db, "fl1", "escalated", { reason: "attempt 2: fail" });
+    transitionRun(db, "fl1", "implementing", { reason: "continue: fixed the fixture" });
+    const r = getRun(db, "fl1");
+    assert(r.state === "implementing" && r.state_reason === "continue: fixed the fixture", "an escalated run can go back to implementing");
+    assert(RUN_TRANSITIONS.escalated.join() === "implementing,closed", "and otherwise only be closed");
+    seedRun(db, "fl2", { state: "blocked" });
+    throws(() => transitionRun(db, "fl2", "implementing"), /illegal_transition/, "a blocked run can only be closed");
+    for (const from of ["validated", "pr_open"] as const) {
+      assert(!RUN_TRANSITIONS[from].includes("implementing"), `${from} has no way back to implementing (#97)`);
+    }
   }
 
   {

@@ -15,9 +15,10 @@ export type Migration = {
  * Ordered schema migrations. The database records the last one applied in
  * PRAGMA user_version.
  *
- * Never edit a migration that has shipped (schema.sql is migration 1 and
- * migrations/002-factory.sql is migration 2; both are frozen); add a new one
- * with the next version number instead.
+ * Never edit a migration that has shipped (schema.sql is migration 1,
+ * migrations/002-factory.sql is migration 2 and migrations/003-fix-loop.sql
+ * is migration 3; all are frozen once released); add a new one with the
+ * next version number instead.
  */
 export const MIGRATIONS: Migration[] = [
   {
@@ -29,6 +30,11 @@ export const MIGRATIONS: Migration[] = [
     version: 2,
     name: "factory runs, authorizations, attempts, events and locks",
     up: (db) => db.exec(readFileSync(resolve(__dirname, "migrations", "002-factory.sql"), "utf-8")),
+  },
+  {
+    version: 3,
+    name: "attempt error cause and the run's approved max-attempts, for the fix loop",
+    up: (db) => db.exec(readFileSync(resolve(__dirname, "migrations", "003-fix-loop.sql"), "utf-8")),
   },
 ];
 

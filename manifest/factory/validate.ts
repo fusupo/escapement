@@ -5,10 +5,10 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { FactoryError, atomicWrite, blocked } from "./util.ts";
 import { requireExecutable, contractDigest, type AuthorizationRow } from "./runs.ts";
-import { tx, getRun, getAttempt, transitionRun, transitionAttempt, recordEvent, type RunRow, type AttemptRow } from "./state.ts";
+import { tx, getRun, getAttempt, transitionRun, transitionAttempt, recordEvent, type RunRow, type AttemptRow, type AttemptError, type ErrorCause } from "./state.ts";
 import { withLocks, worktreeLock, BUILD_LOCK, setLockChild } from "./locks.ts";
 import type { ChildGroup } from "./process.ts";
-import { allocateAttempt, attemptDir } from "./attempts.ts";
+import { allocateAttempt, attemptDir, latestReportPath } from "./attempts.ts";
 import { runProcess, type ProcessResult } from "./process.ts";
 import { faultPoint } from "./fault.ts";
 import { readSettings, type FactorySettings, type LoadedSettings } from "./settings.ts";
@@ -18,7 +18,7 @@ import { captureIdentity, treeStatus, describeDirty, identityHolds, lockfileDige
 import { classifyChanges, settingsAt, type Classification } from "./classify.ts";
 import { parseFactorySettings } from "./settings.ts";
 import { readResults, resultFiles, resolveSelector, executedCount, parseSelector, type TestCase } from "./junit.ts";
-import { runStateForOutcome } from "./resume.ts";
+import { advanceRun, attemptBudget } from "./fixloop.ts";
 import type { Owner } from "./owner.ts";
 
 /**
@@ -38,8 +38,11 @@ import type { Owner } from "./owner.ts";
  *    evidence run on its own, `manual` evidence left pending.
  * 6. Post-check: HEAD unchanged and the tree still clean, else `error`.
  * 7. The report. All phases passing leaves the attempt `awaiting_review`
- *    for #62's reviewer; a failure or error completes it, which escalates
- *    the run (no fix loop in the first release).
+ *    for #62's reviewer; a failure or error completes it. Every `error`
+ *    names its cause (code, run or environment, §5.4), and evidence that
+ *    passed in an earlier attempt and fails now is flagged as a regression.
+ *    The run then moves on by the fix loop's rules (fixloop.ts): back to
+ *    implementing while the implementer can fix it, else escalated.
  *
  * Both locks are held throughout: every phase is a build command.
  */
@@ -111,6 +114,8 @@ export type Report = {
   flags: string[];
   budget: { attempts_used: number; wall_clock_s: number; tokens: null };
   invocations: Invocation[];
+  /** Why the attempt errored (§5.4); present only when outcome is error. */
+  error?: AttemptError;
 };
 
 export type ValidateResult = {
@@ -120,9 +125,13 @@ export type ValidateResult = {
   /** null while the attempt awaits review (all deterministic phases passed). */
   outcome: "fail" | "error" | null;
   failed_phase: string | null;
+  /** Why the attempt errored, when outcome is error. */
+  error: AttemptError | null;
   report_path: string;
   tier: Report["tier"];
   run_state: RunRow["state"];
+  /** Why the run is in run_state: after a fail or error, whether the fix loop goes again or why it escalated. */
+  run_reason: string | null;
 };
 
 export type ValidateOptions = {
@@ -218,6 +227,17 @@ export function normalizeFailure(text: string, worktree: string): string {
     .replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z?/g, "<time>")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+/**
+ * The cause of a check the runner stopped (process.ts reasons): one that
+ * couldn't start is the environment's; one stopped at the run deadline is
+ * the run's; a timeout or hang is the code's.
+ */
+export function stopCause(reason: string | null): ErrorCause {
+  if (reason === "spawn_failed") return "environment";
+  if (reason === "run_deadline") return "run";
+  return "code";
 }
 
 function digestOf(text: string): string {
@@ -347,7 +367,7 @@ export async function validateRun(db: Database, runId: string, opts: ValidateOpt
       targetSha: identity.target_sha,
       contractDigest: prep.authorization.contract_digest,
       policyVersion: policy,
-      maxAttempts: settings.maxAttempts,
+      maxAttempts: attemptBudget(prep.run),
     });
     tx(db, () => {
       const r = getRun(db, runId);
@@ -369,19 +389,83 @@ export async function validateRun(db: Database, runId: string, opts: ValidateOpt
       // An unexpected failure mid-attempt: complete it as an error rather than leave it running.
       const current = getAttempt(db, runId, row.attempt);
       if (current.status === "checks_running") {
-        transitionAttempt(db, runId, row.attempt, "complete", {
-          owner: null,
-          outcome: "error",
-          reason: `runner error: ${(err as Error).message}`,
+        const why = `runner error: ${(err as Error).message}`;
+        const error: AttemptError = { cause: "environment", reason: why };
+        const written = writeErrorReport(at, { identity, policy, prep, contract, error });
+        tx(db, () => {
+          if (written) {
+            db.prepare("UPDATE factory_attempts SET report_path = ?, findings_json = ? WHERE run_id = ? AND attempt = ?").run(
+              written.path,
+              JSON.stringify(written.findings),
+              runId,
+              row.attempt,
+            );
+          }
+          transitionAttempt(db, runId, row.attempt, "complete", { owner: null, outcome: "error", reason: why, error });
         });
-        const r = getRun(db, runId);
-        if (r.state === "validating") {
-          transitionRun(db, runId, runStateForOutcome("error"), { owner: opts.owner, reason: `attempt ${row.attempt}: error` });
-        }
+        advanceRun(db, runId, row.attempt, { owner: opts.owner });
       }
       throw err;
     }
   });
+}
+
+/**
+ * The report for an attempt the runner itself failed (§5.4: a runner
+ * error is the environment's): what the attempt knew, every evidence item
+ * `not_run`, the invocations so far, a blocking `runner` finding and the
+ * error. Best effort: if it can't be written, the error stays recorded on
+ * the attempt and the original failure is what the caller sees.
+ */
+function writeErrorReport(
+  at: Attempt,
+  ctx: { identity: Identity; policy: string; prep: Prepared; contract: Contract; error: AttemptError },
+): { path: string; findings: Finding[] } | null {
+  try {
+    const { identity, contract, error } = ctx;
+    const path = join(at.dir, "report.json");
+    const runner: Finding = { id: "runner", severity: "blocking", detail: error.reason };
+    // The draft was written before the failure: keep everything it found.
+    if (existsSync(path)) {
+      const draft = JSON.parse(readFileSync(path, "utf-8")) as Report;
+      const findings = [...draft.findings, runner];
+      const final = { ...draft, status: "complete" as const, outcome: "error" as const, findings, error };
+      if (schemaErrors("report", final).length) return null;
+      atomicWrite(path, JSON.stringify(final, null, 2) + "\n");
+      return { path, findings };
+    }
+    const findings: Finding[] = [runner];
+    const report: Report = {
+      version: 1,
+      run_id: at.run.run_id,
+      attempt: at.attempt,
+      status: "complete",
+      outcome: "error",
+      validation_scope: "branch",
+      head_sha: identity.head_sha,
+      merge_base_sha: identity.merge_base_sha,
+      target_ref: identity.target_ref,
+      target_sha: identity.target_sha,
+      contract_digest: ctx.prep.authorization.contract_digest,
+      policy_version: ctx.policy,
+      lockfile_digest: null,
+      tree_clean_after: treeStatus(at.run.worktree_path).clean,
+      tier: { proposed: contract.risk_tier_proposed, actual: contract.risk_tier_proposed, reasons: contract.risk_reasons ?? [] },
+      changes: { new_evidence: 0, modified_assertions: 0, execution_policy: 0 },
+      phases: [],
+      evidence: evidenceOf(contract).map((e) => ({ id: e.id, executed: "not_run", supports_criterion: null })),
+      findings,
+      flags: [],
+      budget: { attempts_used: at.attempt, wall_clock_s: Math.max(0, (Date.now() - Date.parse(at.run.started_at)) / 1000), tokens: null },
+      invocations: at.invocations,
+      error,
+    };
+    if (schemaErrors("report", report).length) return null;
+    atomicWrite(path, JSON.stringify(report, null, 2) + "\n");
+    return { path, findings };
+  } catch {
+    return null;
+  }
 }
 
 async function runPhases(
@@ -397,7 +481,7 @@ async function runPhases(
   const findings: Finding[] = [];
   const flags: string[] = [];
   const results = new Map<string, EvidenceResult>(evidence.map((e) => [e.id, { id: e.id, executed: "not_run", supports_criterion: null }]));
-  let errorReason: string | null = null;
+  let error: AttemptError | null = null;
   const lockDigest = lockfileDigest(worktree, identity.head_sha);
 
   // ── classification, tier and drift (part of phase 1) ──
@@ -450,8 +534,8 @@ async function runPhases(
         recordEvent(db, run.run_id, "state_change", { entity: "setup", to: "done", attempt: at.attempt, lockfile_digest: lockDigest });
       } else {
         staticOutcome = "error";
-        errorReason = p.reason ? `setup ${p.reason}` : `setup failed (exit ${p.exit_code})`;
-        findings.push({ id: "check:setup", severity: "blocking", detail: `${errorReason}: ${excerpt(tail(p.log_path, 10))}` });
+        error = { cause: "environment", reason: p.reason ? `setup ${p.reason}` : `setup failed (exit ${p.exit_code})` };
+        findings.push({ id: "check:setup", severity: "blocking", detail: `${error.reason}: ${excerpt(tail(p.log_path, 10))}` });
       }
     }
   }
@@ -462,7 +546,7 @@ async function runPhases(
     staticLog = p.invocation.log;
     if (p.outcome === "error") {
       staticOutcome = "error";
-      errorReason = `static ${p.reason}`;
+      error = { cause: stopCause(p.reason), reason: `static ${p.reason}` };
       findings.push({ id: "check:static", severity: "blocking", detail: `static was stopped (${p.reason})` });
     } else if (p.outcome === "fail") {
       staticOutcome = "fail";
@@ -481,21 +565,25 @@ async function runPhases(
   if (staticOutcome === "pass") {
     const ev = await evidencePhase(at, { settings, evidence, results, findings, flags, headSha: identity.head_sha });
     phases.push(ev.phase);
-    if (ev.errorReason) errorReason = ev.errorReason;
+    if (ev.error) error = ev.error;
+    flags.push(...regressionFlags(db, run, at.attempt, [...results.values()]));
   }
 
   // ── post-check (§4.3) ──
   const post = identityHolds(worktree, identity.head_sha);
   if (!post.ok) {
     const headMoved = post.detail.startsWith("HEAD is");
-    errorReason = headMoved ? "revision changed during validation" : "checks are not side-effect free";
-    findings.push({ id: "identity", severity: "blocking", detail: `${errorReason}: ${post.detail}` });
+    error = headMoved
+      ? { cause: "run", reason: "revision changed during validation" }
+      : { cause: "code", reason: "checks are not side-effect free" };
+    findings.push({ id: "identity", severity: "blocking", detail: `${error.reason}: ${post.detail}` });
   }
 
   // ── outcome ──
   const failedPhase = phases.find((p) => p.outcome === "fail" || p.outcome === "error")?.name ?? null;
   const outcome: Report["outcome"] =
-    errorReason !== null || phases.some((p) => p.outcome === "error") ? "error" : failedPhase ? "fail" : null;
+    error !== null || phases.some((p) => p.outcome === "error") ? "error" : failedPhase ? "fail" : null;
+  if (outcome === "error" && error === null) error = { cause: "environment", reason: `${failedPhase ?? "a phase"} errored` };
   const status: AttemptRow["status"] = outcome === null ? "awaiting_review" : "complete";
 
   const report: Report = {
@@ -529,6 +617,7 @@ async function runPhases(
       tokens: null,
     },
     invocations: at.invocations,
+    ...(outcome === "error" && error ? { error } : {}),
   };
   const problems = schemaErrors("report", report);
   if (problems.length) throw new FactoryError("internal", `report for attempt ${at.attempt} is invalid: ${problems.join("; ")}`);
@@ -550,8 +639,13 @@ async function runPhases(
     if (status === "awaiting_review") {
       transitionAttempt(db, run.run_id, at.attempt, "awaiting_review", { owner: null });
     } else {
-      transitionAttempt(db, run.run_id, at.attempt, "complete", { owner: null, outcome: outcome!, reason: errorReason ?? `${failedPhase} failed` });
-      transitionRun(db, run.run_id, runStateForOutcome(outcome), { reason: `attempt ${at.attempt}: ${outcome}` });
+      transitionAttempt(db, run.run_id, at.attempt, "complete", {
+        owner: null,
+        outcome: outcome!,
+        reason: error?.reason ?? `${failedPhase} failed`,
+        ...(outcome === "error" && error ? { error } : {}),
+      });
+      advanceRun(db, run.run_id, at.attempt);
     }
     return {
       run_id: run.run_id,
@@ -559,13 +653,46 @@ async function runPhases(
       status,
       outcome,
       failed_phase: failedPhase,
+      error: outcome === "error" ? error : null,
       report_path: reportPath,
       tier: report.tier,
       run_state: getRun(db, run.run_id).state,
+      run_reason: getRun(db, run.run_id).state_reason,
     };
   });
   faultPoint("validate.committed");
   return result;
+}
+
+const NOT_PASSING: readonly Executed[] = ["failed", "not_found", "skipped", "error"];
+
+/**
+ * Regression flags (§6.2): evidence that passed in an earlier attempt of
+ * this run and doesn't pass now. Read from the earlier attempts' current
+ * reports; a flag informs the implementer and the reviewer, and never
+ * fails the attempt on its own.
+ */
+function regressionFlags(db: Database, run: RunRow, attempt: number, now: EvidenceResult[]): string[] {
+  const failing = now.filter((e) => NOT_PASSING.includes(e.executed));
+  if (failing.length === 0) return [];
+  const earlier = db
+    .prepare("SELECT attempt FROM factory_attempts WHERE run_id = ? AND attempt < ? AND status = 'complete' ORDER BY attempt DESC")
+    .all(run.run_id, attempt) as { attempt: number }[];
+  const passedIn = new Map<string, number>();
+  for (const { attempt: k } of earlier) {
+    let prior: { evidence?: { id: string; executed: string }[] };
+    try {
+      prior = JSON.parse(readFileSync(latestReportPath(run.artifact_dir, k).path, "utf-8"));
+    } catch {
+      continue;
+    }
+    for (const e of prior.evidence ?? []) {
+      if (e.executed === "passed" && !passedIn.has(e.id)) passedIn.set(e.id, k);
+    }
+  }
+  return failing.flatMap((e) =>
+    passedIn.has(e.id) ? [`regression: evidence ${e.id} passed in attempt ${passedIn.get(e.id)} and is ${e.executed} now`] : [],
+  );
 }
 
 /** Phase 2 (§4.4): one structured verify run, command evidence, manual evidence pending. */
@@ -579,19 +706,19 @@ async function evidencePhase(
     flags: string[];
     headSha: string;
   },
-): Promise<{ phase: Phase; errorReason: string | null }> {
+): Promise<{ phase: Phase; error: AttemptError | null }> {
   const { settings, evidence, results, findings, flags } = ctx;
   const worktree = at.run.worktree_path;
   const start = Date.now();
   // Mutated by the closures below, so kept in an object TypeScript won't narrow.
-  const st: { outcome: PhaseOutcome; errorReason: string | null } = { outcome: "pass", errorReason: null };
+  const st: { outcome: PhaseOutcome; error: AttemptError | null } = { outcome: "pass", error: null };
   let log: string | undefined;
   const fail = () => {
     if (st.outcome === "pass" || st.outcome === "pending_manual") st.outcome = "fail";
   };
-  const error = (why: string) => {
+  const error = (cause: ErrorCause, why: string) => {
     st.outcome = "error";
-    st.errorReason ??= why;
+    st.error ??= { cause, reason: why };
   };
 
   const tests = evidence.filter((e): e is Extract<Evidence, { type: "test" }> => e.type === "test");
@@ -600,8 +727,8 @@ async function evidencePhase(
     const v = await verifyRun(at, settings);
     log = v.log;
     if (v.error) {
-      error(v.error);
-      findings.push({ id: "check:verify", severity: "blocking", detail: v.error });
+      error(v.error.cause, v.error.reason);
+      findings.push({ id: "check:verify", severity: "blocking", detail: v.error.reason });
       for (const t of tests) results.set(t.id, { ...results.get(t.id)!, executed: "error", log: v.log });
     } else {
       for (const t of tests) {
@@ -642,7 +769,7 @@ async function evidencePhase(
       const cwd = resolve(worktree, e.cwd ?? ".");
       if (!inside(cwd, worktree)) {
         results.set(e.id, { ...results.get(e.id)!, executed: "error" });
-        error(`evidence ${e.id}: cwd ${e.cwd} is outside the worktree`);
+        error("environment", `evidence ${e.id}: cwd ${e.cwd} is outside the worktree`);
         findings.push({ id: `evidence:${e.id}`, severity: "blocking", detail: `cwd ${e.cwd} is outside the worktree` });
         continue;
       }
@@ -676,7 +803,7 @@ async function evidencePhase(
           detail: `${e.run}: ${problems.join("; ")}`,
           evidence_digest: digestOf(normalizeFailure(`${problems.join("; ")} ${tail(p.log_path, 20)}`, worktree)),
         });
-        if (res.executed === "error") error(`evidence ${e.id}: ${p.reason}`);
+        if (res.executed === "error") error(stopCause(p.reason), `evidence ${e.id}: ${p.reason}`);
         else fail();
       }
       results.set(e.id, res);
@@ -688,7 +815,7 @@ async function evidencePhase(
 
   return {
     phase: { name: "evidence", outcome: st.outcome, duration_s: (Date.now() - start) / 1000, ...(log ? { log } : {}) },
-    errorReason: st.errorReason,
+    error: st.error,
   };
 }
 
@@ -701,12 +828,13 @@ async function evidencePhase(
  *   the command, must exist afterwards with an mtime after the start, and
  *   is copied into the fresh directory;
  * - missing results, unreadable results or zero executed tests are an
- *   error, never a pass, whatever verify's exit status.
+ *   error, never a pass, whatever verify's exit status. The change is what
+ *   broke them, so their cause is `code`.
  */
 async function verifyRun(
   at: Attempt,
   settings: FactorySettings,
-): Promise<{ cases: TestCase[]; failedCases: TestCase[]; exitCode: number | null; log?: string; error: string | null }> {
+): Promise<{ cases: TestCase[]; failedCases: TestCase[]; exitCode: number | null; log?: string; error: AttemptError | null }> {
   const worktree = at.run.worktree_path;
   const invocationId = `${at.invocations.length + 1}-verify`;
   const resultsDir = join(at.dir, "results", invocationId);
@@ -720,30 +848,31 @@ async function verifyRun(
   const startedMs = Date.now();
 
   const p = await at.exec("verify", settings.verify!, { env: { FACTORY_RESULTS_DIR: resultsDir } });
-  const out = { cases: [] as TestCase[], failedCases: [] as TestCase[], exitCode: p.exit_code, log: p.invocation.log, error: null as string | null };
-  if (p.outcome === "error") return { ...out, error: `verify was stopped (${p.reason})` };
-  if (!spec || !expanded) return { ...out, error: "test-results is not configured" };
+  const out = { cases: [] as TestCase[], failedCases: [] as TestCase[], exitCode: p.exit_code, log: p.invocation.log, error: null as AttemptError | null };
+  const code = (reason: string): AttemptError => ({ cause: "code", reason });
+  if (p.outcome === "error") return { ...out, error: { cause: stopCause(p.reason), reason: `verify was stopped (${p.reason})` } };
+  if (!spec || !expanded) return { ...out, error: { cause: "environment", reason: "test-results is not configured" } };
 
   let source = expanded;
   if (fixed) {
     if (!existsSync(expanded) || statSync(expanded).mtimeMs < startedMs - 1000) {
-      return { ...out, error: `verify left no fresh results at ${expanded}` };
+      return { ...out, error: code(`verify left no fresh results at ${expanded}`) };
     }
     source = join(resultsDir, "fixed");
     cpSync(expanded, source, { recursive: true });
   }
   if (!existsSync(source)) {
-    return { ...out, error: `verify wrote no results at ${spec.path} (exit ${p.exit_code})` };
+    return { ...out, error: code(`verify wrote no results at ${spec.path} (exit ${p.exit_code})`) };
   }
   const files = statSync(source).isDirectory() ? resultFiles(source) : [source];
-  if (files.length === 0) return { ...out, error: `verify wrote no results under ${spec.path}` };
+  if (files.length === 0) return { ...out, error: code(`verify wrote no results under ${spec.path}`) };
   p.invocation.results = files.map((f) => ({ path: at.rel(f), digest: fileDigest(f) }));
   let cases: TestCase[];
   try {
     cases = readResults(files);
   } catch (err) {
-    return { ...out, error: (err as Error).message };
+    return { ...out, error: code((err as Error).message) };
   }
-  if (executedCount(cases) === 0) return { ...out, cases, error: "verify's results report zero executed tests" };
+  if (executedCount(cases) === 0) return { ...out, cases, error: code("verify's results report zero executed tests") };
   return { ...out, cases, failedCases: cases.filter((c) => c.status === "failed" || c.status === "error") };
 }

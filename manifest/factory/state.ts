@@ -24,18 +24,24 @@ const HALT: RunState[] = ["blocked", "escalated", "closed"];
 
 /**
  * Allowed run transitions. Every non-terminal state may halt (blocked,
- * escalated) or be closed. A halted run can only be closed in the first
- * release; the fix loop (next) adds validating → implementing.
+ * escalated) or be closed. The fix loop (§6.2, #92) adds two ways back to
+ * implementation, both under the same contract and authorization:
+ *
+ * - validating → implementing: the runner's own decision after an attempt
+ *   the implementer can fix (fixloop.ts `decideAfterAttempt`);
+ * - escalated → implementing: the operator's `factory continue`.
+ *
+ * A blocked run can only be closed.
  */
 export const RUN_TRANSITIONS: Record<RunState, readonly RunState[]> = {
   planned: ["approved", ...HALT],
   approved: ["implementing", ...HALT],
   implementing: ["validating", ...HALT],
-  validating: ["validated", ...HALT],
+  validating: ["validated", "implementing", ...HALT],
   validated: ["pr_open", ...HALT],
   pr_open: ["closed", "blocked", "escalated"],
   blocked: ["closed"],
-  escalated: ["closed"],
+  escalated: ["implementing", "closed"],
   closed: [],
 };
 
@@ -86,6 +92,8 @@ export type RunRow = {
   target_ref: string;
   artifact_dir: string;
   deadline_at: string | null;
+  /** The attempt budget, fixed at first approval like the deadline (migration 3); null for older runs. */
+  max_attempts?: number | null;
   issue_number: number | null;
   manifest_id: string | null;
   work_type: string | null;
@@ -170,9 +178,20 @@ export type AttemptRow = {
   contract_digest: string;
   policy_version: string;
   report_path: string | null;
+  failed_phase?: string | null;
+  findings_json?: string | null;
+  flags_json?: string | null;
+  /** Why an `error` attempt errored, and so who can fix it (migration 3, §5.4). */
+  error_cause: ErrorCause | null;
+  error_reason: string | null;
   started_at: string;
   ended_at: string | null;
 };
+
+/** Who can fix an `error` attempt (§5.4): the implementer (code, run) or only the operator (environment). */
+export const ERROR_CAUSES = ["code", "run", "environment"] as const;
+export type ErrorCause = (typeof ERROR_CAUSES)[number];
+export type AttemptError = { cause: ErrorCause; reason: string };
 
 export function getAttempt(db: Database, runId: string, attempt: number): AttemptRow {
   const row = db
@@ -191,7 +210,7 @@ export function transitionAttempt(
   runId: string,
   attempt: number,
   to: AttemptState,
-  opts: { owner?: Owner | null; outcome?: string; reason?: string } = {},
+  opts: { owner?: Owner | null; outcome?: string; reason?: string; error?: AttemptError } = {},
 ): AttemptRow {
   return tx(db, () => {
     const row = getAttempt(db, runId, attempt);
@@ -205,8 +224,18 @@ export function transitionAttempt(
     const ownerJson = opts.owner === undefined ? row.owner_json : opts.owner ? JSON.stringify(opts.owner) : null;
     db.prepare(
       `UPDATE factory_attempts SET status = ?, owner_json = ?, outcome = COALESCE(?, outcome),
+         error_cause = COALESCE(?, error_cause), error_reason = COALESCE(?, error_reason),
          ended_at = ? WHERE run_id = ? AND attempt = ?`,
-    ).run(to, ownerJson, opts.outcome ?? null, done ? nowIso() : null, runId, attempt);
+    ).run(
+      to,
+      ownerJson,
+      opts.outcome ?? null,
+      opts.error?.cause ?? null,
+      opts.error?.reason ?? null,
+      done ? nowIso() : null,
+      runId,
+      attempt,
+    );
     recordEvent(db, runId, "state_change", {
       entity: "attempt",
       attempt,
@@ -214,6 +243,7 @@ export function transitionAttempt(
       to,
       reason: opts.reason ?? null,
       outcome: opts.outcome ?? null,
+      ...(opts.error ? { error: opts.error } : {}),
       owner: opts.owner ?? null,
     });
     return getAttempt(db, runId, attempt);

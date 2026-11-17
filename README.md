@@ -144,9 +144,11 @@ stateDiagram-v2
     validating --> validated: verdict pass or pending_manual
     validated --> pr_open: factory pr
     pr_open --> closed: you merge, archive-work
-    validating --> escalated: fail or error
+    validating --> implementing: fix loop, fail or error the agent can fix
+    validating --> escalated: needs you
     implementing --> escalated: blocker
     pr_open --> escalated: a manual check fails
+    escalated --> implementing: after a failed attempt, before any PR, you choose fix it and continue
     escalated --> closed: archive-work abandons it
     closed --> [*]
     note right of validating
@@ -157,7 +159,8 @@ stateDiagram-v2
 ```
 
 - **Validation preconditions.** If validation can't start (a dirty tree, unusable settings), `factory validate` refuses with `blocked` and changes nothing: the run stays where it is and no attempt is used. The host fixes the cause and validates again, or escalates the run.
-- **Escalation.** When a check fails, the reviewer finds a problem, a blocker comes up or the deadline passes, the run is `escalated` and you get a notification with the report. Any non-terminal state can be escalated, blocked or closed. In this first release a halted run isn't resumed: you close it with `archive-work`, and a new attempt starts with `setup-work`. There is no automatic fix loop yet.
+- **Fix loop.** When a check fails, or the reviewer blocks the attempt, the run goes back to `implementing` on its own: `do-work` fixes exactly what the report found, commits, and validates a new attempt (since 4.1.0). An error the change caused (a check timed out, the tests wrote into the tree) or the run caused (HEAD moved during validation) loops too. Every attempt counts toward `max-attempts`, and the deadline never moves.
+- **Escalation.** The run is `escalated`, and you get a notification with the report, when it needs you: an error from the environment (a check couldn't start, setup failed), `max-attempts` used up, the deadline passed, a sensitive-path sign-off refused or an assertion change the reviewer won't justify, the same check failing the same way twice, or a blocker the agent can't resolve. Any non-terminal state can be escalated, blocked or closed. After a failed attempt, `do-work` offers you **fix it and continue** (the same run, plan and budget, through `factory continue`), **abandon**, or **start over** with `setup-work`. Any other halted run is closed with `archive-work`. Once the PR is open, the run can't take more commits yet (#97).
 - **Resume.** If the runner or the session dies mid-run, `factory resume` kills orphaned check processes and reconciles the attempt. `do-work` and `validate-work` pick up from `factory authorization`'s `next` step, and a `factory pr` that died finds the PR it already opened instead of opening a second one.
 - **Gate.** `gate-mode` is `report-only`: the report recommends, and the merge is always yours.
 
@@ -503,9 +506,16 @@ fusupo
 
 ## Version
 
-**Current:** 4.0.0
+**Current:** 4.1.0
 
 **Changelog:**
+- 4.1.0 (2026-11-17): The factory's bounded fix loop: a failed validation no longer ends the run (#92)
+  - **Fix loop.** After a `fail`, or an `error` the change or the run caused, the runner sends the run back to `implementing` while `max-attempts` has room, and `do-work` fixes the report's blocking findings and validates a new attempt. It escalates instead on an environment error, a used-up budget or deadline, a finding that needs your judgment (a refused sign-off, an unjustified assertion), or a check failing the same way twice (stuck). One decision in the runner (`manifest/factory/fixloop.ts`) is applied by validate, record-review and resume alike, so a crash resolves as the crashed command would have
+  - **`factory continue`.** An escalated run whose latest attempt failed or errored goes back to `implementing` under the same contract and authorization, with the deadline and budget kept. A run whose PR is open can't go back yet (#97). `do-work` offers it in plain words: fix it and continue, abandon, or start over
+  - **Budget fixed at approval.** Like the deadline, `max-attempts` is recorded when the run is first approved, so a commit to the branch's settings can't raise it
+  - **Error causes.** Every `error` attempt records who can fix it, `code`, `run` or `environment`, in its report (`error`) and on the attempt (schema migration 3), a runner error during validation included. `factory authorization` hands the implementer the last attempt's blocking findings and error (`fix`)
+  - **Reports.** Evidence that passed in an earlier attempt and fails now is flagged as a regression, and the PR's report lists every attempt with its outcome
+  - **Crash tests.** `scripts/test-factory.sh` kills the runner at each fix-loop boundary, with the new fault points `record-review.committed` and `continue.committed`
 - 4.0.0 (2026-11-16): The factory's first release is complete, and Escapement acts on GitHub as the AI agent (#65, #80)
   - **Factory first release.** An issue goes from `setup-work` to a PR with a validation report, and the operator touches only plan approval and merge. Interrupted runs resume correctly. The acceptance test (#65) ran a real Escapement issue end to end with every crash boundary interrupted; the findings are fixed below
   - **Behaviour change: skills act on GitHub as the agent (#80).** When an agent identity is configured (`ESCAPEMENT_AGENT_GH_TOKEN` in `~/.config/escapement/agent.env`, or exported), plain `commit-changes` commits with the agent's name and email, and plain `create-pr` pushes with the agent's token. Before, they used your own git identity and credentials. Without an agent identity, or off github.com, they fall back to yours and say so

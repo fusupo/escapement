@@ -186,7 +186,15 @@ async function bundle() {
     const { db, root, run } = await awaiting();
     sh("git", ["commit", "-q", "--allow-empty", "-m", "later"], root);
     await rejects(() => issue(db, run.run_id), /revision_changed/, "a moved HEAD");
-    assert(getAttempt(db, run.run_id, 1).outcome === "error" && getRun(db, run.run_id).state === "escalated", "completes the attempt as error and escalates the run");
+    assert(getAttempt(db, run.run_id, 1).outcome === "error" && getRun(db, run.run_id).state === "implementing", "completes the attempt as error and sends the run back to implementing (fix loop)");
+    const a = getAttempt(db, run.run_id, 1);
+    const rep = JSON.parse(readFileSync(a.report_path!, "utf-8"));
+    assert(
+      a.error_cause === "run" && rep.status === "complete" && rep.outcome === "error" && rep.error?.cause === "run" &&
+        rep.findings.some((f: { id: string; detail: string }) => f.id === "identity" && f.detail.startsWith("revision changed during validation")) &&
+        existsSync(join(run.artifact_dir, "attempts", "1", "report.draft.json")),
+      "a revision change at review time records error cause run",
+    );
     await rejects(() => issue(db, run.run_id), /run_halted|wrong_state/, "and it can't be reviewed afterwards");
   }
   {
@@ -285,20 +293,22 @@ async function finalization() {
 
 async function failures() {
   console.log("\nrecord-review: fail conditions\n");
-  const cases: [string, (v: V) => V][] = [
-    ["supports_criterion partial", (v) => ({ ...v, evidence: v.evidence.map((e) => (e.id === "AC-1.e1" ? { ...e, supports_criterion: "partial" } : e)) })],
-    ["supports_criterion no", (v) => ({ ...v, evidence: v.evidence.map((e) => (e.id === "AC-2.e1" ? { ...e, supports_criterion: "no" } : e)) })],
-    ["procedure_adequate no", (v) => ({ ...v, evidence: v.evidence.map((e) => (e.id === "AC-3.e1" ? { ...e, procedure_adequate: "no" } : e)) })],
-    ["a sensitive concern", (v) => ({ ...v, sensitive_paths: v.sensitive_paths.map((x) => ({ ...x, signoff: x.path === "ci/static.sh" ? "concern" : "approve" })) })],
-    ["an unjustified modified assertion", (v) => ({ ...v, modified_assertions: v.modified_assertions.map((m) => ({ ...m, justified: false })) })],
-    ["a blocking finding", (v) => ({ ...v, findings: [{ severity: "blocking", detail: "leaks the token", location: "src/auth/refresh.ts:1" }] })],
+  // The implementer can fix most failures (the fix loop goes again); a refused
+  // sign-off or an unjustified assertion needs the operator (§6.2).
+  const cases: [string, (v: V) => V, "implementing" | "escalated"][] = [
+    ["supports_criterion partial", (v) => ({ ...v, evidence: v.evidence.map((e) => (e.id === "AC-1.e1" ? { ...e, supports_criterion: "partial" } : e)) }), "implementing"],
+    ["supports_criterion no", (v) => ({ ...v, evidence: v.evidence.map((e) => (e.id === "AC-2.e1" ? { ...e, supports_criterion: "no" } : e)) }), "implementing"],
+    ["procedure_adequate no", (v) => ({ ...v, evidence: v.evidence.map((e) => (e.id === "AC-3.e1" ? { ...e, procedure_adequate: "no" } : e)) }), "implementing"],
+    ["a sensitive concern", (v) => ({ ...v, sensitive_paths: v.sensitive_paths.map((x) => ({ ...x, signoff: x.path === "ci/static.sh" ? "concern" : "approve" })) }), "escalated"],
+    ["an unjustified modified assertion", (v) => ({ ...v, modified_assertions: v.modified_assertions.map((m) => ({ ...m, justified: false })) }), "escalated"],
+    ["a blocking finding", (v) => ({ ...v, findings: [{ severity: "blocking", detail: "leaks the token", location: "src/auth/refresh.ts:1" }] }), "implementing"],
   ];
-  for (const [what, change] of cases) {
+  for (const [what, change, then] of cases) {
     const { db, run, b } = await issued();
     const res = await record(db, run.run_id, change(verdictFor(b)));
     const final = readJson<Record<string, any>>(res.report_path);
     const blocking = final.findings.filter((f: { severity: string; id: string }) => f.severity === "blocking").map((f: { id: string }) => f.id);
-    assert(res.outcome === "fail" && res.run_state === "escalated" && blocking.length === 1, `${what} fails the attempt and escalates the run → ${blocking.join()}`);
+    assert(res.outcome === "fail" && res.run_state === then && blocking.length === 1, `${what} fails the attempt, and the run is ${then} → ${blocking.join()}`);
   }
   {
     const { db, run, b } = await issued({ manual: false });

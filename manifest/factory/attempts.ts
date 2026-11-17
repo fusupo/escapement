@@ -1,8 +1,9 @@
 import type { Database } from "better-sqlite3";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { FactoryError, blocked, nowIso } from "./util.ts";
-import { tx, getRun, getAttempt, recordEvent, type AttemptRow, type RunRow } from "./state.ts";
+import { FactoryError, atomicWrite, blocked, nowIso } from "./util.ts";
+import { tx, getRun, getAttempt, recordEvent, transitionAttempt, type AttemptError, type AttemptRow, type RunRow } from "./state.ts";
+import { schemaErrors } from "./schemas.ts";
 import type { ReportView } from "./report-section.ts";
 import type { Owner } from "./owner.ts";
 
@@ -99,5 +100,55 @@ export function allocateAttempt(
     );
     recordEvent(db, runId, "state_change", { entity: "attempt", attempt, from: null, to: "checks_running", owner: opts.owner });
     return getAttempt(db, runId, attempt);
+  });
+}
+
+/**
+ * Complete an attempt as `error` when no command is left to write its final
+ * report: the identity re-check at review time (review-input,
+ * record-review) and `resume` (§4.7). The draft is kept as
+ * `report.draft.json`, as finalization keeps it, and `report.json` becomes
+ * the final report with the outcome, the structured cause (§5.4) and a
+ * blocking `identity` finding, so every error attempt's report says why.
+ * The caller decides the run's next state.
+ */
+export function completeWithError(
+  db: Database,
+  run: RunRow,
+  attempt: number,
+  error: AttemptError,
+  opts: { owner?: Owner | null; detail?: string } = {},
+): AttemptRow {
+  const dir = attemptDir(run.artifact_dir, attempt);
+  const reportPath = join(dir, "report.json");
+  const keptPath = join(dir, "report.draft.json");
+  const finding = { id: "identity", severity: "blocking" as const, detail: opts.detail ? `${error.reason}: ${opts.detail}` : error.reason };
+  let findings: unknown[] | null = null;
+  if (existsSync(reportPath) || existsSync(keptPath)) {
+    if (!existsSync(keptPath)) copyFileSync(reportPath, keptPath);
+    let draft: Record<string, unknown> | null = null;
+    try {
+      draft = JSON.parse(readFileSync(keptPath, "utf-8"));
+    } catch {
+      draft = null;
+    }
+    if (draft) {
+      findings = [...((draft.findings as unknown[]) ?? []), finding];
+      const final = { ...draft, status: "complete", outcome: "error", error, findings };
+      const problems = schemaErrors("report", final);
+      if (problems.length) throw new FactoryError("internal", `error report for attempt ${attempt} is invalid: ${problems.join("; ")}`);
+      atomicWrite(reportPath, JSON.stringify(final, null, 2) + "\n");
+    }
+  }
+  return tx(db, () => {
+    if (findings) {
+      db.prepare("UPDATE factory_attempts SET report_path = ?, findings_json = ? WHERE run_id = ? AND attempt = ?").run(
+        reportPath,
+        JSON.stringify(findings),
+        run.run_id,
+        attempt,
+      );
+    }
+    return transitionAttempt(db, run.run_id, attempt, "complete", { owner: opts.owner ?? null, outcome: "error", reason: error.reason, error });
   });
 }

@@ -72,7 +72,7 @@ Take the entry of `.result.actions` for `latest_attempt.attempt`:
 | `refinalize` | the verdict is stored and its finalization was interrupted: Phase 3 step 4 with `.file` (the stored `review.json`) |
 | `advanced_run` | the attempt had finished; its run transition is now applied: Phase 1 again |
 | `running` | another process is still working on this attempt: report it and stop |
-| `identity_error` | HEAD moved or the tree changed under the attempt; the attempt is `error` and the run escalated: Phase 4 |
+| `identity_error` | HEAD moved or the tree changed under the attempt; the attempt is `error`, caused by the run, and the run moved on by the fix loop's rules (normally back to implementing): Phase 4 |
 | `needs_attention` | escalate with the detail as the reason and stop with result `error` |
 
 No entry for the latest attempt: Phase 1 again (once). Resume never resets a budget; past the deadline it only reconciles and escalates the run.
@@ -85,7 +85,7 @@ bash "$FACTORY" --json validate '{run_id}'
 
 - **Exit 2 (`.error.kind` blocked):** no attempt was used and the run is unchanged. Report `.error.code` and `.error.message` and stop with result `blocked`. `dirty_tree` names the files: uncommitted work (commit it) or working files missing from `.git/info/exclude` (`factory exclude`).
 - **Exit 1:** report the error and stop with result `error`. No JSON, or exit 128 or more: the runner died (Phase 1).
-- **`.result.outcome` is `fail` or `error`:** the deterministic checks decided; no review is needed, and the run is escalated. Go to Phase 4.
+- **`.result.outcome` is `fail` or `error`:** the deterministic checks decided; no review is needed. The runner has already moved the run on (`.result.run_state`, why in `.result.run_reason`): back to `implementing` for another attempt, or `escalated` when it needs a human. For an `error`, `.result.error` names the cause. Go to Phase 4.
 - **`.result.outcome` is null** (status `awaiting_review`): note `.result.attempt` and go to Phase 3.
 
 ### Phase 3: Review
@@ -106,9 +106,9 @@ bash "$FACTORY" --json validate '{run_id}'
    ```bash
    bash "$FACTORY" --json record-review '{run_id}' {attempt} '{write_to}'
    ```
-   - **`.ok`:** note `.result.outcome` (`pass`, `pending_manual` or `fail`), `.result.report_path` and `.result.run_state`. Go to Phase 4.
+   - **`.ok`:** note `.result.outcome` (`pass`, `pending_manual` or `fail`), `.result.report_path`, `.result.run_state` and `.result.run_reason`. Go to Phase 4.
    - **Blocked `incomplete_verdict` or `invalid_verdict`:** the attempt still awaits review. Run the reviewer again with the same bundle path plus the runner's message, which lists every problem: "Your verdict was refused: {message}. Fix exactly these and write the verdict again." At most two re-runs. If it is still refused, run `factory escalate '{run_id}' --reason 'reviewer verdict refused three times'`, report the problems and stop with result `blocked`.
-   - **Any other refusal or error** (for example `revision_changed`: HEAD moved, so the attempt became `error` and the run escalated): report it and stop with that result.
+   - **Any other refusal or error** (for example `revision_changed`: HEAD moved, so the attempt became `error`, caused by the run, and the run went back to implementing): report it and stop with that result.
 
 ### Phase 4: Report
 
@@ -117,13 +117,18 @@ Read the report (`report_path`, or for a resumed run `{artifact_dir}/attempts/{n
 ```
 🔎 Validation of {run_id}, attempt {n}: {outcome}
    Report: {report_path}
-   Run:    {run_state}
-   {for fail or error: the blocking findings and the failed phase}
+   Run:    {run_state}: {run_reason}
+   {for fail or error: the blocking findings, the failed phase and, for error, its cause}
    {for pending_manual: each evidence item with `executed: "pending_manual"`, its instructions (from the contract), and how to record it}
    {advisory findings, listed: they don't block}
 ```
 
-Return the outcome and report path to the caller. `pass` and `pending_manual` mean the run is `validated` and create-pr can open its PR. `fail`, `error` and `blocked` mean the run waits on a human. The fix loop, where the implementer retries on findings, comes in a later release.
+Return the outcome, report path and run state to the caller. `pass` and `pending_manual` mean the run is `validated` and create-pr can open its PR. After `fail` or `error`, the run state says what follows (the fix loop, docs/FACTORY_DESIGN.md §6.2):
+
+- **`implementing`:** the implementer can fix it. The loop goes again: do-work takes the blocking findings (`factory authorization`'s `fix`), commits a fix and validates a new attempt. Say "attempt {n} {outcome}; going back to fix: {run_reason}".
+- **`escalated`:** it needs a human, and `run_reason` says why: an environment error, the attempts used up (`attempt_budget`), the deadline (`run_deadline`), a finding that needs the operator's judgment (`needs_operator`), or the same failure twice (`stuck`). The operator can still take the run back with `factory continue` (do-work offers it).
+
+`blocked` means the attempt couldn't start; nothing changed.
 
 ## Recording a Manual Check
 
@@ -167,10 +172,11 @@ Use `fail` instead of `pass` for a failed check. Single-quote the note (a `'` in
 
 ---
 
-**Version:** 1.1.1
-**Last Updated:** 2026-11-16
+**Version:** 1.2.0
+**Last Updated:** 2026-11-17
 **Maintained By:** Escapement
 **Changelog:**
+- v1.2.0: The fix loop: after `fail` or `error` the run goes back to implementing or escalates, by the runner's rules; report the run state and reason, and the error's cause (#92)
 - v1.1.1: Fetch the issue text with the GitHub MCP tools only (#80)
 - v1.1.0: Resume after a crash: `next` `validate` and `resume`, the Resuming table (resume's actions), and a runner that dies without JSON goes back through Phase 1 (#65)
 - v1.0.0: validate → fresh-context reviewer → record-review, with a bounded re-run on an incomplete verdict; manual outcomes (#64)

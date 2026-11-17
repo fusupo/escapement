@@ -101,6 +101,40 @@ async function run() {
   m = matchAuthorization(db, here);
   assert(!m.matched && m.reasons.join() === "no_run", "a closed run is no run");
 
+  console.log("\nthe fix handoff (#92)\n");
+  {
+    const r2 = startRun(db, { workItem: "acme/w#42", ctx });
+    approveRun(db, r2.run_id, { contractFile: contractFor(r2.run_id), budgetMs: HOUR });
+    m = matchAuthorization(db, here);
+    assert(m.matched && m.fix === null, "an approved run has nothing to fix yet");
+    transitionRun(db, r2.run_id, "implementing");
+    transitionRun(db, r2.run_id, "validating");
+    const findings = [
+      { id: "evidence:AC-1.e1", severity: "blocking", detail: "test.ts::works: failed: expected 401", evidence_digest: "sha256:" + "a".repeat(64) },
+      { id: "review:1", severity: "blocking", detail: "the diagram shows an edge the code never takes", location: "README.md" },
+      { id: "assertion:test.ts:3", severity: "advisory", detail: "modified assertion" },
+    ];
+    db.prepare(
+      `INSERT INTO factory_attempts (run_id, attempt, status, outcome, head_sha, contract_digest, policy_version, findings_json, report_path, started_at)
+         VALUES (?, 1, 'complete', 'fail', 'abc', ?, 'p', ?, '/art/attempts/1/report.json', 'now')`,
+    ).run(r2.run_id, getRun(db, r2.run_id).contract_digest, JSON.stringify(findings));
+    transitionRun(db, r2.run_id, "implementing", { reason: "attempt 1: fail; fix_loop" });
+    m = matchAuthorization(db, here);
+    assert(
+      m.matched && m.next === "implement" && m.fix?.attempt === 1 && m.fix.outcome === "fail" &&
+        m.fix.blocking_findings.map((f) => f.id).join() === "evidence:AC-1.e1,review:1" &&
+        m.fix.blocking_findings[1].location === "README.md" && m.fix.report_path === "/art/attempts/1/report.json",
+      "an implementing run after a fail carries the blocking findings",
+    );
+    db.prepare("UPDATE factory_attempts SET outcome = 'error', error_cause = 'code', error_reason = 'verify timeout' WHERE run_id = ?").run(r2.run_id);
+    m = matchAuthorization(db, here);
+    assert(m.matched && m.fix?.outcome === "error" && m.fix.error?.cause === "code" && m.fix.error.reason === "verify timeout", "and after an error, its cause");
+    transitionRun(db, r2.run_id, "validating");
+    m = matchAuthorization(db, here);
+    assert(m.matched && m.fix === null, "once validation starts again, there's no handoff");
+    transitionRun(db, r2.run_id, "closed", { action: "abandoned" });
+  }
+
   db.close();
   cleanup();
   console.log("\nAll authorization tests passed.");

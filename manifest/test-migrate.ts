@@ -100,10 +100,43 @@ function run() {
     migrate(db, MIGRATIONS.slice(0, 1));
     assert(schemaVersion(db) === 1, "db pinned at version 1");
     const r = migrate(db);
-    assert(r.from === 1 && r.to === 2, "version 1 db upgrades to 2");
+    assert(r.from === 1 && r.to === MIGRATIONS.length, "version 1 db upgrades to the latest");
     assert(tables(db).includes("factory_locks"), "migration 2 adds factory_locks");
     const items = (db.prepare("SELECT COUNT(*) AS n FROM work_items").get() as { n: number }).n;
     assert(items === 2, "work items survive migration 2");
+    db.close();
+  }
+
+  {
+    // A database at version 2 (the 4.0.0 factory) keeps its attempts and gains the error cause.
+    const db = new Database(":memory:");
+    migrate(db, MIGRATIONS.slice(0, 2));
+    db.exec(
+      `INSERT INTO factory_runs (run_id, work_item, repo, worktree_path, branch, target_ref, artifact_dir, state, started_at)
+         VALUES ('r1', 'w', 'o/r', '/wt', 'b', 'develop', '/a', 'escalated', 'now');
+       INSERT INTO factory_attempts (run_id, attempt, status, outcome, head_sha, contract_digest, policy_version, started_at)
+         VALUES ('r1', 1, 'complete', 'error', 'abc', 'd1', 'p', 'now');`,
+    );
+    const r = migrate(db);
+    const cols = (db.prepare("PRAGMA table_info(factory_attempts)").all() as { name: string }[]).map((c) => c.name);
+    const old = db.prepare("SELECT outcome, error_cause, error_reason FROM factory_attempts WHERE run_id = 'r1'").get() as Record<string, unknown>;
+    assert(
+      r.from === 2 && r.to === 3 && cols.includes("error_cause") && cols.includes("error_reason") && old.outcome === "error" && old.error_cause === null,
+      "migration 3 adds the attempt error columns to a version 2 database",
+    );
+    const runCols = (db.prepare("PRAGMA table_info(factory_runs)").all() as { name: string }[]).map((c) => c.name);
+    const run = db.prepare("SELECT state, max_attempts FROM factory_runs WHERE run_id = 'r1'").get() as Record<string, unknown>;
+    assert(
+      runCols.includes("max_attempts") && run.state === "escalated" && run.max_attempts === null,
+      "migration 3 adds the run's max_attempts to a version 2 database",
+    );
+    throws(() => db.prepare("UPDATE factory_runs SET max_attempts = 0 WHERE run_id = 'r1'").run(), /CHECK constraint/, "max_attempts is at least 1");
+    db.prepare("UPDATE factory_attempts SET error_cause = 'code', error_reason = 'verify timeout' WHERE run_id = 'r1'").run();
+    throws(
+      () => db.prepare("UPDATE factory_attempts SET error_cause = 'gremlins' WHERE run_id = 'r1'").run(),
+      /CHECK constraint/,
+      "error_cause is one of code, run or environment",
+    );
     db.close();
   }
 

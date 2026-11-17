@@ -4,6 +4,7 @@ import { projectContext, resolveWorktree, excludePatterns, mainRepoRoot, repoNam
 import { agentIdentity, pushAsAgent, TOKEN_VAR, NAME_VAR, EMAIL_VAR } from "./factory/github.ts";
 import { matchAuthorization, noMatch, type AuthorizationMatch } from "./factory/authorization.ts";
 import { startRun, approveRun, revokeRun, escalateRun, runStatus, listRuns } from "./factory/runs.ts";
+import { continueRun } from "./factory/fixloop.ts";
 import { getRun } from "./factory/state.ts";
 import { loadSettings, SETTING_DEFAULTS, type FactorySettings } from "./factory/settings.ts";
 import { execCommand, execExitCode } from "./factory/exec.ts";
@@ -72,6 +73,11 @@ Commands:
   escalate <run_id> --reason <text>
                                 Stop the run to wait on a human (no-op when it
                                 is already blocked or escalated)
+  continue <run_id> --reason <text>
+                                Take an escalated run whose latest attempt failed
+                                or errored back to implementing, under the same
+                                contract and authorization (deadline and attempt
+                                budget are not reset)
   check [--contract <file>]     Readiness: is the contract valid and runnable in
                                 this project? Prints ready or needs_human with
                                 questions (no run needed). Without --contract,
@@ -114,7 +120,8 @@ Options:
                         record-manual, archive:
                         how long to wait for locks
                         (default: lock-timeout setting, else ${SETTING_DEFAULTS["lock-timeout"]})
-  --reason <text>       escalate: why the run needs a human
+  --reason <text>       escalate: why the run needs a human; continue: what
+                        the operator decided
   --note <text>         record-manual: what was checked and seen
   --recorder <name>     record-manual: who checked (default: the OS user)
   --title <text>        pr: the PR title (needed to create it)
@@ -220,6 +227,7 @@ const GUARD_SYNC_COMMANDS = new Set([
   "approve",
   "revoke",
   "escalate",
+  "continue",
   "exec",
   "validate",
   "record-review",
@@ -241,6 +249,7 @@ const KNOWN_DB_COMMANDS = new Set([
   "resume",
   "revoke",
   "escalate",
+  "continue",
   "authorization",
   "pr",
   "record-manual",
@@ -357,6 +366,13 @@ function describeMatch(r: AuthorizationMatch): string {
     `  authorizes: ${r.authorizes.join(", ")}`,
     `  deadline:  ${r.deadline_at ?? "-"}`,
     ...(r.pr_number !== null ? [`  pr:        #${r.pr_number}`] : []),
+    ...(r.fix
+      ? [
+          `  fix:       attempt ${r.fix.attempt} ${r.fix.outcome}${r.fix.error ? ` (${r.fix.error.cause}: ${r.fix.error.reason})` : ""}`,
+          ...r.fix.blocking_findings.map((f) => `    - ${f.id}: ${f.detail}`),
+          ...(r.fix.report_path ? [`    report: ${r.fix.report_path}`] : []),
+        ]
+      : []),
   ].join("\n");
 }
 
@@ -561,6 +577,15 @@ async function dispatch(db: Database, command: string, p: Parsed, json: boolean)
       return {
         result: r,
         text: r.changed ? `${runId}: escalated (${r.run.state_reason})` : `${runId}: already ${r.run.state}${r.run.state_reason ? ` (${r.run.state_reason})` : ""}; nothing changed`,
+      };
+    }
+    case "continue": {
+      const runId = need(arg, "run_id");
+      const r = continueRun(db, runId, { reason: need(str(p, "--reason"), "--reason <text>"), owner });
+      const err = r.error ? `, ${r.error.cause}: ${r.error.reason}` : "";
+      return {
+        result: r,
+        text: `${runId}: ${r.changed ? "back to implementing" : "already implementing"} after attempt ${r.attempt} (${r.outcome}${err})\n  attempts: ${r.attempts_used} of ${r.max_attempts} used\n  deadline: ${r.run.deadline_at ?? "-"}`,
       };
     }
     case "revoke": {

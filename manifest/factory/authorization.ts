@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { activeAuthorization, contractDigest, deadlinePassed } from "./runs.ts";
 import { currentReport } from "./attempts.ts";
-import type { RunRow, RunState } from "./state.ts";
+import type { AttemptRow, RunRow, RunState } from "./state.ts";
 
 /**
  * Does the current worktree have a factory run whose active authorization
@@ -42,6 +42,21 @@ export type NextStep = "implement" | "validate" | "resume" | "review" | "pr" | "
 
 export type LatestAttempt = { attempt: number; status: string; outcome: string | null; head_sha: string };
 
+/**
+ * What the implementer goes back to fix (§6.2: findings only): the last
+ * attempt's blocking findings and, for an error, its cause. Set while the
+ * run is implementing after a failed or errored attempt, through the fix
+ * loop or `factory continue`; null otherwise.
+ */
+export type FixHandoff = {
+  attempt: number;
+  outcome: "fail" | "error";
+  error: { cause: string; reason: string } | null;
+  blocking_findings: { id: string; detail: string; location?: string }[];
+  /** The attempt's current report, with every finding and the logs. */
+  report_path: string | null;
+};
+
 export type AuthorizationMatch =
   | { matched: false; reasons: AuthReason[]; run_id: string | null; state: RunState | null }
   | {
@@ -63,6 +78,7 @@ export type AuthorizationMatch =
       pr_number: number | null;
       latest_attempt: LatestAttempt | null;
       next: NextStep;
+      fix: FixHandoff | null;
     };
 
 const MATCHABLE: readonly RunState[] = ["approved", "implementing", "validating", "validated", "pr_open"];
@@ -107,6 +123,30 @@ function prShowsCurrentReport(db: Database, run: RunRow): boolean {
     return false;
   }
   return current !== null && written.attempt === current.attempt && written.report_revision === current.revision;
+}
+
+/** The fix handoff for a run back in implementing after a failed or errored attempt (see FixHandoff). */
+export function fixHandoff(db: Database, run: RunRow): FixHandoff | null {
+  if (run.state !== "implementing") return null;
+  const a = db
+    .prepare("SELECT * FROM factory_attempts WHERE run_id = ? ORDER BY attempt DESC LIMIT 1")
+    .get(run.run_id) as AttemptRow | undefined;
+  if (!a || a.status !== "complete" || (a.outcome !== "fail" && a.outcome !== "error")) return null;
+  let findings: { id: string; severity: string; detail: string; location?: string }[] = [];
+  try {
+    findings = a.findings_json ? JSON.parse(a.findings_json) : [];
+  } catch {
+    findings = [];
+  }
+  return {
+    attempt: a.attempt,
+    outcome: a.outcome,
+    error: a.error_cause ? { cause: a.error_cause, reason: a.error_reason ?? "" } : null,
+    blocking_findings: findings
+      .filter((f) => f.severity === "blocking")
+      .map((f) => ({ id: f.id, detail: f.detail, ...(f.location ? { location: f.location } : {}) })),
+    report_path: a.report_path ?? null,
+  };
 }
 
 export function matchAuthorization(
@@ -162,5 +202,6 @@ export function matchAuthorization(
     pr_number: run.pr_number,
     latest_attempt: latest,
     next: nextStep(run.state, latest, run.state === "pr_open" && prShowsCurrentReport(db, run)),
+    fix: fixHandoff(db, run),
   };
 }
