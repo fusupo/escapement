@@ -96,7 +96,7 @@ bash "$FACTORY" --check && bash "$FACTORY" --json authorization
   ```
   If it fails (`no_agent_token`, or `agent_env_permissions`), stop before any work: "Factory run {run_id} commits and opens its PR as the AI agent: put ESCAPEMENT_AGENT_GH_TOKEN in ~/.config/escapement/agent.env (chmod 600) or export it, then resume." Nothing is escalated; this is setup, not a failure of the run.
 
-**Escalated after a failed attempt.** When `.result.state` is `escalated`, the run has no PR yet (`.result.run.pr_number` is null in `factory status '{run_id}' --json`), and the latest attempt there (`.result.attempts`, the last one) is `complete` with outcome `fail` or `error`, the run stopped to wait on the operator (docs/FACTORY_DESIGN.md §6.2). A run whose PR is open (escalated by a failed manual check, for example) can't go back to implementation yet (#97): offer only abandon and start over. Tell them in plain words why (`.result.run.state_reason`, and the attempt's blocking findings and error from its report), then ask; never show them runner commands:
+**Escalated after a failed attempt.** When `.result.state` is `escalated`, the run has no PR yet (`.result.run.pr_number` is null in `factory status '{run_id}' --json`), and the latest attempt there (`.result.attempts`, the last one) is `complete` with outcome `fail` or `error`, the run stopped to wait on the operator (docs/FACTORY_DESIGN.md §6.2). A run whose PR is open (escalated by a failed manual check, for example) can't go back to implementation yet (#97): offer only abandon and start over. Nor can a run escalated for a rejected manual procedure (`state_reason` names a `judgment:` finding as a rejected manual procedure, #99): the reviewer judged the contract's own instructions inadequate, no change to the code can fix them, and only a new plan under a new approval can. Offer only abandon and start over, and say that in plain words. Tell them in plain words why (`.result.run.state_reason`, and the attempt's blocking findings and error from its report), then ask; never show them runner commands:
 
 ```
 AskUserQuestion:
@@ -512,10 +512,11 @@ Under an authorized run, `factory authorization` has already matched the branch,
 
 ---
 
-**Version:** 1.4.0
+**Version:** 1.4.1
 **Last Updated:** 2026-11-17
 **Maintained By:** Escapement
 **Changelog:**
+- v1.4.1: A run escalated for a rejected manual procedure offers only abandon and start over: its instructions are in the approved contract, so no fix can help (#99)
 - v1.4.0: The fix loop (#92): after a failed or errored attempt the run comes back to implementing with `fix` (its blocking findings and error), and do-work fixes, commits and validates again; an escalated run after a failed attempt offers "fix it and continue" (`factory continue`), "abandon" or "start over"
 - v1.3.1: Push reminders push as the agent with `factory push` (#80)
 - v1.3.0: Authorized path: `next` `validate`; a crash inside validation is validate-work's to recover; a `factory pr` that dies is run again and recovers the PR (#65)
