@@ -215,7 +215,7 @@ if [[ $? -eq 0 && "$(jq -r '.result.status == "needs_human" and ([.result.questi
 
 # schema: published JSON Schema paths, or content with --print
 out="$(ESCAPEMENT_MANIFEST_DIR="$tmp/nodb" f --json schema)"
-if [[ "$(jq -r '[.result.schemas[].name] == ["contract", "report", "verdict", "readiness"]' <<<"$out")" == true && ! -e "$tmp/nodb" ]]; then ok; else bad "schema-list" "$out"; fi
+if [[ "$(jq -r '[.result.schemas[].name] == ["contract", "report", "verdict", "readiness", "critique"]' <<<"$out")" == true && ! -e "$tmp/nodb" ]]; then ok; else bad "schema-list" "$out"; fi
 path="$(f schema contract)"
 if [[ -f "$path" && "$(jq -r '."$id"' "$path")" == *"/contract.schema.json" ]]; then ok; else bad "schema-path" "$path"; fi
 out="$(f --json schema verdict --print)"
