@@ -147,7 +147,7 @@ The runner reads the factory keys of `## Escapement Settings` (FACTORY_DESIGN.md
 - The contract must validate against `schemas/factory/contract.schema.json`, with unique criterion and evidence IDs. Its `run_id` must be this run, and its `issue`, if set, the run's issue. Otherwise `bad_contract` lists every problem.
 - A contract names no commands. Checks come only from settings, so a contract can't skip or narrow a required check.
 - The digest is the `sha256:` hash of the contract file's bytes.
-- The first approval sets `deadline_at` to `approved_at` plus `--run-budget`. Later approvals never move the deadline.
+- The first approval sets `deadline_at` to `approved_at` plus `--run-budget`, and `max_attempts` to the worktree's `max-attempts` setting. Later approvals never move either, and the fix loop, `validate` and `continue` use the recorded budget, so a later commit to the branch's settings can't change it (#92).
 - Approving a different contract marks the active authorization `superseded` and issues a new one.
 - Approving the same contract again does nothing.
 - A run can be approved while it is `planned`, `approved` or `implementing`.
@@ -225,11 +225,11 @@ The run must be `approved`, `implementing` or `validating` (otherwise `wrong_sta
 | `fix_loop` | `implementing` | a `fail`, or an `error` caused by the code or the run, with attempts left |
 | `run_deadline` | `escalated` | the run deadline has passed |
 | `needs the operator` | `escalated` | an `error` caused by the environment |
-| `attempt_budget` | `escalated` | `max-attempts` are used, interrupted ones included |
+| `attempt_budget` | `escalated` | the run's attempt budget (`max-attempts`, fixed at approval) is used, interrupted attempts included |
 | `needs_operator` | `escalated` | a blocking `signoff:` or `justification:` finding (after review) |
 | `stuck` | `escalated` | a check or evidence finding with the same `evidence_digest` as in the attempt before |
 
-- **Error causes.** An `error` attempt's report has `error: {cause, reason}`, and the attempt row has `error_cause` and `error_reason` (`status`). `code`: a check timed out or hung, the checks wrote into the tree, or verify's results are missing, unreadable or empty. `run`: HEAD moved or the tree changed during validation, or before review. `environment`: a check couldn't start (`spawn_failed`), `setup` failed, a command evidence `cwd` is outside the worktree, or a runner error. `validate` returns it as `error`.
+- **Error causes.** An `error` attempt's report has `error: {cause, reason}`, and the attempt row has `error_cause` and `error_reason` (`status`). `code`: a check timed out or hung, the checks wrote into the tree, or verify's results are missing, unreadable or empty. `run`: HEAD moved or the tree changed during validation, or before review. `environment`: a check couldn't start (`spawn_failed`), `setup` failed, a command evidence `cwd` is outside the worktree, or a runner error. `validate` returns it as `error`. When the runner itself fails mid-attempt, it still writes `report.json` (outcome `error`, a blocking `runner` finding, the invocations so far) before the command fails.
 - **Regression flags.** Evidence that passed in an earlier attempt of the run and doesn't pass now is flagged `regression: evidence {id} passed in attempt {k} and is {executed} now`.
 - Phases stop at the first failure; evidence after a static failure is `not_run`.
 
