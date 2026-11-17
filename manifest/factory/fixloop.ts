@@ -31,7 +31,19 @@ export const FIX_LOOP = "implementing" satisfies RunState;
  */
 const OPERATOR_FINDINGS = ["signoff:", "justification:"];
 
-type Finding = { id: string; severity: string; detail?: string; evidence_digest?: string };
+type Finding = { id: string; severity: string; detail?: string; evidence_digest?: string; evidence_type?: string };
+
+/**
+ * A reviewer `judgment:{id}` finding on manual evidence: the reviewer judged
+ * the procedure inadequate (`procedure_adequate: no`). Its instructions are
+ * in the approved contract, which the implementer can't change, so another
+ * attempt can only hit the same rejection (#99). A judgment on test or
+ * command evidence, and one recorded before findings carried
+ * `evidence_type`, is the implementer's to fix.
+ */
+function rejectedProcedure(f: Finding): boolean {
+  return f.id.startsWith("judgment:") && f.evidence_type === "manual";
+}
 
 function blockingFindings(a: Pick<AttemptRow, "findings_json">): Finding[] {
   if (!a.findings_json) return [];
@@ -92,7 +104,8 @@ export function attemptBudget(run: RunRow, override?: number): number {
  *    (`attempt_budget`). The budget is the run's `max_attempts`, fixed at
  *    approval (`attemptBudget`).
  * 7. A blocking finding that needs the operator's judgment → escalated
- *    (`needs_operator`).
+ *    (`needs_operator`): a refused sign-off, an unjustified assertion, or a
+ *    rejected manual procedure (a re-approved contract is the only fix).
  * 8. A deterministic blocking finding unchanged since the last attempt →
  *    escalated (`stuck`).
  * 9. Otherwise → implementing: the fix loop goes again.
@@ -121,10 +134,12 @@ export function decideAfterAttempt(
   const max = attemptBudget(run, opts.maxAttempts);
   if (used >= max) return escalate(`attempt_budget: ${used} of ${max} attempts used`);
 
-  const operator = blockingFindings(a)
-    .map((f) => f.id)
-    .filter((id) => OPERATOR_FINDINGS.some((p) => id.startsWith(p)));
-  if (operator.length) return escalate(`needs_operator: ${operator.join(", ")}`);
+  const blocking = blockingFindings(a);
+  const operator = blocking.filter((f) => OPERATOR_FINDINGS.some((p) => f.id.startsWith(p)) || rejectedProcedure(f)).map((f) => f.id);
+  if (operator.length) {
+    const contract = blocking.some(rejectedProcedure) ? " (a rejected manual procedure: only a re-approved contract can change it)" : "";
+    return escalate(`needs_operator: ${operator.join(", ")}${contract}`);
+  }
 
   const stuck = stuckFindings(db, runId, attempt);
   if (stuck.length) return escalate(`stuck: ${stuck.join(", ")} unchanged since attempt ${attempt - 1}`);
