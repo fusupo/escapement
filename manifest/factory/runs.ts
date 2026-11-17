@@ -136,15 +136,17 @@ const APPROVABLE = ["planned", "approved", "implementing"] as const;
  * - The contract must be valid (schemas/factory/contract.schema.json), be
  *   for this run, and name the run's issue if it names one (`bad_contract`).
  * - Copies the contract to `{artifact_dir}/contract.json` and stores its digest.
- * - The first approval sets `deadline_at = approved_at + budget`. Later
- *   approvals never move it (budgets are not reset).
+ * - The first approval sets `deadline_at = approved_at + budget` and
+ *   `max_attempts` (from `opts.maxAttempts`, else the worktree's
+ *   `max-attempts` setting). Later approvals never move either (budgets
+ *   are not reset), so a later commit to the settings can't change them.
  * - Approving a different contract supersedes the active authorization.
  *   Approving the same contract again changes nothing.
  */
 export function approveRun(
   db: Database,
   runId: string,
-  opts: { contractFile: string; budgetMs: number; cwd?: string; owner?: Owner },
+  opts: { contractFile: string; budgetMs: number; maxAttempts?: number; cwd?: string; owner?: Owner },
 ): { run: RunRow; authorization: AuthorizationRow; changed: boolean; superseded: string | null } {
   const path = resolve(opts.cwd ?? process.cwd(), opts.contractFile);
   let content: Buffer;
@@ -183,9 +185,11 @@ export function approveRun(
        VALUES (?, ?, '{}', ?, 'active', ?)
        ON CONFLICT (run_id, contract_digest) DO UPDATE SET status = 'active', approved_at = excluded.approved_at, ended_at = NULL`,
     ).run(runId, digest, JSON.stringify(AUTHORIZES), nowIso(now));
+    const maxAttempts = opts.maxAttempts ?? readSettings(run.worktree_path).settings.maxAttempts;
     db.prepare(
-      "UPDATE factory_runs SET contract_digest = ?, tier_proposed = ?, deadline_at = COALESCE(deadline_at, ?) WHERE run_id = ?",
-    ).run(digest, contract.risk_tier_proposed, nowIso(new Date(now.getTime() + opts.budgetMs)), runId);
+      `UPDATE factory_runs SET contract_digest = ?, tier_proposed = ?, deadline_at = COALESCE(deadline_at, ?),
+         max_attempts = COALESCE(max_attempts, ?) WHERE run_id = ?`,
+    ).run(digest, contract.risk_tier_proposed, nowIso(new Date(now.getTime() + opts.budgetMs)), maxAttempts, runId);
     recordEvent(db, runId, "state_change", {
       entity: "authorization",
       to: "active",

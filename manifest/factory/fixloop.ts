@@ -70,9 +70,13 @@ export function attemptsUsed(db: Database, runId: string): number {
   return (db.prepare("SELECT COUNT(*) AS n FROM factory_attempts WHERE run_id = ?").get(runId) as { n: number }).n;
 }
 
-/** The run's `max-attempts`, from its worktree's settings (the default when they can't be read). */
-export function maxAttemptsFor(worktree: string): number {
-  return readSettings(worktree).settings.maxAttempts;
+/**
+ * The run's attempt budget: an explicit override, else the `max_attempts`
+ * fixed at its first approval, else (a run approved before migration 3)
+ * its worktree's `max-attempts` setting.
+ */
+export function attemptBudget(run: RunRow, override?: number): number {
+  return override ?? run.max_attempts ?? readSettings(run.worktree_path).settings.maxAttempts;
 }
 
 /**
@@ -84,8 +88,9 @@ export function maxAttemptsFor(worktree: string): number {
  * 4. The run deadline has passed → escalated (`run_deadline`).
  * 5. An `error` caused by the environment (or with no recorded cause) →
  *    escalated: attempts are never spent on a broken machine.
- * 6. `max-attempts` used up (interrupted attempts count) → escalated
- *    (`attempt_budget`).
+ * 6. The attempt budget used up (interrupted attempts count) → escalated
+ *    (`attempt_budget`). The budget is the run's `max_attempts`, fixed at
+ *    approval (`attemptBudget`).
  * 7. A blocking finding that needs the operator's judgment → escalated
  *    (`needs_operator`).
  * 8. A deterministic blocking finding unchanged since the last attempt →
@@ -113,7 +118,7 @@ export function decideAfterAttempt(
     return escalate(`needs the operator: ${a.error_reason ?? "an environment error"}`);
   }
   const used = attemptsUsed(db, runId);
-  const max = opts.maxAttempts ?? maxAttemptsFor(run.worktree_path);
+  const max = attemptBudget(run, opts.maxAttempts);
   if (used >= max) return escalate(`attempt_budget: ${used} of ${max} attempts used`);
 
   const operator = blockingFindings(a)
@@ -200,7 +205,7 @@ export function continueRun(
     const latest = latestAttempt(db, runId);
     const failed = latest !== null && latest.status === "complete" && (latest.outcome === "fail" || latest.outcome === "error");
     const used = attemptsUsed(db, runId);
-    const max = opts.maxAttempts ?? maxAttemptsFor(run.worktree_path);
+    const max = attemptBudget(run, opts.maxAttempts);
     const answer = (r: RunRow, changed: boolean): ContinueResult => ({
       run: r,
       changed,

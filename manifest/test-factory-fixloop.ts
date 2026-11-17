@@ -117,6 +117,19 @@ async function run() {
     );
   }
 
+  {
+    const { db, root, run } = await project({ settings: SETTINGS + "- **max-attempts**: 2\n", branch: FAILING });
+    // After approval, the branch raises its own budget: the run keeps the approved one.
+    commit(root, { "CLAUDE.md": SETTINGS + "- **max-attempts**: 5\n" });
+    assert((await validate(db, run.run_id)).run_state === "implementing", "attempt 1 of 2 loops");
+    commit(root, { "src/app.ts": "export const app = 4;\n" });
+    const r = await validate(db, run.run_id);
+    assert(
+      getRun(db, run.run_id).max_attempts === 2 && r.run_state === "escalated" && /attempt_budget: 2 of 2/.test(r.run_reason ?? ""),
+      "max-attempts is fixed at approval, not read from the branch",
+    );
+  }
+
   console.log("\nStuck detection (§6.2)\n");
   {
     const { db, root, run } = await project({ branch: STATIC_MSG });

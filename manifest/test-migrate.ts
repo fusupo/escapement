@@ -124,6 +124,13 @@ function run() {
       r.from === 2 && r.to === 3 && cols.includes("error_cause") && cols.includes("error_reason") && old.outcome === "error" && old.error_cause === null,
       "migration 3 adds the attempt error columns to a version 2 database",
     );
+    const runCols = (db.prepare("PRAGMA table_info(factory_runs)").all() as { name: string }[]).map((c) => c.name);
+    const run = db.prepare("SELECT state, max_attempts FROM factory_runs WHERE run_id = 'r1'").get() as Record<string, unknown>;
+    assert(
+      runCols.includes("max_attempts") && run.state === "escalated" && run.max_attempts === null,
+      "migration 3 adds the run's max_attempts to a version 2 database",
+    );
+    throws(() => db.prepare("UPDATE factory_runs SET max_attempts = 0 WHERE run_id = 'r1'").run(), /CHECK constraint/, "max_attempts is at least 1");
     db.prepare("UPDATE factory_attempts SET error_cause = 'code', error_reason = 'verify timeout' WHERE run_id = 'r1'").run();
     throws(
       () => db.prepare("UPDATE factory_attempts SET error_cause = 'gremlins' WHERE run_id = 'r1'").run(),

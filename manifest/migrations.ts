@@ -33,7 +33,7 @@ export const MIGRATIONS: Migration[] = [
   },
   {
     version: 3,
-    name: "attempt error cause, for the fix loop",
+    name: "attempt error cause and the run's approved max-attempts, for the fix loop",
     up: (db) => db.exec(readFileSync(resolve(__dirname, "migrations", "003-fix-loop.sql"), "utf-8")),
   },
 ];

@@ -18,7 +18,7 @@ import { captureIdentity, treeStatus, describeDirty, identityHolds, lockfileDige
 import { classifyChanges, settingsAt, type Classification } from "./classify.ts";
 import { parseFactorySettings } from "./settings.ts";
 import { readResults, resultFiles, resolveSelector, executedCount, parseSelector, type TestCase } from "./junit.ts";
-import { advanceRun } from "./fixloop.ts";
+import { advanceRun, attemptBudget } from "./fixloop.ts";
 import type { Owner } from "./owner.ts";
 
 /**
@@ -367,7 +367,7 @@ export async function validateRun(db: Database, runId: string, opts: ValidateOpt
       targetSha: identity.target_sha,
       contractDigest: prep.authorization.contract_digest,
       policyVersion: policy,
-      maxAttempts: settings.maxAttempts,
+      maxAttempts: attemptBudget(prep.run),
     });
     tx(db, () => {
       const r = getRun(db, runId);
@@ -580,7 +580,7 @@ async function runPhases(
         reason: error?.reason ?? `${failedPhase} failed`,
         ...(outcome === "error" && error ? { error } : {}),
       });
-      advanceRun(db, run.run_id, at.attempt, { maxAttempts: settings.maxAttempts });
+      advanceRun(db, run.run_id, at.attempt);
     }
     return {
       run_id: run.run_id,

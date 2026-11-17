@@ -92,6 +92,8 @@ export type RunRow = {
   target_ref: string;
   artifact_dir: string;
   deadline_at: string | null;
+  /** The attempt budget, fixed at first approval like the deadline (migration 3); null for older runs. */
+  max_attempts?: number | null;
   issue_number: number | null;
   manifest_id: string | null;
   work_type: string | null;

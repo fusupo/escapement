@@ -161,6 +161,22 @@ async function run() {
   transitionRun(db, e.run_id, "closed", { action: "abandoned" });
   throws(() => escalateRun(db, e.run_id, { reason: "x" }), /run_closed/, "a closed run can't be escalated");
 
+  console.log("\nthe attempt budget is fixed at approval (#92)\n");
+  {
+    const b = startRun(db, { workItem: "#90", ctx: { ...ctx, worktreePath: "/budget" }, artifactDir: tempDir() });
+    approveRun(db, b.run_id, { contractFile: contractFor(b.run_id), budgetMs: HOUR, maxAttempts: 4 });
+    const first = getRun(db, b.run_id);
+    approveRun(db, b.run_id, { contractFile: contractFor(b.run_id, { risk_tier_proposed: "sensitive" }), budgetMs: 9 * HOUR, maxAttempts: 9 });
+    const again = getRun(db, b.run_id);
+    assert(
+      first.max_attempts === 4 && again.max_attempts === 4 && again.deadline_at === first.deadline_at,
+      "approval records max-attempts once; re-approval keeps it",
+    );
+    const d = startRun(db, { workItem: "#91", ctx: { ...ctx, worktreePath: "/budget-default" }, artifactDir: tempDir() });
+    approveRun(db, d.run_id, { contractFile: contractFor(d.run_id), budgetMs: HOUR });
+    assert(getRun(db, d.run_id).max_attempts === 3, "without one, the worktree's max-attempts setting is recorded (default 3)");
+  }
+
   console.log("\ncontinue (#92)\n");
   {
     const owner = currentOwner("test continue");
