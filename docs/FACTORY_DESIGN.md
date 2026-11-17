@@ -114,7 +114,7 @@ One run through the first release. This table only gathers what §3.6, §4.1, §
 
 ### 2.2 Next (in order)
 
-1. **Bounded fix loop** — on `fail`, implementer iterates on findings instead of stopping.
+1. **Bounded fix loop** — on `fail`, implementer iterates on findings instead of stopping. **Done** (#92, §6.2).
 2. **Plan critique** — one round, measured from its first run.
 3. **Gate in report-only mode** — compute and record a recommendation; always ping.
 
@@ -341,8 +341,9 @@ Limits: these measures make tampering visible, not impossible. An agent with she
 ```
 planned → approved → implementing → validating → validated → pr_open → closed
                           ↑              │
-                          └── failed ────┘            (fix loop: next)
+                          └── failed ────┘            (fix loop, §6.2)
 any non-terminal → blocked | escalated     (waiting on human)
+escalated → implementing                    (factory continue, §6.2)
 closed: merged | rejected | abandoned       (terminal)
 ```
 
@@ -369,7 +370,7 @@ any non-complete → interrupted   (set only by resume, per the rules below)
 - `record-review` is idempotent: re-recording the same verdict (by digest) is a no-op; a different verdict for a `complete` attempt is rejected.
 - **Budgets:** attempt count and run deadline are enforced (§4.1); agent time and tokens are summed from recorded phases and reported, advisory in the first release. Resumption never resets any of them.
 - *As built (#65):* a crash is reproduced with a test-only fault variable that SIGKILLs the runner at a named point (`ESCAPEMENT_FACTORY_FAULT`, [FACTORY_CLI.md](FACTORY_CLI.md#fault-injection-testing-only)), and `scripts/test-factory.sh` crashes the real runner at each boundary above. Two gaps it found are fixed: a check the dead runner had started kept running (its process group is now recorded on the build lock and killed by `resume` or whoever takes the lock over), and `factory authorization` sent a `finalizing` attempt to `review`, which `review-input` refuses. Its `next` is now `resume` for an attempt left mid-way and `validate` after an interrupted one; skills treat a runner that dies without JSON as a crash and resume.
-- In the first release, `failed` stops the run in `escalated` with a report; the fix loop (next) adds the `failed → implementing` edge.
+- In the first release, `failed` stopped the run in `escalated` with a report. *As built (#92):* the fix loop adds `validating → implementing` (the `failed` edge above), taken by the runner itself, and `escalated → implementing`, taken by the operator with `factory continue` (§6.2). A blocked run still only closes, and `validated` and `pr_open` have no way back yet (#97). After an attempt completes, one decision (`manifest/factory/fixloop.ts`) picks the run's next state, and validate, review-input, record-review and resume all apply it, so the "complete, run state not advanced" row of the resume table resolves exactly as the crashed command would have.
 
 ### 4.8 Idempotent PR creation
 
@@ -550,7 +551,7 @@ Contracts name no commands in the first release: every check comes from project 
 | `pass` | all phases passed; reviewer found no blocking issues |
 | `fail` | check failure or blocking review finding; actionable by the implementer |
 | `blocked` | cannot validate: dirty tree, contract mismatch, inactive authorization, missing config |
-| `error` | infrastructure: crash, deadline, lock-wait exceeded, checks modified the tree |
+| `error` | infrastructure: crash, deadline, lock-wait exceeded, checks modified the tree. *As built (#92):* every `error` records its cause in the report (`error: {cause, reason}`) and on the attempt: `code` (a check timed out or hung, the checks wrote into the tree, test results the change broke), `run` (the revision changed during validation) or `environment` (a check couldn't start, `setup` failed, a runner error). The runner sets the cause where the error happens, never from the reason text |
 | `pending_manual` | all automatable evidence passed; `manual` items await a human |
 | `interrupted` | attempt didn't complete (set on resume) |
 
@@ -579,13 +580,13 @@ With an active authorization, `do-work`:
 2. commits via `commit-changes` (no confirmation);
 3. calls `factory validate`, then the reviewer, then `factory record-review`;
 4. on `pass` / `pending_manual`: pushes the branch and calls `factory pr` → state `pr_open`, notify operator;
-5. on `fail` / `blocked` / `error`: state `escalated`, notify operator with the report; stop.
+5. on `fail` / `blocked` / `error`: state `escalated`, notify operator with the report; stop. (Since #92 the fix loop, §6.2, sends a `fail` or an implementer-fixable `error` back to step 1 instead.)
 
 No new agent role; the existing confirmations are skipped only under authorization.
 
 *As built (#64):* `do-work` asks `factory authorization` first and routes on its `next`. `validate-work` (new) runs step 3, re-running the reviewer at most twice on an incomplete verdict. `create-pr` hands its title and narrative to `factory pr`. Step 5 also covers what the runner can't see: a blocked precondition or a blocker the implementer can't resolve goes through the new `factory escalate`, so the run shows why it stopped. Without an agent identity (`ESCAPEMENT_AGENT_GH_TOKEN`), `do-work` stops before implementing. Notification is a push notification plus the session's final message. `archive-work` copies the contract, reports, verdicts and PR body into the archive and closes the run with `factory archive --close`, as merged or abandoned from its PR, so the worktree can start its next run.
 
-### 6.2 Fix loop (next)
+### 6.2 Fix loop
 
 On `fail`, the implementer receives findings only, fixes, commits, and re-validates.
 
@@ -593,6 +594,16 @@ On `fail`, the implementer receives findings only, fixes, commits, and re-valida
 - **Stuck:** a blocking finding whose `evidence_digest` is unchanged across two consecutive attempts → `escalated`. A repeated finding ID with changing evidence is progress, not stuck.
 - **Regression:** evidence that passed in an earlier attempt and now fails is flagged.
 - `blocked` / `error` always escalate; they aren't the implementer's to fix blindly.
+
+*As built (#92):*
+
+- **Which outcomes loop.** After a `fail`, or an `error` caused by the code or the run (§5.4), the runner itself moves the run `validating → implementing`. The rules, in order (`decideAfterAttempt` in `manifest/factory/fixloop.ts`): `pass` / `pending_manual` → `validated`; past the deadline → `escalated` (`run_deadline`); an `environment` error → `escalated`, so attempts are never spent on a broken machine; `max-attempts` used, interrupted attempts included → `escalated` (`attempt_budget`); a blocking `signoff:` or `justification:` finding (a refused sensitive-path or policy sign-off, an assertion change the reviewer won't justify) → `escalated` (`needs_operator`); stuck → `escalated`; otherwise → `implementing`. The run's `state_reason` says which, and `validate` and `record-review` return it as `run_reason`. `error` no longer always escalates: the cause decides.
+- **Stuck compares the runner's own findings only.** Check and evidence findings carry an `evidence_digest` of their normalized failure output. Reviewer findings (`review:N`) don't: each attempt's reviewer is fresh and words the same problem differently, so they are bounded by `max-attempts` alone.
+- **Regression** is a report flag, `regression: evidence {id} passed in attempt {k} and is {executed} now`. It informs the implementer and the reviewer; it never fails an attempt on its own.
+- **The handoff.** While the run is back in `implementing`, `factory authorization` carries `fix`: the attempt, its outcome, its blocking findings, the error's cause and the report path. `next` stays `implement`. `do-work` fixes exactly those findings, commits, and validates a new attempt. It escalates itself when a fix would change the contract (that needs `approve` again), the project's checks or test configuration, or an assertion the reviewer won't accept.
+- **The operator's way back.** `factory continue '<run_id>' --reason …` takes an `escalated` run whose latest attempt was a `fail` or `error` (any cause: the operator judges whether the environment is fixed) back to `implementing`. Same contract, digest and authorization; the deadline and the attempt budget are never reset, and a passed deadline refuses. `do-work` offers it in plain words, with "abandon" and "start over", and runs the commands itself. A `blocked` run isn't continued: the manifest tracks what blocks work.
+- **The PR** opens only after a `pass` or `pending_manual` attempt, as before, and its report lists every attempt with its outcome when there was more than one. Re-entering implementation after the PR is open, including after a failed manual check, is #97.
+- **Crash safety.** New fault points `record-review.committed` and `continue.committed`. `scripts/test-factory.sh` kills the runner after a failed attempt moved the run back, during the next attempt's checks, after a review sent it back and after `continue`, and checks that `resume` and `next` carry on with nothing reset.
 - **Narrowed verify between attempts:** a contract may name a faster `narrow_verify` (only the tests relevant to the criteria) so fix attempts get quick feedback. It never replaces a required check: the attempt that can produce `pass` always runs every `required-checks` command in full. Deferred from the first release (#60): there, validation runs once per attempt and `verify` is required by default, so a narrowed command would never run.
 
 ### 6.3 Gate
@@ -760,7 +771,7 @@ All keys optional. Missing `static`/`verify` → `blocked` ("not configured"). `
 
 ## 10. Build Order
 
-Status as of 2026-11-16; tracked in #66.
+Status as of 2026-11-17; tracked in #66.
 
 1. **#57** — context-path detection. **Done** (PR #68). Found alongside it and also done: **#67**, the manifest skills run their CLI through a plugin-root wrapper, `scripts/manifest.sh` (PR #69).
 2. **#58 Shared manifest location + versioned schema** — one per-user manifest database independent of plugin and project location; `PRAGMA user_version` and ordered migrations replacing `ensureSchema` (§2.5). **Done.**
@@ -777,7 +788,7 @@ Status as of 2026-11-16; tracked in #66.
    → *first release complete*
 
 **Host-agnostic interface (added 2026-11-15 to #59–#62).** The factory must be usable by hosts other than the Escapement skills, for example Escapement Studio calling it as a subprocess. Requirements: `--json` output on every command; external work-item IDs (no required manifest `work_items` row; `manifest_id` optional in the contract); storage passed explicitly (`--project-root`, optional artifact-dir override); invocation through a plugin-root wrapper (`scripts/factory.sh`) with no skill calls from the runner; contract, report and verdict schemas published as standalone JSON Schema; the `.git/info/exclude` obligation for hosts documented and tested; the reviewer defined as a prompt plus verdict schema, with the Claude Code agent as a thin wrapper.
-10. **Bounded fix loop.**
+10. **#92 Bounded fix loop.** **Done.** The runner loops a `fail` or an implementer-fixable `error` back to implementing within `max-attempts`, with stuck detection on deterministic findings, regression flags and error causes (migration 3); `factory continue` is the operator's way back from `escalated`; the PR shows the attempt history; crash tests at each boundary (§6.2). Re-entry after the PR is open is #97.
 11. **Plan critique**, one round.
 12. **Gate, report-only.**
 13. **Later:** merge-result validation, enforcing gate, async escalation, hidden scenarios, test-first, outer loop.

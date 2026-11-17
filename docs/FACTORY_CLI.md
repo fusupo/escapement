@@ -71,6 +71,7 @@ pr/body.md                      the PR description as last sent (pr)
 | `resume <run_id>` | Reconcile an interrupted run (§4.7) | yes, reconciliation only |
 | `revoke <run_id>` | End the active authorization | yes |
 | `escalate <run_id> --reason <text>` | Stop the run to wait on a human | yes |
+| `continue <run_id> --reason <text>` | Take an escalated run whose latest attempt failed or errored back to `implementing` (the fix loop's operator path) | **no** |
 | `authorization` | Does this worktree's run let skills act without asking? Read-only; never creates the database | yes |
 | `agent` | The AI agent's commit identity. No database needed | n/a |
 | `push` | Push the current branch as the agent, with no run (plain skills). Never forced, never the base branch, `main` or `master`. No database needed | n/a |
@@ -99,7 +100,7 @@ Options:
 | `--timeout <dur>` | exec, validate (per command) | `command-timeout` setting, else `15m` |
 | `--issue-file <file>` | review-input | none |
 | `--lock-timeout <dur>` | exec, validate, review-input, record-review, resume, pr, record-manual, archive | `lock-timeout` setting, else `30m` |
-| `--reason <text>` | escalate (required) | none |
+| `--reason <text>` | escalate, continue (required) | none |
 | `--title <text>` | pr (needed to create the PR) | none |
 | `--body-file <file>` | pr: the host's PR description | the PR's own description on update; none on create |
 | `--note <text>` | record-manual (required) | none |
@@ -188,7 +189,7 @@ The run must be `approved`, `implementing` or `validating` (otherwise `wrong_sta
 
 **2. Identity.** The attempt records `head_sha`, `target_ref`, `target_sha` and `merge_base_sha`, plus `policy_version` (`factory@{version}+settings:{digest}`) and `lockfile_digest` (over the tracked lockfiles, such as `package-lock.json`, `Cargo.lock` or `go.sum`, or null). The run moves to `validating`.
 
-**3. setup.** Runs when `setup` is configured and the lockfile digest differs from the last successful setup in this run, which is always the case on the first attempt. If `setup` is a required check, it runs on every attempt. A failed setup makes the attempt `error`.
+**3. setup.** Runs when `setup` is configured and the lockfile digest differs from the last successful setup in this run, which is always the case on the first attempt. If `setup` is a required check, it runs on every attempt. A failed setup makes the attempt `error`, caused by the environment.
 
 **4. static.**
 - Runs the `static` command; a non-zero exit fails the phase.
@@ -212,12 +213,24 @@ The run must be `approved`, `implementing` or `validating` (otherwise `wrong_sta
 - **manual evidence** is `pending_manual`.
 - A failed item, or a non-zero verify exit, fails the phase.
 
-**6. Post-check.** After the last command, HEAD must still be `head_sha` and the tree clean. Otherwise the attempt is `error`: "revision changed during validation" or "checks are not side-effect free".
+**6. Post-check.** After the last command, HEAD must still be `head_sha` and the tree clean. Otherwise the attempt is `error`: "revision changed during validation" (caused by the run) or "checks are not side-effect free" (caused by the code).
 
 **7. Report and transitions.**
 - The report goes to `attempts/{n}/report.json` (`schemas/factory/report.schema.json`). Its `invocations` list binds each log and results file, with its digest, to the command that produced it.
 - All phases pass (or the evidence phase is `pending_manual`): the attempt is `awaiting_review` with outcome null, and the run stays `validating` until `record-review` records a verdict.
-- A failure or error completes the attempt (`fail` or `error`) and escalates the run. There is no fix loop in the first release.
+- A failure or error completes the attempt (`fail` or `error`), and the fix loop (design §6.2) moves the run on: back to `implementing` when the implementer can fix it, else `escalated`. The result's `run_state` and `run_reason` say which and why:
+
+| `run_reason` contains | Run | When |
+|---|---|---|
+| `fix_loop` | `implementing` | a `fail`, or an `error` caused by the code or the run, with attempts left |
+| `run_deadline` | `escalated` | the run deadline has passed |
+| `needs the operator` | `escalated` | an `error` caused by the environment |
+| `attempt_budget` | `escalated` | `max-attempts` are used, interrupted ones included |
+| `needs_operator` | `escalated` | a blocking `signoff:` or `justification:` finding (after review) |
+| `stuck` | `escalated` | a check or evidence finding with the same `evidence_digest` as in the attempt before |
+
+- **Error causes.** An `error` attempt's report has `error: {cause, reason}`, and the attempt row has `error_cause` and `error_reason` (`status`). `code`: a check timed out or hung, the checks wrote into the tree, or verify's results are missing, unreadable or empty. `run`: HEAD moved or the tree changed during validation, or before review. `environment`: a check couldn't start (`spawn_failed`), `setup` failed, a command evidence `cwd` is outside the worktree, or a runner error. `validate` returns it as `error`.
+- **Regression flags.** Evidence that passed in an earlier attempt of the run and doesn't pass now is flagged `regression: evidence {id} passed in attempt {k} and is {executed} now`.
 - Phases stop at the first failure; evidence after a static failure is `not_run`.
 
 Commands run in the worktree with `FACTORY_RUN_ID` and `FACTORY_ATTEMPT` set, under the per-command timeout and the run deadline, like exec.
@@ -227,7 +240,7 @@ Commands run in the worktree with `FACTORY_RUN_ID` and `FACTORY_ATTEMPT` set, un
 `review-input <run_id> <attempt> [--issue-file <file>]` prepares the review (§4.9) of an attempt awaiting review. It holds the worktree lock. Like exec it starts work, so it refuses past the run deadline and on a halted run, and it needs an active authorization.
 
 1. The attempt must be `awaiting_review` (otherwise `wrong_state`) and `contract.json` must still have the digest the attempt was validated with (`contract_mismatch`).
-2. HEAD must still be the attempt's `head_sha` on a clean tree. Otherwise the attempt completes as `error`, the run escalates, and the command fails with `revision_changed`.
+2. HEAD must still be the attempt's `head_sha` on a clean tree. Otherwise the attempt completes as `error`, caused by the run: its report becomes final, with the error and an `identity` finding (the draft is kept as `report.draft.json`). The run moves on by the fix loop's rules, normally back to `implementing`, and the command fails with `revision_changed`.
 3. It writes `attempts/{n}/review/`:
    - `source/`: `git archive head_sha`, with read-only files. Its digest (`sha256:` over each file's path, type and content) is recorded in a `state_change` event (entity `review`, to `issued`).
    - `diff.patch`: `git diff merge_base_sha..head_sha`.
@@ -327,7 +340,7 @@ A matched answer carries the run, what the authorization allows (`authorizes`) a
 
 | `next` | When |
 |---|---|
-| `implement` | the run is `approved` or `implementing`: nothing is being validated |
+| `implement` | the run is `approved` or `implementing`: nothing is being validated. After a failed or errored attempt, `fix` says what to fix |
 | `validate` | the run is `validating` without a usable attempt: the last one was interrupted (a crash during checks), or none was allocated. Validate again |
 | `resume` | the latest attempt is left mid-way (checks running or crashed, or finalizing after a crash), or a complete attempt's run transition is still owed: run `resume` and follow its actions |
 | `review` | the latest attempt awaits review |
@@ -337,9 +350,27 @@ A matched answer carries the run, what the authorization allows (`authorizes`) a
 
 The runner still checks every command on its own; `next` only tells a host where to pick up.
 
+**`fix`** is set while the run is `implementing` after a completed `fail` or `error` attempt, whether the fix loop or `continue` brought it back, and null otherwise: `{attempt, outcome, error, blocking_findings, report_path}`. `error` is `{cause, reason}` for an error attempt. `blocking_findings` are the attempt's blocking findings (`id`, `detail`, `location`). The implementer works from these (design §6.2: findings only).
+
 ### escalate
 
 `escalate <run_id> --reason <text>` moves a run to `escalated`, so it shows why it stopped instead of looking active: the host hit something it can't get past, such as a blocked precondition or a real blocker. A run already blocked or escalated is left as it is (`changed: false`). It works past the deadline and refuses a closed run.
+
+### continue
+
+`continue <run_id> --reason <text>` takes an `escalated` run back to `implementing`, under the same contract, digest and authorization (design §6.2). The operator decides; skills offer it in plain words and run it. The deadline and the attempt budget are never reset, and the next `validate` is a new attempt.
+
+Refused, blocked (exit 2), and nothing changes, when:
+
+| Code | When |
+|---|---|
+| `run_deadline` | the run deadline has passed: going on needs a new run and budget |
+| `not_authorized` | the run has no active authorization |
+| `contract_mismatch` | `{artifact_dir}/contract.json` is missing or no longer has the approved digest |
+| `no_failed_attempt` | the latest attempt isn't a completed `fail` or `error`, or there is none |
+| `attempt_budget` | every attempt (`max-attempts`) is used |
+
+A run that isn't `escalated` is `wrong_state` (exit 1); a blocked run can only be closed. Any error cause is accepted: the operator judges whether the environment is fixed. A run already back in `implementing` after that attempt is left as it is (`changed: false`). The result names the attempt to fix, its outcome and error, and the attempts used of `max_attempts`.
 
 ### GitHub and the agent identity
 
@@ -451,12 +482,12 @@ Locks are always taken worktree first, then build.
 |---|---|---|
 | `checks_running`, owner dead | `interrupted` | attempt → `interrupted` (still counts toward the attempt budget) |
 | `checks_running` or `finalizing`, owner alive | `running` | none |
-| `awaiting_review`, identity changed (HEAD moved or tree dirty) | `identity_error` | attempt → `complete`, outcome `error` |
+| `awaiting_review`, identity changed (HEAD moved or tree dirty) | `identity_error` | attempt → `complete`, outcome `error` caused by the run, with a final report |
 | `awaiting_review`, no verdict file | `reissue_review` | none: the caller runs `review-input` again |
 | `awaiting_review`, verdict file present (`review.json`, or the reviewer's `review/verdict.json`) | `record_review` | none: the caller runs `record-review` with that file |
 | `finalizing`, verdict file present | `refinalize` | none: the caller runs `record-review` with `review.json`, which finishes the finalization |
 | `finalizing`, no verdict file | `needs_attention` | none |
-| latest attempt `complete`, run still `validating` | `advanced_run` | run → `validated` (pass or pending_manual), `blocked` (blocked) or `escalated` (fail or error) |
+| latest attempt `complete`, run still `validating` | `advanced_run` | run → its next state by the fix loop's rules (see validate, step 7): `validated` (pass or pending_manual), `blocked` (blocked), back to `implementing`, or `escalated`; `detail` gives the reason |
 
 For the review actions, `detail` is the command to run (run ID and path single-quoted) and `file` the verdict file it records. Past the deadline, resume still reconciles, escalates the run, and starts nothing. It never resets a budget.
 
@@ -532,10 +563,12 @@ Crash tests (`scripts/test-factory.sh`, and the first-release acceptance run, #6
 |---|---|---|---|
 | `validate.before_check` | before each check starts; `@N` counts them in run order: setup, static, each `command` evidence, verify | attempt `checks_running`, owner dead | `resume` → `interrupted`; `next` is `validate` |
 | `validate.report_written` | the attempt's `report.json` written | attempt `checks_running` | the same |
-| `validate.committed` | the attempt moved to `awaiting_review` (or `complete`), before output | the host saw no result | `next` is `review`; `resume` → `reissue_review` |
+| `validate.committed` | the attempt moved to `awaiting_review` (or `complete`, and the run moved on), before output | the host saw no result | `next` is `review`; `resume` → `reissue_review`. After a failed attempt the run is already back in `implementing`: `next` is `implement`, with `fix` |
 | `review-input.issued` | the bundle written and issued | as before the call | `resume` → `reissue_review`; `review-input` reuses the snapshot |
 | `record-review.verdict_stored` | `review.json` stored, attempt `finalizing` | attempt `finalizing` | `next` is `resume`; `resume` → `refinalize`; `record-review` with its `file` |
 | `record-review.report_written` | the final `report.json` written, attempt still `finalizing` | the same | the same |
+| `record-review.committed` | the attempt complete and the run moved on (validated, back to implementing, or escalated), before output | the host saw no result | `next` follows the run state; `record-review` again is a no-op |
+| `continue.committed` | the run back in `implementing`, before output | the host saw no result | `next` is `implement`, with `fix`; `continue` again changes nothing |
 | `pr.created` | `gh pr create` succeeded, number not recorded | an open PR, run `validated` without `pr_number` | `pr` again → `recovered` |
 | `pr.recorded` | the number recorded, before output | run `pr_open` | `pr` again → `updated` |
 
