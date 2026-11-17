@@ -125,7 +125,7 @@ flowchart LR
 
 The factory lets one approved plan run to a validated PR with no further questions. You approve the plan and merge, and the AI agent does everything in between. It arrived in 4.0.0. Design: [docs/FACTORY_DESIGN.md](docs/FACTORY_DESIGN.md). Runner commands and JSON output: [docs/FACTORY_CLI.md](docs/FACTORY_CLI.md).
 
-1. **Contract.** On a project whose checks are configured, `setup-work` also checks readiness and gathers lore and related archives. It proposes a risk tier (`standard` or `sensitive`) and drafts a **validation contract**: evidence for every acceptance criterion, as a test, a command or a manual check. The contract names no commands. Every check comes from the project's Escapement Settings, so a contract can't skip or narrow them.
+1. **Contract.** On a project whose checks are configured, `setup-work` also checks readiness and gathers lore and related archives. It proposes a risk tier (`standard` or `sensitive`) and drafts a **validation contract**: evidence for every acceptance criterion, as a test, a command or a manual check. The contract names no commands. Every check comes from the project's Escapement Settings, so a contract can't skip or narrow them. Before you see the plan, the fresh-context `plan-critic` checks it once (since 4.2.0): does evidence cover every clause of every criterion, would each manual check prove its criterion, is the tier right. The planner answers each finding once, and any finding the two still disagree on is shown to you with both positions, next to the approval question.
 2. **Authorization.** At plan approval, **Approve + authorize run** checks out the branch, starts a run and approves the contract. The runner stores the contract and its digest, and issues an authorization. It covers committing, pushing the branch, opening the PR and running validation, never merging, force-pushing or changing the contract. The run gets a deadline (`run-budget`).
 3. **Implement.** `do-work` works through the tasks without asking. Builds and tests go through `factory exec`, one at a time across all worktrees, and `commit-changes` commits each task as the agent.
 4. **Validate.** `validate-work` runs `factory validate` (the project's `static` and `verify`, whose JUnit results resolve the contract's test evidence). Then the fresh-context `validation-reviewer` judges whether the evidence demonstrates each criterion and signs off sensitive or policy changes. `factory record-review` refuses an incomplete verdict.
@@ -160,7 +160,7 @@ stateDiagram-v2
 
 - **Validation preconditions.** If validation can't start (a dirty tree, unusable settings), `factory validate` refuses with `blocked` and changes nothing: the run stays where it is and no attempt is used. The host fixes the cause and validates again, or escalates the run.
 - **Fix loop.** When a check fails, or the reviewer blocks the attempt, the run goes back to `implementing` on its own: `do-work` fixes exactly what the report found, commits, and validates a new attempt (since 4.1.0). An error the change caused (a check timed out, the tests wrote into the tree) or the run caused (HEAD moved during validation) loops too. Every attempt counts toward `max-attempts`, and the deadline never moves.
-- **Escalation.** The run is `escalated`, and you get a notification with the report, when it needs you: an error from the environment (a check couldn't start, setup failed), `max-attempts` used up, the deadline passed, a sensitive-path sign-off refused or an assertion change the reviewer won't justify, the same check failing the same way twice, or a blocker the agent can't resolve. Any non-terminal state can be escalated, blocked or closed. After a failed attempt, `do-work` offers you **fix it and continue** (the same run, plan and budget, through `factory continue`), **abandon**, or **start over** with `setup-work`. Any other halted run is closed with `archive-work`. Once the PR is open, the run can't take more commits yet (#97).
+- **Escalation.** The run is `escalated`, and you get a notification with the report, when it needs you: an error from the environment (a check couldn't start, setup failed), `max-attempts` used up, the deadline passed, a sensitive-path sign-off refused or an assertion change the reviewer won't justify, a manual check whose instructions the reviewer rejects (only a new plan can change them, so `do-work` offers abandon or start over), the same check failing the same way twice, or a blocker the agent can't resolve. Any non-terminal state can be escalated, blocked or closed. After a failed attempt, `do-work` offers you **fix it and continue** (the same run, plan and budget, through `factory continue`), **abandon**, or **start over** with `setup-work`. Any other halted run is closed with `archive-work`. Once the PR is open, the run can't take more commits yet (#97).
 - **Resume.** If the runner or the session dies mid-run, `factory resume` kills orphaned check processes and reconciles the attempt. `do-work` and `validate-work` pick up from `factory authorization`'s `next` step, and a `factory pr` that died finds the PR it already opened instead of opening a second one.
 - **Gate.** `gate-mode` is `report-only`: the report recommends, and the merge is always yours.
 
@@ -265,6 +265,12 @@ It writes a verdict file and never edits code. `validate-work` records the verdi
 
 The agent is a thin wrapper: the reviewer's instructions are `prompts/factory/validation-reviewer.md`, runtime-neutral data that any host can run (`factory.sh prompt reviewer`).
 
+### plan-critic
+
+A fresh-context critic for a factory plan, before you approve it. `setup-work` gives it a `brief.json`: the issue, the scratchpad, the draft validation contract, `factory.sh check`'s readiness, lore and related archives, and the repository. It never sees the planner's reasoning. It judges ten checklist items, among them whether evidence covers every clause of each criterion and whether each manual procedure would prove its criterion, and writes a critique with a verdict (`approve`, `revise` or `escalate`), severity-rated findings and an optional tier raise. `factory.sh check-critique` checks it against `schemas/factory/critique.schema.json`, and `factory.sh record-critique` records each finding's disposition on the run.
+
+Like the reviewer, the agent is a thin wrapper over `prompts/factory/plan-critic.md` (`factory.sh prompt critic`).
+
 ## Escapement Settings
 
 A project configures Escapement in a `## Escapement Settings` section of its `CLAUDE.md`. Only the first such section is read, and fenced code blocks are ignored, so examples like the ones below never match. Every key is optional.
@@ -362,10 +368,11 @@ escapement/
 │   ├── slice-session-log.sh   # Transcript slicing with a per-session cursor
 │   ├── test-*.sh, test-*.py   # Shell and Python test suites
 │   └── fixtures/              # Test fixtures
-├── schemas/factory/          # Published JSON Schemas: contract, report, verdict, readiness
-├── prompts/factory/          # Agent prompts the factory ships as data (validation-reviewer)
+├── schemas/factory/          # Published JSON Schemas: contract, report, verdict, readiness, critique
+├── prompts/factory/          # Agent prompts the factory ships as data (validation-reviewer, plan-critic)
 ├── agents/                   # Specialized subagents
 │   ├── scratchpad-planner.md # Codebase analysis for setup-work
+│   ├── plan-critic.md        # Claude Code wrapper for the factory plan critic prompt
 │   └── validation-reviewer.md # Claude Code wrapper for the factory reviewer prompt
 ├── docs/                     # Extended documentation
 │   ├── WORKFLOW.md           # Workflow explanation
@@ -506,9 +513,14 @@ fusupo
 
 ## Version
 
-**Current:** 4.1.0
+**Current:** 4.2.0
 
 **Changelog:**
+- 4.2.0 (2026-11-17): Plan critique before approval, and a rejected manual procedure escalates at once (#99)
+  - **Plan critique.** On the factory path, `setup-work` has the new `plan-critic` agent, with fresh context, critique the plan and its validation contract once before you approve it. Its checklist covers evidence for every clause of each criterion, manual procedures that would prove their criterion, new-behavior tests that would fail without the change, predicted files, a simpler approach, lore conflicts, coupling with other work, the tier and the issue's size. The planner answers each finding once; a blocking or major finding it rejects is shown to you with both positions before the approval question. A tier raise is applied
+  - **Recorded.** The scratchpad's `## Plan Critique` lists every finding and what became of it: accepted with the plan change it caused, or rejected and why. On "Approve + authorize run", **`factory.sh record-critique`** writes it to the run as `critique.json` and one `critique_finding` event per finding
+  - **`factory.sh check-critique`** checks a critique against the new published `critique.schema.json` and its rules, with no run or database; `factory.sh prompt critic` finds the critic's prompt
+  - **A rejected manual procedure escalates at once.** A reviewer's `judgment:` finding now carries the judged item's `evidence_type`. When the reviewer rejects a manual check's instructions, the run escalates with attempts to spare instead of looping until `max-attempts`: the instructions are in the approved contract, so only a new plan can change them, and `do-work` offers abandon or start over. A test or command judged `no` or `partial` still loops
 - 4.1.0 (2026-11-17): The factory's bounded fix loop: a failed validation no longer ends the run (#92)
   - **Fix loop.** After a `fail`, or an `error` the change or the run caused, the runner sends the run back to `implementing` while `max-attempts` has room, and `do-work` fixes the report's blocking findings and validates a new attempt. It escalates instead on an environment error, a used-up budget or deadline, a finding that needs your judgment (a refused sign-off, an unjustified assertion), or a check failing the same way twice (stuck). One decision in the runner (`manifest/factory/fixloop.ts`) is applied by validate, record-review and resume alike, so a crash resolves as the crashed command would have
   - **`factory continue`.** An escalated run whose latest attempt failed or errored goes back to `implementing` under the same contract and authorization, with the deadline and budget kept. A run whose PR is open can't go back yet (#97). `do-work` offers it in plain words: fix it and continue, abandon, or start over

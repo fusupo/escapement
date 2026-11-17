@@ -1,6 +1,6 @@
 import { mkdirSync, renameSync, writeFileSync, openSync, fsyncSync, closeSync } from "node:fs";
 import { dirname, basename, join } from "node:path";
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 
 /**
  * Error codes the CLI reports. `blocked` errors mean the request was valid
@@ -68,4 +68,19 @@ export function atomicWrite(path: string, data: string | Buffer): void {
 /** Block the thread for `ms` milliseconds (the CLI is synchronous, like better-sqlite3). */
 export function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/** Stable JSON: object keys sorted, so the same document always digests the same. */
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const o = value as Record<string, unknown>;
+    return `{${Object.keys(o).sort().map((k) => `${JSON.stringify(k)}:${canonical(o[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/** Digest of a JSON document's canonical form: formatting and key order don't change it. */
+export function jsonDigest(value: unknown): string {
+  return `sha256:${createHash("sha256").update(canonical(value)).digest("hex")}`;
 }

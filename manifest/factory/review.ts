@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { FactoryError, atomicWrite, blocked, nowIso, shq } from "./util.ts";
+import { FactoryError, atomicWrite, blocked, jsonDigest, nowIso, shq } from "./util.ts";
 import { faultPoint } from "./fault.ts";
 import { attemptDir, verdictPath, completeWithError } from "./attempts.ts";
 import { changedFiles, identityHolds } from "./revision.ts";
@@ -405,19 +405,9 @@ export type RecordReviewResult = {
   refinalized: boolean;
 };
 
-/** Stable JSON: object keys sorted, so the same verdict always digests the same. */
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  if (value !== null && typeof value === "object") {
-    const o = value as Record<string, unknown>;
-    return `{${Object.keys(o).sort().map((k) => `${JSON.stringify(k)}:${canonical(o[k])}`).join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
-
 /** Digest of a verdict's canonical JSON: formatting and key order don't change it. */
 export function verdictDigest(verdict: unknown): string {
-  return `sha256:${createHash("sha256").update(canonical(verdict)).digest("hex")}`;
+  return jsonDigest(verdict);
 }
 
 /**
@@ -486,14 +476,30 @@ export function verdictProblems(v: Verdict, required: RequiredJudgments, issued:
 
 type Finding = Report["findings"][number];
 
-/** The findings a verdict adds, each blocking one a reason the attempt fails (§4.9). */
-function reviewFindings(v: Verdict): Finding[] {
+type EvidenceType = NonNullable<Finding["evidence_type"]>;
+
+/** Each contract evidence ID's type, which a `judgment:{id}` finding carries (#99). */
+function evidenceTypes(contract: Contract): Map<string, EvidenceType> {
+  return new Map(contract.criteria.flatMap((c) => c.evidence.map((e) => [e.id, e.type as EvidenceType] as const)));
+}
+
+/**
+ * The findings a verdict adds, each blocking one a reason the attempt fails
+ * (§4.9). A `judgment:{id}` finding carries its evidence item's type, so the
+ * fix loop can tell a rejected manual procedure (only a re-approved contract
+ * can fix it) from a test or command the implementer can improve.
+ */
+function reviewFindings(v: Verdict, types: Map<string, EvidenceType>): Finding[] {
   const out: Finding[] = [];
+  const typed = (id: string) => {
+    const t = types.get(id);
+    return t ? { evidence_type: t } : {};
+  };
   for (const e of v.evidence) {
     if (e.supports_criterion === "no" || e.supports_criterion === "partial") {
-      out.push({ id: `judgment:${e.id}`, severity: "blocking", detail: `reviewer: evidence supports its criterion: ${e.supports_criterion}: ${e.rationale}` });
+      out.push({ id: `judgment:${e.id}`, severity: "blocking", detail: `reviewer: evidence supports its criterion: ${e.supports_criterion}: ${e.rationale}`, ...typed(e.id) });
     } else if (e.procedure_adequate === "no") {
-      out.push({ id: `judgment:${e.id}`, severity: "blocking", detail: `reviewer: manual procedure is not adequate: ${e.rationale}` });
+      out.push({ id: `judgment:${e.id}`, severity: "blocking", detail: `reviewer: manual procedure is not adequate: ${e.rationale}`, ...typed(e.id) });
     }
   }
   for (const s of v.sensitive_paths) {
@@ -527,6 +533,7 @@ function finalize(
   run: RunRow,
   a: AttemptRow,
   verdict: Verdict,
+  types: Map<string, EvidenceType>,
   digest: string,
   owner: Owner,
   refinalized: boolean,
@@ -545,7 +552,7 @@ function finalize(
       ? { ...e, procedure_adequate: j.procedure_adequate, rationale: j.rationale }
       : { ...e, supports_criterion: j.supports_criterion!, rationale: j.rationale };
   });
-  const added = reviewFindings(verdict);
+  const added = reviewFindings(verdict, types);
   const failed = added.some((f) => f.severity === "blocking");
   const manual = draft.evidence.some((e) => e.executed === "pending_manual");
   const outcome: Outcome = failed ? "fail" : manual ? "pending_manual" : "pass";
@@ -661,7 +668,7 @@ export async function recordReview(
       });
       faultPoint("record-review.verdict_stored");
     }
-    const done = finalize(db, run, getAttempt(db, runId, attempt), verdict, digest, opts.owner, a.status === "finalizing");
+    const done = finalize(db, run, getAttempt(db, runId, attempt), verdict, evidenceTypes(contract), digest, opts.owner, a.status === "finalizing");
     faultPoint("record-review.committed");
     return done;
   });

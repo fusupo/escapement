@@ -10,7 +10,7 @@ import type { Tier } from "./tiers.ts";
  * plugin root). Code validates against these exact files, so what hosts
  * read and what the runner enforces can't drift.
  */
-export const SCHEMA_NAMES = ["contract", "report", "verdict", "readiness"] as const;
+export const SCHEMA_NAMES = ["contract", "report", "verdict", "readiness", "critique"] as const;
 export type SchemaName = (typeof SCHEMA_NAMES)[number];
 
 const SCHEMA_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "schemas", "factory");

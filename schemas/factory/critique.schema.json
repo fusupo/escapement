@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/fusupo/escapement/schemas/factory/critique.schema.json",
+  "title": "Escapement factory plan critique",
+  "description": "The plan critic's response to a draft plan and validation contract, before plan approval (docs/FACTORY_DESIGN.md §3.5), and the host's record of what became of each finding (§7.2). This schema checks shape only; `factory check-critique` also checks the rules between fields (every checklist item judged once, unique finding IDs, a concern backed by a finding, approve with no blocking finding, revise or escalate with at least one finding, and with --final a disposition for every finding).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "verdict", "summary", "checklist", "findings"],
+  "properties": {
+    "version": { "const": 1 },
+    "verdict": {
+      "description": "approve: the plan can go to the operator as it is. revise: the planner should address the findings (one round). escalate: the operator must decide something the planner can't, such as splitting the issue.",
+      "enum": ["approve", "revise", "escalate"]
+    },
+    "summary": { "type": "string", "minLength": 1 },
+    "tier_raise": {
+      "description": "Raise the proposed risk tier. Raise-only: a critic never lowers a tier.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["to", "reason"],
+      "properties": {
+        "to": { "const": "sensitive" },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    },
+    "checklist": {
+      "description": "One entry per checklist item, each exactly once.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["item", "result", "note"],
+        "properties": {
+          "item": { "$ref": "#/$defs/item" },
+          "result": { "enum": ["ok", "concern"] },
+          "note": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "severity", "checklist", "detail"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^F-[1-9][0-9]*$" },
+          "severity": {
+            "description": "blocking: the plan or contract would fail validation or prove the wrong thing. major: a real gap the plan should close. minor: worth a look.",
+            "enum": ["blocking", "major", "minor"]
+          },
+          "checklist": { "$ref": "#/$defs/item" },
+          "ref": {
+            "description": "What the finding is about: a criterion (AC-2), an evidence item (AC-2.e1), a task or a file.",
+            "type": "string",
+            "minLength": 1
+          },
+          "detail": { "type": "string", "minLength": 1 },
+          "suggestion": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "dispositions": {
+      "description": "Written by the host after the critique round, not by the critic: what became of each finding. Accepted findings name the plan change they caused; rejected ones say why.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["finding", "accepted", "decided_by"],
+        "properties": {
+          "finding": { "type": "string", "pattern": "^F-[1-9][0-9]*$" },
+          "accepted": { "type": "boolean" },
+          "plan_change": { "type": "string", "minLength": 1 },
+          "reason": { "type": "string", "minLength": 1 },
+          "unresolved": {
+            "description": "The planner and the critic disagreed (or the critic escalated), so the operator saw both positions and decided.",
+            "type": "boolean"
+          },
+          "decided_by": { "enum": ["planner", "operator"] }
+        },
+        "if": { "properties": { "accepted": { "const": true } } },
+        "then": { "required": ["plan_change"] },
+        "else": { "required": ["reason"] }
+      }
+    }
+  },
+  "$defs": {
+    "item": {
+      "enum": [
+        "evidence_capability",
+        "clause_coverage",
+        "manual_procedure_adequacy",
+        "new_behavior_fails_without_change",
+        "predicted_files",
+        "simpler_approach",
+        "lore_conflict",
+        "manifest_coupling",
+        "tier",
+        "issue_size"
+      ]
+    }
+  }
+}

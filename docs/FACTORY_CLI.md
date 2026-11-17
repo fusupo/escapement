@@ -4,7 +4,7 @@ The factory runner is a small deterministic CLI that owns a run's state, locks, 
 
 The Escapement skills are one client of the runner. Other hosts, such as Escapement Studio, can call it as a subprocess and read its `--json` output. The runner never invokes a skill or an agent. It runs git and the commands you give it, and, for a run's push and PR, `gh` as the AI agent's GitHub identity (see [GitHub and the agent identity](#github-and-the-agent-identity)).
 
-First-release status: #59 provides `start`, `approve`, `exec`, `status`, `resume` and `revoke`. #60 adds contract validation, settings, `check` and `schema`. #61 adds `validate`. #62 adds `review-input`, `record-review` and `prompt`. #63 adds `exclude`, a settings-only `check`, and a `start` that refuses the target branch; `setup-work` drives `check`, `exclude`, `start` and `approve` (its factory path). #64 adds `authorization`, `agent`, `escalate`, `pr`, `record-manual` and `archive`, GitHub access as the agent, and the exec guard; `do-work`, `commit-changes`, `create-pr`, `validate-work` and `archive-work` drive them (the authorized path, FACTORY_DESIGN.md §6.1). #65 adds fault injection for crash tests, the `validate` next step, and killing a crashed check's process group; Escapement itself is configured as a factory project. #80 adds `push`, so skills push as the agent outside a run too.
+First-release status: #59 provides `start`, `approve`, `exec`, `status`, `resume` and `revoke`. #60 adds contract validation, settings, `check` and `schema`. #61 adds `validate`. #62 adds `review-input`, `record-review` and `prompt`. #63 adds `exclude`, a settings-only `check`, and a `start` that refuses the target branch; `setup-work` drives `check`, `exclude`, `start` and `approve` (its factory path). #64 adds `authorization`, `agent`, `escalate`, `pr`, `record-manual` and `archive`, GitHub access as the agent, and the exec guard; `do-work`, `commit-changes`, `create-pr`, `validate-work` and `archive-work` drive them (the authorized path, FACTORY_DESIGN.md §6.1). #65 adds fault injection for crash tests, the `validate` next step, and killing a crashed check's process group; Escapement itself is configured as a factory project. #80 adds `push`, so skills push as the agent outside a run too. #99 adds `check-critique`, `record-critique` and the `critic` prompt; `setup-work` runs one round of plan critique before approval, and a reviewer's `judgment:` finding carries `evidence_type`.
 
 ## Running it
 
@@ -67,6 +67,7 @@ pr/body.md                      the PR description as last sent (pr)
 | `validate <run_id>` | Run the deterministic phases for a new attempt and write its draft report | **no** |
 | `review-input <run_id> <attempt>` | Write the reviewer's bundle for an attempt awaiting review | **no** |
 | `record-review <run_id> <attempt> <file>` | Check a reviewer verdict (`-` reads stdin), finalize the report and complete the attempt | yes, for a review in progress |
+| `record-critique <run_id> <file>` | Attach the final plan critique to the run: `critique.json` and one `critique_finding` event per finding | yes |
 | `status [run_id]` | List open runs (`--all` includes closed ones), or show one run | yes |
 | `resume <run_id>` | Reconcile an interrupted run (§4.7) | yes, reconciliation only |
 | `revoke <run_id>` | End the active authorization | yes |
@@ -79,9 +80,10 @@ pr/body.md                      the PR description as last sent (pr)
 | `record-manual <run_id> <evidence_id> pass\|fail --note <text>` | Record a human's outcome for manual evidence | yes |
 | `archive <run_id> --path <dir>` | Record where the run was archived; `--close` closes it | yes |
 | `check [--contract <file>]` | Readiness: is the contract valid and runnable in this project? Without `--contract`, only the settings are checked. No run or database needed | n/a |
+| `check-critique <file> [--final]` | Check a plan critique against `critique.schema.json` and its rules (`-` reads stdin). No run or database needed | n/a |
 | `exclude <pattern>…` | Add the host's working-file patterns to the repository's `.git/info/exclude`. No run or database needed | n/a |
 | `schema [name]` | Path of a published JSON Schema, or its content with `--print`; no name lists them all. No database needed | n/a |
-| `prompt [name]` | Path of an agent prompt the factory ships (`reviewer`), or its content with `--print`. No database needed | n/a |
+| `prompt [name]` | Path of an agent prompt the factory ships (`reviewer`, `critic`), or its content with `--print`. No database needed | n/a |
 
 Options:
 
@@ -109,6 +111,7 @@ Options:
 | `--close`, `--abandon` | archive | off |
 | `--all` | status | off |
 | `--print` | schema, prompt | off |
+| `--final` | check-critique: the record after the critique round, every finding with a disposition | off |
 
 Durations are written like `30s`, `15m`, `2h` or `1d`.
 
@@ -226,7 +229,7 @@ The run must be `approved`, `implementing` or `validating` (otherwise `wrong_sta
 | `run_deadline` | `escalated` | the run deadline has passed |
 | `needs the operator` | `escalated` | an `error` caused by the environment |
 | `attempt_budget` | `escalated` | the run's attempt budget (`max-attempts`, fixed at approval) is used, interrupted attempts included |
-| `needs_operator` | `escalated` | a blocking `signoff:` or `justification:` finding (after review) |
+| `needs_operator` | `escalated` | a blocking `signoff:` or `justification:` finding, or a `judgment:` finding on manual evidence (`evidence_type: manual`: a rejected procedure, which only a re-approved contract can change), after review |
 | `stuck` | `escalated` | a check or evidence finding with the same `evidence_digest` as in the attempt before |
 
 - **Error causes.** An `error` attempt's report has `error: {cause, reason}`, and the attempt row has `error_cause` and `error_reason` (`status`). `code`: a check timed out or hung, the checks wrote into the tree, or verify's results are missing, unreadable or empty. `run`: HEAD moved or the tree changed during validation, or before review. `environment`: a check couldn't start (`spawn_failed`), `setup` failed, a command evidence `cwd` is outside the worktree, or a runner error. `validate` returns it as `error`. When the runner itself fails mid-attempt, it still writes `report.json` (outcome `error`, a blocking `runner` finding, the invocations so far) before the command fails.
@@ -294,9 +297,9 @@ The commands in `verdict.record` and `runner.exec` carry `--data-dir` naming the
    - The attempt completes, and a `validating` run moves on.
 
 **Outcome:**
-- `fail` on any `supports_criterion` of `no` or `partial`, `procedure_adequate` of `no`, sign-off `concern`, `justified: false`, or blocking finding. Each one becomes a blocking finding in the report: `judgment:{id}`, `signoff:{path}`, `justification:{location}` or `review:{n}` (the verdict's own findings, in order).
+- `fail` on any `supports_criterion` of `no` or `partial`, `procedure_adequate` of `no`, sign-off `concern`, `justified: false`, or blocking finding. Each one becomes a blocking finding in the report: `judgment:{id}`, `signoff:{path}`, `justification:{location}` or `review:{n}` (the verdict's own findings, in order). A `judgment:{id}` finding carries `evidence_type`, the judged item's contract type (`test`, `command` or `manual`), so the fix loop can tell a rejected manual procedure from evidence the implementer can improve (#99).
 - Otherwise `pending_manual` when the contract has manual evidence, else `pass`.
-- `pass` and `pending_manual` move the run to `validated`, so a PR can open while a human records the manual outcomes (`record-manual`). `fail` escalates it. A run that was halted meanwhile (for example by the deadline) keeps its state.
+- `pass` and `pending_manual` move the run to `validated`, so a PR can open while a human records the manual outcomes (`record-manual`). `fail` goes to the fix loop, as for validate (the `run_reason` table there): back to `implementing`, or `escalated` for a refused sign-off, an unjustified assertion or a rejected manual procedure. A run that was halted meanwhile (for example by the deadline) keeps its state.
 
 **Idempotency.** The verdict digest is the `sha256:` of its canonical JSON (keys sorted), so formatting doesn't matter.
 - The same verdict for a `complete` attempt is a no-op (`noop: true`). A different one is `verdict_conflict`.
@@ -317,6 +320,28 @@ Whether the criteria capture the intent, and whether scope and dependencies are 
 Without `--contract`, `check` reports only the settings: a required check with no command, or an invalid setting. There are no contract questions and no `tier`. A host can run it before planning to see whether the project is set up for the factory at all; `setup-work` offers a run only when it is `ready`, and branches from its `target_ref`.
 
 The manifest mirrors a readiness document into a work item with `manifest.sh readiness <owner/repo> <issue> <file|->`: `needs_human` sets `meta.needs_human` and `meta.readiness_questions`, so the item leaves the frontier, and `ready` clears them. It does nothing when the issue has no work item.
+
+### check-critique
+
+`check-critique <file> [--final]` checks a plan critique (`-` reads it from stdin) against `schemas/factory/critique.schema.json` and the rules a schema can't express (design §3.5, #99). It needs no run and no database: the critique happens before plan approval creates the run.
+
+- Every checklist item is judged exactly once, as `ok` or `concern`, and every `concern` has a finding naming that item.
+- Finding IDs (`F-1`, `F-2`, …) are unique.
+- `approve` carries no `blocking` finding; `revise` and `escalate` carry at least one finding.
+- Each disposition names a finding of the critique, at most once. An accepted finding names its `plan_change`; a rejected one gives its `reason`.
+- With `--final`, every finding has a disposition.
+
+A bad document is `bad_critique` (exit 1), listing every problem. The critic is data like the reviewer: `prompts/factory/plan-critic.md` (`factory prompt critic`) and the critique schema, with the Claude Code agent `agents/plan-critic.md` as a thin wrapper. The host writes the critic's brief (`setup-work` Phase 3.55 lists its fields) and adds the dispositions after the critique round.
+
+### record-critique
+
+`record-critique <run_id> <file>` attaches the final critique (`-` reads stdin) to the run plan approval created. It checks the document as `check-critique --final` does (`bad_critique`, nothing written), then:
+
+- writes `{artifact_dir}/critique.json`;
+- records one `critique_finding` event per finding (design §7.2): `{finding, severity, checklist, ref?, accepted, plan_change, reason, unresolved, decided_by, tokens}`, with `tokens` null since hosts don't report them;
+- records a `state_change` event with `entity: critique`, the critique's digest, verdict and finding count.
+
+The digest is the `sha256:` of the critique's canonical JSON. The same critique again is a no-op (`noop: true`), or finishes a recording a crash interrupted after `critique.json` was written; a different one is `critique_conflict`. A closed run is refused (`run_closed`).
 
 ### exclude
 
@@ -525,6 +550,8 @@ With `--json`, every command prints exactly one JSON object on stdout.
 - **record-manual:** `{run_id, attempt, evidence_id, outcome, noop, recorded: [{evidence_id, outcome}], pending, resolved, report_path, report_revision, run_state, pr_number, refresh_pr}`; `resolved` is null until the report resolves
 - **archive:** `{run_id, archive_path, changed, closed, pr_state, state}`; `closed` is `merged`, `abandoned` or null
 - **exclude:** `{path, added, present}`: the exclude file, the patterns appended, and those already there
+- **check-critique:** `{valid, final, verdict, findings: {blocking, major, minor}, concerns, tier_raise, dispositions, unresolved}`; `concerns` lists the checklist items judged `concern`, `dispositions` counts them, and `unresolved` lists the findings the operator decided
+- **record-critique:** `{run_id, path, digest, verdict, findings, accepted, rejected, unresolved, noop}`
 - **check:** a readiness document (`schemas/factory/readiness.schema.json`): `{version, status, questions: [{about, question, ref?}], tier?: {tier, reasons}, required_checks: [{name, command}], target_ref, settings_digest}`. `target_ref` is the branch `start` targets without `--target-ref`; hosts create the feature branch from it
 - **schema:** `{schemas: [{name, path}]}`, or `{name, path}`, plus `schema` with `--print`
 - **prompt:** `{prompts: [{name, path}]}`, or `{name, path}`, plus `content` with `--print`
@@ -550,8 +577,8 @@ Error codes:
 
 | kind | codes |
 |---|---|
-| `blocked` (exit 2) | from start `on_target_branch`; `run_deadline`, `not_authorized`, `run_halted`, `run_closed`, `lock_timeout`, `attempt_budget`; from validate also `attempt_open`, `bad_setting`, `contract_mismatch`, `not_configured`, `dirty_tree`, `no_target`, `no_merge_base`; from review-input and record-review also `contract_mismatch`, `not_issued`, `invalid_verdict`, `incomplete_verdict`, `verdict_conflict`; from pr `not_validated`, `no_report`, `stale_report`, `head_moved`, `pr_conflict`, `pr_not_open`, `no_agent_token`; from record-manual `no_report`, `not_pending_manual`, `already_resolved`, `stale_report`, `stale_contract`, `unknown_evidence`; from archive `pr_open`, `no_agent_token`; from agent `no_agent_token`; from pr and push `not_github`; from push `push_base_branch`, `no_agent_token`; wherever the agent identity is read, `agent_env_permissions` |
-| `error` (exit 1) | `usage`, `no_such_run`, `run_exists`, `wrong_state`, `illegal_transition`, `no_contract`, `bad_contract`, `bad_setting`, `no_active_authorization`, `bad_duration`, `bad_work_item`, `bad_project_root`, `not_a_repo`, `detached_head`, `git_failed`, `no_such_attempt`, `revision_changed`, `snapshot_failed`, `unreadable`, `bad_pattern`, `gh_missing`, `gh_failed`, `push_failed`, `no_remote`, `internal` |
+| `blocked` (exit 2) | from start `on_target_branch`; `run_deadline`, `not_authorized`, `run_halted`, `run_closed`, `lock_timeout`, `attempt_budget`; from validate also `attempt_open`, `bad_setting`, `contract_mismatch`, `not_configured`, `dirty_tree`, `no_target`, `no_merge_base`; from review-input and record-review also `contract_mismatch`, `not_issued`, `invalid_verdict`, `incomplete_verdict`, `verdict_conflict`; from pr `not_validated`, `no_report`, `stale_report`, `head_moved`, `pr_conflict`, `pr_not_open`, `no_agent_token`; from record-critique `critique_conflict`; from record-manual `no_report`, `not_pending_manual`, `already_resolved`, `stale_report`, `stale_contract`, `unknown_evidence`; from archive `pr_open`, `no_agent_token`; from agent `no_agent_token`; from pr and push `not_github`; from push `push_base_branch`, `no_agent_token`; wherever the agent identity is read, `agent_env_permissions` |
+| `error` (exit 1) | `usage`, `no_such_run`, `run_exists`, `wrong_state`, `illegal_transition`, `no_contract`, `bad_contract`, `bad_critique`, `bad_setting`, `no_active_authorization`, `bad_duration`, `bad_work_item`, `bad_project_root`, `not_a_repo`, `detached_head`, `git_failed`, `no_such_attempt`, `revision_changed`, `snapshot_failed`, `unreadable`, `bad_pattern`, `gh_missing`, `gh_failed`, `push_failed`, `no_remote`, `internal` |
 
 ## Fault injection (testing only)
 

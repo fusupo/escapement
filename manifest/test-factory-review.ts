@@ -294,11 +294,12 @@ async function finalization() {
 async function failures() {
   console.log("\nrecord-review: fail conditions\n");
   // The implementer can fix most failures (the fix loop goes again); a refused
-  // sign-off or an unjustified assertion needs the operator (§6.2).
+  // sign-off, an unjustified assertion or a rejected manual procedure (its
+  // instructions are in the approved contract, #99) needs the operator (§6.2).
   const cases: [string, (v: V) => V, "implementing" | "escalated"][] = [
     ["supports_criterion partial", (v) => ({ ...v, evidence: v.evidence.map((e) => (e.id === "AC-1.e1" ? { ...e, supports_criterion: "partial" } : e)) }), "implementing"],
     ["supports_criterion no", (v) => ({ ...v, evidence: v.evidence.map((e) => (e.id === "AC-2.e1" ? { ...e, supports_criterion: "no" } : e)) }), "implementing"],
-    ["procedure_adequate no", (v) => ({ ...v, evidence: v.evidence.map((e) => (e.id === "AC-3.e1" ? { ...e, procedure_adequate: "no" } : e)) }), "implementing"],
+    ["procedure_adequate no", (v) => ({ ...v, evidence: v.evidence.map((e) => (e.id === "AC-3.e1" ? { ...e, procedure_adequate: "no" } : e)) }), "escalated"],
     ["a sensitive concern", (v) => ({ ...v, sensitive_paths: v.sensitive_paths.map((x) => ({ ...x, signoff: x.path === "ci/static.sh" ? "concern" : "approve" })) }), "escalated"],
     ["an unjustified modified assertion", (v) => ({ ...v, modified_assertions: v.modified_assertions.map((m) => ({ ...m, justified: false })) }), "escalated"],
     ["a blocking finding", (v) => ({ ...v, findings: [{ severity: "blocking", detail: "leaks the token", location: "src/auth/refresh.ts:1" }] }), "implementing"],
@@ -314,6 +315,25 @@ async function failures() {
     const { db, run, b } = await issued({ manual: false });
     const res = await record(db, run.run_id, { ...verdictFor(b), findings: [{ severity: "advisory", detail: "naming" }] });
     assert(res.outcome === "pass", "an advisory finding alone doesn't");
+  }
+  {
+    const { db, run, b } = await issued();
+    const rejected: Record<string, [string, string]> = { "AC-1.e1": ["supports_criterion", "partial"], "AC-2.e1": ["supports_criterion", "no"], "AC-3.e1": ["procedure_adequate", "no"] };
+    const v = verdictFor(b);
+    v.evidence = v.evidence.map((e) => (rejected[e.id as string] ? { ...e, [rejected[e.id as string][0]]: rejected[e.id as string][1] } : e));
+    const res = await record(db, run.run_id, v);
+    const typed = readJson<{ findings: { id: string; evidence_type?: string }[] }>(res.report_path)
+      .findings.filter((f) => f.id.startsWith("judgment:"))
+      .map((f) => `${f.id}:${f.evidence_type}`)
+      .join();
+    const stored = (JSON.parse(getAttempt(db, run.run_id, 1).findings_json ?? "[]") as { id: string; evidence_type?: string }[])
+      .filter((f) => f.id.startsWith("judgment:"))
+      .map((f) => `${f.id}:${f.evidence_type}`)
+      .join();
+    assert(
+      typed === "judgment:AC-1.e1:test,judgment:AC-2.e1:command,judgment:AC-3.e1:manual" && stored === typed,
+      "record-review writes the evidence type on every judgment finding",
+    );
   }
 }
 

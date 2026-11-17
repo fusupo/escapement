@@ -133,6 +133,14 @@ if [[ "$(jq -r '.ok and .result.run.state == "approved" and (.result.authorizati
 out="$(f --json authorization)"
 if [[ "$(jq -r '.result.matched and .result.run_id == "#5-r1" and .result.next == "implement" and (.result.authorizes | index("open_pr") != null)' <<<"$out")" == true ]]; then ok; else bad "authorization-matched" "$out"; fi
 
+# record-critique: the final plan critique attached to the run (#99)
+out="$(f --json record-critique '#5-r1' "$here/fixtures/critique/valid.json")"
+if [[ $? -eq 0 && "$(jq -r '.ok and .result.findings == 2 and .result.accepted == 1 and .result.unresolved == ["F-2"] and (.result.noop | not)' <<<"$out")" == true && -f "$art/critique.json" ]]; then ok; else bad "record-critique" "$out"; fi
+out="$(f record-critique '#5-r1' "$here/fixtures/critique/valid.json")"
+if [[ $? -eq 0 && "$out" == *"(already recorded)"* ]]; then ok; else bad "record-critique-again" "$out"; fi
+out="$(jq 'del(.dispositions)' "$here/fixtures/critique/valid.json" | f --json record-critique '#5-r1' -)"
+if [[ $? -eq 1 && "$(jq -r .error.code <<<"$out")" == bad_critique ]]; then ok; else bad "record-critique-final" "$out"; fi
+
 # exec (text mode): streams output, exits with the command's status
 out="$(f exec '#5-r1' -- sh -c 'echo hello; exit 3' 2>/dev/null)"
 status=$?
@@ -215,13 +223,27 @@ if [[ $? -eq 0 && "$(jq -r '.result.status == "needs_human" and ([.result.questi
 
 # schema: published JSON Schema paths, or content with --print
 out="$(ESCAPEMENT_MANIFEST_DIR="$tmp/nodb" f --json schema)"
-if [[ "$(jq -r '[.result.schemas[].name] == ["contract", "report", "verdict", "readiness"]' <<<"$out")" == true && ! -e "$tmp/nodb" ]]; then ok; else bad "schema-list" "$out"; fi
+if [[ "$(jq -r '[.result.schemas[].name] == ["contract", "report", "verdict", "readiness", "critique"]' <<<"$out")" == true && ! -e "$tmp/nodb" ]]; then ok; else bad "schema-list" "$out"; fi
 path="$(f schema contract)"
 if [[ -f "$path" && "$(jq -r '."$id"' "$path")" == *"/contract.schema.json" ]]; then ok; else bad "schema-path" "$path"; fi
 out="$(f --json schema verdict --print)"
 if [[ "$(jq -r '.result.schema.title' <<<"$out")" == *"verdict"* ]]; then ok; else bad "schema-print" "$out"; fi
 f schema nonsense >/dev/null 2>&1
 if [[ $? -eq 1 ]]; then ok; else bad "schema-unknown"; fi
+
+# check-critique: a plan critique against its schema and rules, no run, no database (#99)
+crit="$here/fixtures/critique"
+out="$(ESCAPEMENT_MANIFEST_DIR="$tmp/nodb" f --json check-critique "$crit/valid.json")"
+status=$?
+if [[ $status -eq 0 && "$(jq -r '.ok and .result.verdict == "revise" and .result.findings.blocking == 1 and .result.unresolved == ["F-2"]' <<<"$out")" == true && ! -e "$tmp/nodb" ]]; then ok; else bad "check-critique-valid" "status=$status out=$out"; fi
+out="$(f --json check-critique "$crit/invalid.json")"
+status=$?
+if [[ $status -eq 1 && "$(jq -r '.error.code == "bad_critique" and (.error.message | contains("issue_size: not judged") and contains("approve can'"'"'t carry a blocking finding"))' <<<"$out")" == true ]]; then ok; else bad "check-critique-invalid" "status=$status out=$out"; fi
+out="$(jq 'del(.dispositions)' "$crit/valid.json" | f --json check-critique - --final)"
+status=$?
+if [[ $status -eq 1 && "$(jq -r '.error.message | contains("F-1: no disposition")' <<<"$out")" == true ]]; then ok; else bad "check-critique-final" "status=$status out=$out"; fi
+out="$(jq 'del(.dispositions)' "$crit/valid.json" | f check-critique -)"
+if [[ $? -eq 0 && "$out" == "valid: revise, 1 blocking, 1 major, 0 minor finding(s)"* ]]; then ok; else bad "check-critique-stdin" "$out"; fi
 
 # validate: a project with static and verify checks. verify copies a JUnit
 # file into $FACTORY_RESULTS_DIR; ci/verify-exit sets its exit status.
@@ -564,6 +586,10 @@ out="$(f prompt reviewer)"
 if [[ "$out" == */prompts/factory/validation-reviewer.md && -f "$out" ]]; then ok; else bad "prompt-path" "$out"; fi
 out="$(f --json prompt reviewer --print)"
 if [[ "$(jq -r '.ok and (.result.content | contains("# Validation reviewer"))' <<<"$out")" == true ]]; then ok; else bad "prompt-print" "$out"; fi
+out="$(f prompt critic)"
+if [[ "$out" == */prompts/factory/plan-critic.md && -f "$out" ]]; then ok; else bad "prompt-critic-path" "$out"; fi
+out="$(f --json prompt)"
+if [[ "$(jq -r '[.result.prompts[].name] == ["reviewer", "critic"]' <<<"$out")" == true ]]; then ok; else bad "prompt-list" "$out"; fi
 out="$(f --json prompt nope)"
 if [[ $? -eq 1 && "$(jq -r .error.code <<<"$out")" == usage ]]; then ok; else bad "prompt-unknown" "$out"; fi
 

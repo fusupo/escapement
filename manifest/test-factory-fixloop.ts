@@ -5,10 +5,10 @@ import { readFileSync } from "node:fs";
 import type { Database } from "better-sqlite3";
 import { validateRun } from "./factory/validate.ts";
 import { reviewInput, recordReview, type Bundle } from "./factory/review.ts";
-import { decideAfterAttempt } from "./factory/fixloop.ts";
+import { decideAfterAttempt, attemptsUsed } from "./factory/fixloop.ts";
 import { getRun, getAttempt } from "./factory/state.ts";
 import { assert, cleanup } from "./factory/testkit.ts";
-import { owner, SETTINGS, HOUR, TEST_FILE, junit, PASSING, commit, project } from "./factory/fixtures.ts";
+import { owner, SETTINGS, HOUR, TEST_FILE, TEST_EV, junit, PASSING, commit, project } from "./factory/fixtures.ts";
 
 const validate = (db: Database, runId: string, timeoutMs?: number) =>
   validateRun(db, runId, { owner, lockWaitMs: 5_000, graceMs: 200, timeoutMs });
@@ -142,6 +142,49 @@ async function run() {
         r2.attempt === 2 && r2.status === "awaiting_review",
       "validate keeps the approved budget when the branch lowers max-attempts",
     );
+  }
+
+  console.log("\nReviewer judgments (#99)\n");
+  const MANUAL = { id: "AC-1.e2", type: "manual", kind: "new_behavior", instructions: "Open the app and log in" } as const;
+  const COMMAND = { id: "AC-1.e2", type: "command", kind: "regression", run: "true", expect: { exit_code: 0 } } as const;
+  /** Judge `id` with `judgment` set to `value`, every other item approved. */
+  const judge = (id: string, judgment: string, value: string) => (v: Verdict) => {
+    v.evidence = v.evidence.map((e) => (e.id === id ? { ...e, [judgment]: value, rationale: "doesn't show the criterion" } : e));
+  };
+  {
+    const { db, run } = await project({ evidence: [TEST_EV, MANUAL] });
+    await validate(db, run.run_id);
+    const rec = await review(db, run.run_id, 1, judge("AC-1.e2", "procedure_adequate", "no"));
+    assert(
+      rec.outcome === "fail" && rec.run_state === "escalated" && /needs_operator: judgment:AC-1\.e2 .*re-approved contract/.test(rec.run_reason ?? "") &&
+        attemptsUsed(db, run.run_id) === 1 && getRun(db, run.run_id).max_attempts === 3,
+      "a rejected manual procedure escalates at once as needs_operator, with attempts to spare",
+    );
+    const again = decideAfterAttempt(db, run.run_id, 1);
+    assert(again.to === "escalated" && /needs_operator: judgment:AC-1\.e2/.test(again.reason), "decideAfterAttempt escalates a rejected manual procedure when called on its own, as resume does");
+
+    // A finding recorded before #99 has no evidence_type: it loops as it did then.
+    const a = getAttempt(db, run.run_id, 1);
+    const untyped = (JSON.parse(a.findings_json ?? "[]") as Record<string, unknown>[]).map(({ evidence_type, ...f }) => f);
+    db.prepare("UPDATE factory_attempts SET findings_json = ? WHERE run_id = ? AND attempt = 1").run(JSON.stringify(untyped), run.run_id);
+    const old = decideAfterAttempt(db, run.run_id, 1);
+    assert(old.to === "implementing" && /fix_loop/.test(old.reason), "a judgment finding with no evidence_type, as runs before #99 recorded, still loops");
+  }
+  for (const value of ["no", "partial"]) {
+    const { db, run } = await project({});
+    await validate(db, run.run_id);
+    const rec = await review(db, run.run_id, 1, judge("AC-1.e1", "supports_criterion", value));
+    assert(rec.outcome === "fail" && rec.run_state === "implementing" && /fix_loop/.test(rec.run_reason ?? ""), `test evidence judged ${value} still loops`);
+  }
+  {
+    const states: string[] = [];
+    for (const value of ["no", "partial"]) {
+      const { db, run } = await project({ evidence: [TEST_EV, COMMAND] });
+      await validate(db, run.run_id);
+      const rec = await review(db, run.run_id, 1, judge("AC-1.e2", "supports_criterion", value));
+      states.push(`${rec.outcome}:${rec.run_state}`);
+    }
+    assert(states.join() === "fail:implementing,fail:implementing", `command evidence judged no or partial still loops`);
   }
 
   console.log("\nStuck detection (§6.2)\n");

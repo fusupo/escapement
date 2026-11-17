@@ -29,7 +29,7 @@ Transform a GitHub issue into a fully-prepared development environment with:
 - Feature branch ready for work
 - Situational codebase awareness
 
-**Factory path (optional, docs/FACTORY_DESIGN.md §3).** When the project is set up for the Escapement factory, setup-work also checks readiness, gathers light context, proposes a risk tier and drafts a validation contract, and plan approval can authorize a factory run. Steps marked **[factory]** run only on this path. When the project isn't set up for it (Phase 0.5), skip every **[factory]** step: setup-work then behaves exactly as it always has. Plain approval never creates a run.
+**Factory path (optional, docs/FACTORY_DESIGN.md §3).** When the project is set up for the Escapement factory, setup-work also checks readiness, gathers light context, proposes a risk tier and drafts a validation contract, has a fresh-context critic check the plan once before approval, and plan approval can authorize a factory run. Steps marked **[factory]** run only on this path. When the project isn't set up for it (Phase 0.5), skip every **[factory]** step: setup-work then behaves exactly as it always has. Plain approval never creates a run.
 
 The factory runner is `bash "${CLAUDE_PLUGIN_ROOT}/scripts/factory.sh"`, written `factory` below (reference: `docs/FACTORY_CLI.md`). Run it from the project root. Always pass `--json` and route on the JSON, never on the text. (`manifest.sh` has no JSON mode; read its text.)
 
@@ -278,6 +278,16 @@ Decide availability only from `check`, never by reading CLAUDE.md yourself: `che
 }
 ```
 
+## Plan Critique
+{[factory] only. Filled by Phase 3.55; one round, before approval.}
+- **Verdict:** {approve | revise | escalate}: {critic's summary}
+- **Tier raise:** {none | sensitive: reason (applied)}
+
+| Finding | Severity | Checklist | Ref | Critic | Disposition |
+|---|---|---|---|---|---|
+| F-1 | blocking | clause_coverage | AC-2 | {detail} | accepted (planner): {plan change} |
+| F-2 | major | manual_procedure_adequacy | AC-3.e1 | {detail} | rejected (operator, unresolved): {reason} |
+
 ## Branch Strategy
 - **Base branch:** main (or develop-ts/develop if exists)
 - **Feature branch:** {issue_number}-{slugified-title}
@@ -499,8 +509,57 @@ Proceeding to branch creation...
 ```
 
 **Skip Conditions:**
-- No items in "Clarifications Needed" → Skip directly to Phase 3.6 (**[factory]** after step 3d: mirror the readiness)
+- No items in "Clarifications Needed" → Skip directly to Phase 3.6 (**[factory]** after step 3d: mirror the readiness, then Phase 3.55)
 - User explicitly requests to skip → Note unresolved questions, proceed with assumptions. **[factory]** Readiness stays `needs_human`; mirror it (step 3d)
+
+### Phase 3.55: Plan Critique [factory]
+
+**Goal:** One round of fresh-context critique of the plan and its contract before the operator sees them (docs/FACTORY_DESIGN.md §3.5). The critic catches what `factory check` can't: a criterion clause no evidence covers, a manual procedure that wouldn't prove its criterion, a plan step built on a wrong claim about the code.
+
+Run it on the factory path once Phase 3.5 is done and the contract passes Phase 3.2's check with no question about the contract's own shape. If the contract itself is invalid there is nothing to critique yet: say so in the plan summary and skip to Phase 3.6.
+
+1. **Write the brief.** In `$DRAFT_DIR` (Phase 3.2), write the issue as fetched in Phase 1 (title, body, comments) to `issue.md`, the light context from Phase 1 (lore entries quoted verbatim, related archives' decisions and lessons, manifest dependencies) to `context.md` (or leave `context` null when there is none), the contract to `contract.json` and Phase 3.2's readiness result to `readiness.json`. Then `brief.json`, with absolute paths (the `{plugin root}` is the directory holding `scripts/factory.sh`):
+   ```json
+   {
+     "version": 1,
+     "critic_prompt": "{path printed by: factory prompt critic}",
+     "issue": { "path": "{DRAFT_DIR}/issue.md" },
+     "scratchpad": { "path": "{project root}/SCRATCHPAD_{issue_number}.md" },
+     "contract": { "path": "{DRAFT_DIR}/contract.json", "schema": "{path printed by: factory schema contract}" },
+     "readiness": { "path": "{DRAFT_DIR}/readiness.json" },
+     "context": { "path": "{DRAFT_DIR}/context.md" },
+     "repo": { "path": "{project root}" },
+     "critique": {
+       "schema": "{path printed by: factory schema critique}",
+       "write_to": "{DRAFT_DIR}/critique.json",
+       "check": "bash '{plugin root}/scripts/factory.sh' --json check-critique '{DRAFT_DIR}/critique.json'"
+     }
+   }
+   ```
+
+2. **Run the critic,** a new agent with fresh context, given only the brief:
+   ```
+   Agent:
+     subagent_type: escapement:plan-critic
+     prompt: "Critique the plan in {DRAFT_DIR}/brief.json."
+   ```
+   Never resume the scratchpad-planner for this, and never pass the planner's transcript or your own account of its reasoning: the critic reads the plan the way the implementer and the reviewer will.
+
+3. **Check the critique:**
+   ```bash
+   bash "$FACTORY" --json check-critique "{DRAFT_DIR}/critique.json"
+   ```
+   On `bad_critique`, send the critic its `.error.message` once (SendMessage to the same agent) and check again. If it is still invalid, go on without a critique and say so in the plan summary.
+
+4. **Apply a tier raise** (`tier_raise`): set the contract's `risk_tier_proposed` to `sensitive` and add the critic's reason to `risk_reasons`. A raise is never a question; the critic can only raise a tier.
+
+5. **One round with the planner.** When the critique has findings, whatever its verdict, resume the scratchpad-planner agent **once** with the critique and the brief's paths. For each finding it either accepts it and changes the plan or contract (say what changed), or rejects it with a reason. Apply its changes to the scratchpad and the contract, and run Phase 3.2's `check` again. The revised plan isn't critiqued again: the round ends here, and so does a later **Revise plan** at Phase 3.6.
+
+   Record each answer as a disposition, `decided_by: planner`: `{"finding": "F-1", "accepted": true, "plan_change": "…"}` or `{"finding": "F-2", "accepted": false, "reason": "…"}`.
+
+6. **What goes to the operator.** A `blocking` or `major` finding the planner rejected is **unresolved**: the critic and the planner disagree, so the operator decides, seeing both positions in the plan summary (Phase 3.6). So is every finding of an `escalate` verdict the planner didn't accept. A rejected `minor` finding stays the planner's decision, with its reason in the scratchpad.
+
+7. **Record it in the scratchpad**, in `## Plan Critique`: the verdict and summary, the tier raise, and one row per finding with its disposition. Unresolved findings read "open: the operator decides at approval" until Phase 3.6.
 
 ### Phase 3.6: Plan Approval
 
@@ -517,10 +576,18 @@ This mirrors Claude's EnterPlanMode/ExitPlanMode approval pattern — the user r
       {Z} decisions resolved
       [factory] readiness: {ready | needs_human}, proposed tier: {tier}
       [factory] contract: {N} criteria, {M} evidence ({t} test, {c} command, {m} manual)
+      [factory] plan critique: {verdict}, {F} findings ({a} accepted, {r} rejected){, tier raised to sensitive}
 
    Key changes:
    - {Brief summary of major tasks}
+
+   [factory] Unresolved critique findings (approving keeps the plan as it is; Revise plan takes the critic's side):
+   - F-1 [blocking, clause_coverage, AC-2]
+     Critic: {detail} {suggestion}
+     Planner: {the planner's reason for rejecting it}
    ```
+
+   On the factory path, always show the critique line. List every unresolved finding with both positions, `Critic:` and `Planner:`, or write "Plan critique: nothing unresolved". Never ask the approval question before the operator has seen them.
 
 2. **Request Approval:**
    ```
@@ -543,7 +610,12 @@ This mirrors Claude's EnterPlanMode/ExitPlanMode approval pattern — the user r
 3. **Handle Response:**
    - **Approve + authorize run:** Note the choice in the Work Log, then proceed to Phase 4 and Phase 4.5
    - **Approve:** Proceed to Phase 4 only. No run is created, and the Validation Contract stays a draft in the scratchpad
-   - **Revise plan:** Resume scratchpad-planner agent with user feedback, then return to Phase 3.6
+   - **Revise plan:** Resume scratchpad-planner agent with user feedback, then return to Phase 3.6. The revision isn't critiqued again (one round)
+
+   **[factory] The operator's decision closes the critique.** Each unresolved finding gets a disposition `decided_by: operator`, `unresolved: true`: on either Approve, rejected, with the planner's reason; on **Revise plan**, accepted with the plan change the revision made, or rejected with the operator's reason. Update `## Plan Critique`, add `dispositions` to `{DRAFT_DIR}/critique.json`, and check the final record:
+   ```bash
+   bash "$FACTORY" --json check-critique "{DRAFT_DIR}/critique.json" --final
+   ```
    - **Let me review:** Wait for user to read SCRATCHPAD, then re-ask approval
 
 **This phase is NOT skippable.** The user must explicitly approve before workspace preparation begins.
@@ -603,6 +675,12 @@ Only after **Approve + authorize run**. The approved plan and contract become a 
    bash "$FACTORY" --json start '{owner/repo}#{issue_number}' --target-ref {target_ref} [--manifest-id {manifest_id}]
    ```
    Name the work item with its repository: run IDs share one per-user database across projects, and `owner/repo#42` gives `owner-repo#42-r1`. Keep `.result.run_id` and `.result.artifact_dir`, and single-quote the run ID in every later command (it contains `#`). On `run_exists`, this worktree already has an open run: show `factory status` and stop.
+
+   **Record the critique** on the new run, when Phase 3.55 produced one:
+   ```bash
+   bash "$FACTORY" --json record-critique '{run_id}' "{DRAFT_DIR}/critique.json"
+   ```
+   It writes `{artifact_dir}/critique.json` and one `critique_finding` event per finding, with its disposition (§7.2). On `bad_critique`, fix the dispositions it names and run it again; a failure here is reported, not a reason to stop the authorization. Plain **Approve** creates no run, so its critique lives only in the scratchpad.
 
 4. **Write the contract into the run.** Set `run_id` to the new run ID in the scratchpad's contract block, and write the same JSON to `{artifact_dir}/contract.draft.json`. Change nothing else: what the operator approved is what gets authorized.
 
@@ -736,7 +814,8 @@ If can't access repository:
 - **[factory]** `PROJECT_LORE.md`, archives in `{context-path}/INDEX.md`, the manifest work item
 
 **Calls [factory]:**
-- `scripts/factory.sh`: `check`, `exclude`, `start`, `approve`, `status` (`docs/FACTORY_CLI.md`)
+- `scripts/factory.sh`: `check`, `check-critique`, `prompt critic`, `schema`, `exclude`, `start`, `record-critique`, `approve`, `status` (`docs/FACTORY_CLI.md`)
+- Agents: `escapement:scratchpad-planner` (plan, and one answer to the critique), `escapement:plan-critic` (Phase 3.55)
 - `scripts/manifest.sh readiness`: mirrors `needs_human` into the work item
 
 ## Best Practices
@@ -804,10 +883,11 @@ plan mode to design the implementation approach before we proceed?
 
 ---
 
-**Version:** 1.2.1
-**Last Updated:** 2026-11-16
+**Version:** 1.3.0
+**Last Updated:** 2026-11-17
 **Maintained By:** Escapement
 **Changelog:**
+- v1.3.0: Factory path: Phase 3.55, one round of fresh-context plan critique (the `plan-critic` agent) before approval; unresolved findings shown with both positions at the approval question; dispositions in `## Plan Critique` and on the run with `factory record-critique` (#99)
 - v1.2.1: Fetch the issue with the GitHub MCP tools by name; access problems are checked through the MCP account (#80)
 - v1.2.0: Factory path (docs/FACTORY_DESIGN.md §3): readiness, light context, proposed tier and validation contract when the project is set up for the factory; "Approve + authorize run" starts and approves a factory run. Unchanged otherwise (#63)
 - v1.1.0: Added Task delegation to Explore agent, parallel execution, LSP integration, EnterPlanMode triggers

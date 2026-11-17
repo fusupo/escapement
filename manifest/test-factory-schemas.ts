@@ -1,10 +1,11 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { SCHEMA_NAMES, schemaPath, schemaErrors, contractErrors, parseContract } from "./factory/schemas.ts";
 import { assert, throws } from "./factory/testkit.ts";
 
 const SHA = "a".repeat(40);
 const DIGEST = "sha256:" + "b".repeat(64);
 const clone = <T>(x: T): T => JSON.parse(JSON.stringify(x));
+const schemaJson = (name: "critique"): { $defs: { item: { enum: string[] } } } => JSON.parse(readFileSync(schemaPath(name), "utf-8"));
 
 /** The §5.2 example, without `commands`. */
 const CONTRACT = {
@@ -128,6 +129,15 @@ function reports() {
   }
   assert(schemaErrors("report", { ...report, outcome: "maybe" })[0].startsWith("/outcome: must be one of"), "unknown outcomes are rejected");
   assert(schemaErrors("report", { ...report, head_sha: "HEAD" })[0].startsWith("/head_sha"), "SHAs are full hex object names");
+  const judged = (evidence_type: string) => ({
+    ...report,
+    findings: [{ id: "judgment:AC-3.e1", severity: "blocking", detail: "reviewer: manual procedure is not adequate: x", evidence_type }],
+  });
+  assert(
+    ["test", "command", "manual"].every((t) => schemaErrors("report", judged(t)).length === 0) &&
+      schemaErrors("report", judged("doc"))[0]?.startsWith("/findings/0/evidence_type"),
+    "a report finding may carry evidence_type, and an unknown evidence_type is rejected",
+  );
 }
 
 function verdicts() {
@@ -168,8 +178,46 @@ function readiness() {
   assert(schemaErrors("readiness", { ...needs, status: "ready" }).length > 0, "ready can't have open questions");
 }
 
+function critiques() {
+  console.log("\nCritique schema\n");
+
+  const items = schemaJson("critique").$defs.item.enum;
+  const critique = {
+    version: 1,
+    verdict: "revise",
+    summary: "AC-2 names two places; its evidence covers one.",
+    tier_raise: { to: "sensitive", reason: "changes which tokens are accepted" },
+    checklist: items.map((item) => ({ item, result: item === "clause_coverage" ? "concern" : "ok", note: "checked" })),
+    findings: [{ id: "F-1", severity: "blocking", checklist: "clause_coverage", ref: "AC-2", detail: "the CLI clause has no evidence", suggestion: "add a command item" }],
+    dispositions: [{ finding: "F-1", accepted: true, plan_change: "added AC-2.e2, a command item for the CLI", decided_by: "planner" }],
+  };
+  assert(
+    existsSync(schemaPath("critique")) && schemaErrors("critique", critique).length === 0 && schemaErrors("critique", { ...critique, dispositions: undefined }).length === 0,
+    "the critique schema is published and a valid critique passes it",
+  );
+  const bad = [
+    schemaErrors("critique", { ...critique, verdict: "maybe" })[0],
+    schemaErrors("critique", { ...critique, findings: [{ ...critique.findings[0], severity: "advisory" }] })[0],
+    schemaErrors("critique", { ...critique, checklist: [...critique.checklist, { item: "vibes", result: "ok", note: "x" }] })[0],
+    schemaErrors("critique", { ...critique, findings: [{ ...critique.findings[0], checklist: "vibes" }] })[0],
+  ];
+  assert(
+    bad[0]?.startsWith("/verdict: must be one of") &&
+      bad[1]?.startsWith("/findings/0/severity: must be one of") &&
+      bad[2]?.startsWith(`/checklist/${items.length}/item: must be one of`) &&
+      bad[3]?.startsWith("/findings/0/checklist: must be one of"),
+    "an unknown verdict, severity or checklist item is rejected by the critique schema",
+  );
+  const rejected = { ...critique, dispositions: [{ finding: "F-1", accepted: false, decided_by: "operator" }] };
+  assert(schemaErrors("critique", rejected).join() === '/dispositions/0: missing "reason"', "a rejected finding's disposition needs a reason");
+  const accepted = { ...critique, dispositions: [{ finding: "F-1", accepted: true, decided_by: "planner" }] };
+  assert(schemaErrors("critique", accepted).join() === '/dispositions/0: missing "plan_change"', "an accepted finding's disposition needs its plan change");
+  assert(schemaErrors("critique", { ...critique, tier_raise: { to: "standard", reason: "x" } }).length > 0, "a tier raise only raises");
+}
+
 contracts();
 reports();
 verdicts();
 readiness();
+critiques();
 console.log("\nAll factory schema tests passed.");
