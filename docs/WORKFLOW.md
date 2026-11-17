@@ -40,6 +40,8 @@ The `setup-work` skill automatically:
    - Questions/blockers flagged upfront
 4. Creates feature branch: `{issue_number}-{description}`
 
+On projects set up for the factory (required checks configured in `## Escapement Settings`), it also checks readiness, proposes a risk tier and adds a Validation Contract to the scratchpad. Plan approval then offers **Approve + authorize run**, which checks out the branch and starts and approves a factory run for that contract (`docs/FACTORY_CLI.md`). Plain approval works as before.
+
 **Output:**
 - `SCRATCHPAD_42.md` - Your implementation roadmap
 - Feature branch ready for work
@@ -105,6 +107,8 @@ Enables secure user login and session management.
 - Push changes every 2-3 commits
 - Keep scratchpad updated with notes
 - If blocked, add to Questions/Blockers section
+
+**Authorized factory run:** when plan approval was **Approve + authorize run**, `do-work` asks no questions. It works through the tasks with builds and tests through `factory exec`, and commits each one as the AI agent. Then it validates (`validate-work`: the runner's checks, a fresh-context reviewer, the recorded verdict) and opens the PR (`create-pr` through `factory pr`, as the agent's GitHub account, with the validation report). If something stops it, it escalates the run, notifies you and stops. Your next touch is reviewing and merging the PR. This needs the agent's token as `ESCAPEMENT_AGENT_GH_TOKEN`, in `~/.config/escapement/agent.env` or the environment (`docs/FACTORY_CLI.md`).
 
 ---
 

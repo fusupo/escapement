@@ -3,10 +3,11 @@ name: create-pr
 description: Create context-aware pull requests with issue integration. Invoke when user says "create a PR", "open pull request", "make a PR", "submit for review", or after completing work on a feature branch.
 tools:
   - Bash:git *
-  - Bash:gh *
+  - Bash:bash *
   - mcp__github__*
   - mcp__linear__*
   - Read
+  - Write
   - AskUserQuestion
 ---
 
@@ -29,6 +30,33 @@ This skill activates when the user says things like:
 
 ## Workflow Execution
 
+### Phase 0: Authorized Run Check
+
+A factory run approved with setup-work's "Approve + authorize run" opens its own PR, as the AI agent's GitHub identity, with its validation report in the description (docs/FACTORY_DESIGN.md §4.8, §6.1). Ask the runner whether this worktree has one:
+
+```bash
+FACTORY="${CLAUDE_PLUGIN_ROOT}/scripts/factory.sh"
+bash "$FACTORY" --check && bash "$FACTORY" --json authorization
+```
+
+- **`--check` fails, or `.result.matched` is false:** not authorized. Skip this phase; everything below runs exactly as written.
+- **Matched, `next` is `await_merge`:** the PR is open and already shows the current report. Report `.result.pr_number` and stop.
+- **Matched, but `.result.authorizes` lacks `open_pr`, or `.result.next` is neither `pr` nor `refresh_pr`:** stop without opening a PR: "Factory run {run_id} has no passing validation report yet (state {state}, next {next}). Run validate-work first." Don't fall back to opening a PR another way: an authorized branch only gets a PR with its report.
+- **Matched, `next` is `pr` or `refresh_pr`:** authorized. Note `.result.run_id`, `.result.artifact_dir` and `.result.target_ref`, the base branch.
+
+**Under authorization:**
+- Phases 1–4 run as written, with `{target_ref}` as the base. The issue text may already be in `{artifact_dir}/issue.md` (validate-work wrote it); reuse it. The description's Testing section can point at the validation report, which the runner appends.
+- **Phase 5 is skipped.** Show the title and description; don't ask.
+- **Phase 6 is replaced.** Never push, create the PR or apply labels yourself (no `git push`, no `factory push`, no GitHub MCP PR tools): the runner pushes the run's branch and opens or updates the PR as the agent. Write the description with the Write tool to `{artifact_dir}/pr/narrative.md` (the artifact dir, never the worktree), then:
+  ```bash
+  bash "$FACTORY" --json pr '{run_id}' --title '{title}' --body-file '{artifact_dir}/pr/narrative.md'
+  ```
+  Single-quote the run ID and title (a `'` in the title is written `'\''`). For `refresh_pr` the title is optional; the PR keeps its own unless you pass one.
+  - **`.ok`:** report `.result.url`, `.result.pr_number` and `.result.action`: `created`, `updated`, or `recovered` (an earlier, interrupted call had created it). Running it again is safe: it finds the PR an earlier call created.
+  - **No JSON, or exit status 128 or more:** the runner died, possibly after GitHub created the PR. Run the same command again: the lookup finds that PR and records it (`action: recovered`), never a second one.
+  - **`gh_failed` or `push_failed`** (exit 1): GitHub may have acted before the failure. Run the same command once more; it finds a PR an earlier call created. If it fails again, report it and stop.
+  - **Refused** (exit 2, `.error.code`): report the code and message and stop; under do-work, the caller decides whether to escalate. `head_moved` means commits came after validation, or the tree is dirty (validate again); `no_agent_token` means ESCAPEMENT_AGENT_GH_TOKEN isn't set (environment or `~/.config/escapement/agent.env`); `run_deadline` means the run was escalated.
+
 ### Phase 1: Gather Context (Parallel)
 
 Execute these in parallel for efficiency:
@@ -45,6 +73,7 @@ Execute these in parallel for efficiency:
 3. **Remote Status:**
    - Check if branch is pushed to remote
    - Check if remote is up to date
+   - Check for an open PR from this branch: `mcp__github__list_pull_requests(owner, repo, head: "{owner}:{branch}", state: "open")`
 
 ### Phase 2: Detect Issue Context
 
@@ -60,7 +89,7 @@ Execute these in parallel for efficiency:
 
    **For GitHub Issues:**
    ```
-   mcp__github__get_issue(owner, repo, issue_number)
+   mcp__github__issue_read(method: "get", owner, repo, issue_number)
    ```
    - Get title, description, acceptance criteria
    - Get labels for PR labeling
@@ -135,7 +164,7 @@ Closes #{issue_number}
 
 ### Phase 5: Confirm with User
 
-Use `AskUserQuestion` to confirm PR details:
+Under an authorized run (Phase 0), skip this phase. Otherwise use `AskUserQuestion` to confirm PR details:
 
 ```
 AskUserQuestion:
@@ -158,30 +187,46 @@ Display the proposed title and description before asking.
 
 ### Phase 6: Create Pull Request
 
-1. **Ensure branch is pushed:**
-   ```bash
-   git push -u origin {branch-name}
-   ```
+Under an authorized run, Phase 0 replaces this phase (`factory pr`).
 
-2. **Create PR using gh CLI:**
-   ```bash
-   gh pr create \
-     --title "{title}" \
-     --body "$(cat <<'EOF'
-   {PR description}
-   EOF
-   )" \
-     --base {target-branch}
-   ```
+Everything this phase does on GitHub acts as the AI agent's account, never the operator's: the push goes through `factory push` (the agent token), and the PR, its labels and any comment go through the GitHub MCP tools, which are authenticated as the agent (docs/FACTORY_DESIGN.md §4.8).
 
-   Or use MCP GitHub tools:
+1. **Push the branch as the agent:**
+   ```bash
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/factory.sh" --json push
    ```
-   mcp__github__create_pull_request(...)
+   It pushes the current branch, never forced, with `ESCAPEMENT_AGENT_GH_TOKEN` (environment or `~/.config/escapement/agent.env`). Never read or print that file. Route on `.error.code`:
+   - **`.ok`:** the branch is on GitHub at `.result.sha`.
+   - **`no_agent_token`** or **`not_github`:** the agent can't push here: no agent identity is configured, or origin isn't on github.com (the agent token is only ever sent to github.com). Fall back to the operator's push and say so in one line, with the reason:
+     ```
+     Pushing as the operator: no agent identity configured (put ESCAPEMENT_AGENT_GH_TOKEN in ~/.config/escapement/agent.env, chmod 600, or export it)
+     Pushing as the operator: origin isn't on github.com, and the agent token is only sent to github.com
+     ```
+     ```bash
+     git push -u origin {branch-name}
+     ```
+   - **`agent_env_permissions`:** an identity is configured but the file is readable by others. Stop and show the message (`chmod 600 …`); don't fall back.
+   - **`push_base_branch`:** the current branch is the base branch, origin's default branch, `main` or `master`. Stop: a PR needs a feature branch.
+   - **Anything else** (`push_failed`, `no_remote`, `detached_head`): report the code and message and stop. Never retry as the operator.
+
+2. **Create the PR with the GitHub MCP tools:**
+   ```
+   mcp__github__create_pull_request(
+     owner, repo,
+     title: "{title}",
+     head: "{branch-name}",
+     base: "{target-branch}",
+     body: "{PR description}",
+     draft: {true when Phase 5 chose "Create as draft"}
+   )
    ```
 
    **IMPORTANT:** Do NOT add Claude attribution (e.g., "Generated with Claude Code") to PR descriptions.
 
-3. **Apply labels** (from issue + modules affected)
+3. **Apply labels** (from issue + modules affected). A PR is an issue on GitHub:
+   ```
+   mcp__github__issue_write(method: "update", owner, repo, issue_number: {pr_number}, labels: [...])
+   ```
 
 4. **Link to issue** (auto-close on merge via "Closes #X")
 
@@ -234,8 +279,8 @@ Based on context, automatically determine:
 
 ### Branch Not Pushed
 ```
-📤 Branch not on remote. Pushing now...
-   git push -u origin {branch}
+📤 Branch not on remote. Pushing now as the agent...
+   factory push
 ```
 
 ### Issue Not Found
@@ -256,12 +301,17 @@ Based on context, automatically determine:
 
    Would you like to update it instead?
 ```
+Update it with `mcp__github__update_pull_request`.
 
 ## Integration with Other Skills
 
 **Follows:**
-- `do-work` skill - After completing all tasks
+- `do-work` skill - After completing all tasks (under an authorized run, after validate-work passes)
 - `commit-changes` skill - After final commit
+
+**Calls:**
+- `scripts/factory.sh` `authorization` and `pr` (Phase 0), `push` (Phase 6; docs/FACTORY_CLI.md)
+- GitHub MCP tools (as the agent): `issue_read`, `list_pull_requests`, `create_pull_request`, `update_pull_request`, `issue_write`
 
 **Links to:**
 - GitHub Issues - Auto-close on merge
@@ -286,7 +336,11 @@ Based on context, automatically determine:
 
 ---
 
-**Version:** 1.0.0
-**Last Updated:** 2025-12-29
+**Version:** 1.3.0
+**Last Updated:** 2026-11-16
 **Maintained By:** Escapement
 **Converted From:** commands/open-pr.md
+**Changelog:**
+- v1.3.0: Plain path acts on GitHub as the agent: `factory push` pushes the branch (operator push only when no agent identity is configured or origin isn't on github.com, with a notice), and the PR and labels go through the GitHub MCP tools, never the GitHub CLI (#80)
+- v1.2.0: Under authorization, a `factory pr` that dies without JSON is run again; the lookup records the PR it created (#65)
+- v1.1.0: Under a matching active factory authorization, open or update the PR through `factory pr` (as the AI agent, with the validation report), without confirmation; refuse without a passing report (#64)

@@ -21,7 +21,7 @@ A single config line in the project's `CLAUDE.md` tells Escapement to write all 
 - **context-path**: ../myproject-ctx
 ```
 
-When set, all skills that write artifacts (archive-work, session logs via hook) use this path instead of in-repo locations. When unset, existing behavior is preserved.
+When set, the skills that write artifacts (archive-work, stash-artifact, the manifest skills) use this path instead of in-repo locations. Session logs from the PreCompact hook still start in the project root, and archive-work moves them. When unset, existing behavior is preserved.
 
 ## What Changes
 
@@ -39,6 +39,32 @@ The path is relative to the project root. Typical values:
 - `../myproject-ctx` (sibling directory, most common)
 - `~/dev-context/myproject` (absolute path to shared context location)
 
+#### How the setting is read
+
+Everything that needs the setting reads it with the same rules:
+- `scripts/get-context-path.sh` for skills
+- `parseContextPath` in `manifest/init.ts`
+- `parse_context_path` in `scripts/migrate-archives.py`
+
+The rules are:
+
+- Only the first `## Escapement Settings` section counts. It runs until the next `#` or `##` heading, so `###` subheadings stay inside it.
+- Lines inside fenced code blocks (```` ``` ```` or `~~~`) are ignored everywhere. This is what lets a CLAUDE.md show the setting as an example, as this document does, without the example being picked up.
+- The setting line is `- **context-path**: <value>`, and `*` bullets also work. The value is the rest of the line with trailing whitespace trimmed and one pair of surrounding quotes or backticks removed, so paths with spaces work.
+- A `context-path` line outside the section is ignored, and a warning goes to stderr.
+- If there is no setting, the parser prints nothing, and in-repo mode applies.
+
+Skills run the parser like this:
+
+```bash
+CONTEXT_PATH=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/get-context-path.sh" CLAUDE.md)
+```
+
+The shared cases in `scripts/fixtures/context-path.md` describe the expected behavior, and all three implementations are tested against them:
+- `scripts/test-get-context-path.sh`
+- `manifest/test-init.ts`
+- `scripts/test-migrate-archives.py`
+
 ### 2. Context Directory Structure
 
 The context directory uses a flat-on-main, directory-per-branch layout:
@@ -53,7 +79,10 @@ myproject-ctx/
 │   ├── archive/
 │   │   ├── SCRATCHPAD_42.md
 │   │   ├── SESSION_LOG_1.md
-│   │   └── README.md
+│   │   ├── README.md
+│   │   └── runs/acme-app#42-r1/   (copy: contract, reports, verdicts, PR body)
+│   ├── runs/
+│   │   └── acme-app#42-r1/        (factory run artifacts, written by the runner)
 │   ├── scripts/
 │   │   └── test-auth-flow.sh
 │   └── notes/
@@ -71,17 +100,18 @@ Key conventions:
 - `archive/` subdirectory replaces `docs/dev/cc-archive/{timestamp}-{issue}/`
 - `scripts/` for ad hoc scripts that shouldn't be committed to code repo
 - `notes/` for freeform dev notes, research, etc.
+- `runs/{run_id}/` holds a factory run's artifacts (docs/FACTORY_CLI.md). They stay there, since the factory database records their paths; `archive-work` copies the contract, reports, verdicts and PR body into `archive/runs/{run_id}/` and closes the run
 - No timestamp prefix on branch directories (the branch name IS the identifier)
 - Timestamp stays on archive artifacts if multiple archives per branch
 
 ### 3. Hook (archive-session-log.sh)
 
-The hook always writes `SESSION_LOG_{N}.md` to the **project root**, regardless of context-path configuration. This keeps session logs alongside the active scratchpad during work. The `archive-work` skill is responsible for moving session logs to the context directory at archive time.
+The hook always writes `SESSION_LOG_{N}.jsonl` to the **project root**, regardless of context-path configuration. This keeps session logs alongside the active scratchpad during work. The `archive-work` skill is responsible for moving session logs to the context directory at archive time. Each log holds only the conversation since the previous log (see [Session Archiving](SESSION-ARCHIVING.md#what-a-session-log-covers)).
 
 ### 4. Modified Skill (archive-work)
 
 The archive-work skill gains context-path awareness:
-1. Read `CLAUDE.md` for `context-path` setting
+1. Read the `context-path` setting with `scripts/get-context-path.sh` (see [How the setting is read](#how-the-setting-is-read))
 2. If set, archive to `{context-path}/{branch}/archive/` instead of `docs/dev/cc-archive/`
 3. Scratchpad is copied to context directory, then removed from code repo (`git rm`)
 4. Session logs are moved from project root to the archive directory
@@ -123,10 +153,22 @@ A lightweight skill for saving ad hoc scripts and notes to the context directory
 Triggers: "stash this script", "save this to context", "keep this outside the repo"
 
 Behavior:
-1. Read context-path from CLAUDE.md
+1. Read context-path with `scripts/get-context-path.sh`
 2. Determine current branch
 3. Copy/write the artifact to `{context-path}/{branch}/scripts/` or `{context-path}/{branch}/notes/`
 4. Report location
+
+### 7. Manifest Database
+
+The manifest database is **not** stored under context-path. It is one SQLite file per user, shared by every project, because work items carry their repo and dependencies cross repos. The manifest CLI (`scripts/manifest.sh`) finds it in this order:
+
+1. `--data-dir <path>` uses `{path}/manifest.db`
+2. `$ESCAPEMENT_MANIFEST_DIR/manifest.db`
+3. `${XDG_DATA_HOME:-~/.local/share}/escapement/manifest.db`
+
+`manifest.sh db-path` prints the location without opening the database. Seed files and other manifest artifacts that the skills write per project still go under `{context-path}/manifest/`.
+
+The schema is versioned with `PRAGMA user_version` and upgraded in place by ordered migrations (`manifest/migrations.ts`).
 
 ## What Doesn't Change
 
@@ -140,8 +182,10 @@ Behavior:
 ## Backward Compatibility
 
 - No `context-path` in CLAUDE.md -> everything works exactly as before
-- Context path set -> only archive-work and the hook change behavior
+- Context path set -> only archive-work, stash-artifact and the manifest skills change behavior
+- A `context-path` line that is not under `## Escapement Settings` is now ignored, with a warning (#57). Earlier versions accepted it anywhere in CLAUDE.md, including inside code examples
 - Existing archives in `docs/dev/cc-archive/` are not migrated automatically
+- Before #58 the manifest database was at `{context-path}/manifest/manifest.db`, found through the plugin's own CLAUDE.md. Copy an existing one to the shared location, or point `ESCAPEMENT_MANIFEST_DIR` at its directory
 
 ## Obsidian Compatibility
 

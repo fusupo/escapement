@@ -25,17 +25,30 @@ escapement/
 │   ├── commit-changes/  # Smart git commits with conventions
 │   ├── create-pr/       # Context-aware pull request creation
 │   ├── review-pr/       # Roadmap-aware PR review
-│   ├── do-work/         # Execute work from scratchpad
+│   ├── do-work/         # Execute work from scratchpad (authorized factory path)
+│   ├── validate-work/   # Validate a factory run: checks, reviewer, verdict; manual outcomes
 │   ├── archive-work/    # Archive completed scratchpads (context-path aware)
 │   ├── create-issue/    # Ad hoc GitHub issue creation
 │   ├── stash-artifact/  # Save artifacts to context directory
-│   └── prime-session/   # Project orientation
+│   ├── prime-session/   # Project orientation
+│   ├── manifest-bootstrap/  # Bootstrap manifest dependency graph
+│   ├── manifest-plan/  # Generate dispatch plan with parallel groups
+│   ├── manifest-sync/  # Sync manifest after work completion
+│   ├── manifest-check/ # Manifest health checks and drift detection
+│   └── manifest-dispatch/ # Dispatch parallel work from manifest plan
 ├── hooks/
 │   ├── hooks.json       # Hook configuration
-│   └── archive-session-log.sh  # PreCompact hook script
+│   ├── archive-session-log.sh  # PreCompact hook script
+│   └── factory-exec-guard.sh   # PreToolUse hook: a factory run's checks go through `factory exec`
 ├── scripts/             # Reusable utility scripts for skills
-│   └── convert-session-log.py  # JSONL→markdown session log converter
-├── agents/              # Future: specialized subagents
+│   ├── convert-session-log.py  # JSONL→markdown session log converter
+│   ├── get-context-path.sh     # Shared context-path parser (section- and fence-aware)
+│   ├── manifest.sh             # Runs the manifest CLI from any cwd (skills call this, never manifest-cli.ts directly)
+│   ├── factory.sh              # Runs the factory runner CLI from any cwd (docs/FACTORY_CLI.md)
+│   └── slice-session-log.sh    # Writes the transcript part no earlier session log covers
+├── schemas/factory/     # Published JSON Schemas for factory documents (contract, report, verdict, readiness)
+├── prompts/factory/     # Agent prompts the factory ships as data (validation-reviewer); hosts find them with `factory.sh prompt`
+├── agents/              # Subagents: scratchpad-planner, validation-reviewer (a thin wrapper over prompts/factory/)
 ├── docs/                # Extended documentation
 │   ├── WORKFLOW.md      # Workflow explanation
 │   ├── CUSTOMIZATION.md # Customization guide
@@ -62,28 +75,48 @@ escapement/
 | `commit-changes` | "Commit these changes" | Smart commits with project conventions |
 | `create-pr` | "Create a PR" | Context-aware pull request creation |
 | `review-pr` | "Review PR #123" | Roadmap-aware code review |
-| `do-work` | "Start working on issue #42" | Execute tasks from scratchpad with TodoWrite |
+| `do-work` | "Start working on issue #42" | Execute tasks from scratchpad with TodoWrite; under an authorized factory run, through to an open PR without questions |
+| `validate-work` | "Validate this work" | Factory validation: `factory validate`, the validation-reviewer, `record-review`; manual outcomes |
 | `archive-work` | "Archive this work" | Move completed scratchpads to archive (context-path aware) |
 | `create-issue` | "Create an issue", "File a bug" | Ad hoc GitHub issue creation from natural language |
 | `stash-artifact` | "Stash this script", "Save to context" | Save artifacts to context directory |
 | `prime-session` | "Orient me", "What is this project" | Read project docs for context |
+| `manifest-bootstrap` | "Bootstrap the manifest" | Build manifest dependency graph from GitHub issues |
+| `manifest-plan` | "Plan the dispatch", "What can run in parallel" | Generate dispatch plan with parallel groups and overlaps |
+| `manifest-sync` | "Sync the manifest", "Mark work done" | Mark items done, record actuals, recompute frontier |
+| `manifest-check` | "Check manifest health", "Run manifest checks" | Detect stale items, reconcile predictions, find drift |
+| `manifest-dispatch` | "Dispatch work", "Launch parallel agents" | Create worktrees, constraint blocks, launch parallel agents |
 
 ### Hooks
 
-**PreCompact hook** archives session transcripts before auto-compaction:
+**PreCompact hook** archives session transcripts before compaction (auto and manual):
 - Configured in `hooks/hooks.json`
 - Uses `${CLAUDE_PLUGIN_ROOT}` for portable paths
-- **Context-path aware**: writes to `{context-path}/{branch}/` if configured, otherwise project root
-- Creates `SESSION_LOG_{N}.md` files
+- Always writes to the project root; `archive-work` moves logs to the context path
+- Creates `SESSION_LOG_{N}.jsonl` files, each holding only the conversation since the previous log (via `scripts/slice-session-log.sh` and a per-session cursor)
 - Requires `jq` to be installed
+
+**PreToolUse hook** `factory-exec-guard.sh` (matcher `Bash`): while a worktree's factory run is implemented under an authorization, refuses the project's `static`/`verify` commands outside `factory exec`. It reads only a marker the runner keeps in the worktree's git dir, so it is inert everywhere else; `exec-hook: off` opts a project out. Tests: `scripts/test-factory-hook.sh`.
+
+**Authorized path:** `commit-changes`, `create-pr` and `do-work` drop their confirmations only when `factory authorization` matches. Everything the factory writes to GitHub (push, PR) goes through the runner as the AI agent's identity (`ESCAPEMENT_AGENT_GH_TOKEN`, from the environment or `~/.config/escapement/agent.env`), never as the operator, and never falls back to the operator. See `docs/FACTORY_CLI.md`. Outside a run the skills act as the agent too (see GitHub as the Agent below).
 
 ### Agents
 
-**Agents are specialized subagents** for delegation (extensibility ready). Defined as markdown files in `agents/`.
+**Agents are specialized subagents** for delegation. Defined as markdown files in `agents/`.
 
-Currently empty but ready for extension.
+- `scratchpad-planner`: codebase analysis for `setup-work`.
+- `validation-reviewer`: the factory's fresh-context reviewer. Its instructions live in `prompts/factory/validation-reviewer.md` so other runtimes can run the same reviewer; keep the agent file a thin wrapper that reads that prompt.
 
 ## Development Commands
+
+### Running the Tests
+
+```bash
+bash scripts/run-tests.sh                        # every suite, one at a time (JUnit with --junit <path>)
+bash scripts/run-tests.sh scripts/test-factory.sh  # one suite
+```
+
+This is also Escapement's factory `verify` (see Escapement Settings). Never run suites in parallel. The runner's crash tests use `ESCAPEMENT_FACTORY_FAULT` (testing only, docs/FACTORY_CLI.md).
 
 ### Testing Plugin
 
@@ -139,7 +172,7 @@ Projects can redirect development artifacts (session logs, archives) to an exter
 - **context-path**: ../myproject-ctx
 ```
 
-When set, `archive-work`, `stash-artifact`, and the PreCompact hook write to this directory instead of the code repo. See `docs/CONTEXT_PATH.md` for full design details.
+When set, `archive-work`, `stash-artifact` and the manifest skills write to this directory instead of the code repo. The PreCompact hook still writes to the project root, and `archive-work` moves its logs. Only the first `## Escapement Settings` section is read, and fenced blocks such as the example above are ignored. Skills read the setting with `scripts/get-context-path.sh` and never grep for it. See `docs/CONTEXT_PATH.md` for full design details.
 
 ### Scratchpad Files
 
@@ -157,6 +190,16 @@ Each project repo should have its own CLAUDE.md defining:
 - Development priorities
 - Branch naming conventions
 - Testing standards
+
+### GitHub as the Agent
+
+Escapement's GitHub work is visibly the AI agent's, never the operator's (#80, `docs/FACTORY_DESIGN.md` §4.8). The GitHub MCP server is authenticated as the agent account; the `gh` CLI is logged in as the operator.
+
+- **Skills use the GitHub MCP tools for everything on GitHub** (issues, PRs, comments, reviews, reads), with the server's current tool names (`issue_read`, `issue_write`, `pull_request_read`, `create_pull_request`, `pull_request_review_write`, …). Skills never call `gh` and never list `Bash:gh` in their tools. `manifest/test-skills-github.ts` enforces this.
+- **The only remaining `gh` use is the runner** (`manifest/factory/`), always with the agent token as `GH_TOKEN`: the authorized path's PR and `factory agent`'s account lookup. It is a subprocess for hosts with no MCP client, so it can't use the MCP tools.
+- **Pushes:** skills push with `factory push` (the current branch, with the agent token, never forced, never the base branch, origin's default branch, `main` or `master`), not `git push`. Under an authorized run, `factory pr` pushes. The agent token is only ever sent to github.com: any other origin host is refused with `not_github`.
+- **Commits:** `commit-changes` commits with the `factory agent` identity, on the plain path too.
+- **Without an agent identity** (`no_agent_token`), or off github.com for a push (`not_github`), plain `commit-changes` and `create-pr` fall back to the operator's git identity and `git push`, and say so in one line. A configured identity that fails (`agent_env_permissions`, a failed lookup or push) is reported, never retried as the operator. The authorized path never falls back.
 
 ### Commit Message Format
 
@@ -197,6 +240,7 @@ Skills can be invoked two ways:
 - Don't mix unrelated changes in single commit
 - Don't modify project-specific files (each repo's CLAUDE.md) from muleteer repo
 - Don't push directly to main (always PR)
+- Don't call `gh` from a skill: use the GitHub MCP tools, and `factory push` for pushes
 - Don't skip commit message descriptions
 - Don't leave debugging code or console.logs
 
@@ -305,3 +349,17 @@ The `description` field should include natural language trigger patterns so Clau
 ## Escapement Settings
 
 - **context-path**: ../escapement-ctx
+- **base-branch**: develop
+- **static**: (cd manifest && npx tsc --noEmit) && for f in scripts/*.sh hooks/*.sh; do bash -n "$f" || exit 1; done
+- **verify**: bash scripts/run-tests.sh
+- **test-results**: junit:$FACTORY_RESULTS_DIR/junit.xml
+- **test-files**: manifest/test-*.ts, manifest/factory/testkit.ts, manifest/factory/fixtures.ts, scripts/test-*, scripts/fixtures/
+- **sensitive-paths**: skills/**, agents/**, hooks/**, CLAUDE.md, schemas/factory/**, prompts/factory/**, manifest/factory/**, manifest/migrations.ts
+- **validation-files**: scripts/run-tests.sh, manifest/run-suites.ts, manifest/package.json, manifest/package-lock.json, manifest/tsconfig.json, CLAUDE.md
+- **run-budget**: 4h
+
+These make Escapement a factory project itself (#65): `verify` runs every suite one at a time and writes JUnit (`manifest/run-suites.ts`), so a contract can select one assertion as `manifest/test-x.ts::<message>`. A new worktree needs `npm ci --prefix manifest` once; `setup` is left unset so validations stay fast.
+
+## Project Context
+
+@../escapement-ctx/PROJECT_LORE.md

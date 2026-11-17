@@ -35,10 +35,10 @@ Execute these in parallel:
 
 1. **PR Details:**
    ```
-   mcp__github__get_pull_request(owner, repo, pullNumber)
-   mcp__github__get_pull_request_diff(owner, repo, pullNumber)
-   mcp__github__get_pull_request_files(owner, repo, pullNumber)
-   mcp__github__get_pull_request_comments(owner, repo, pullNumber)
+   mcp__github__pull_request_read(method: "get", owner, repo, pullNumber)
+   mcp__github__pull_request_read(method: "get_diff", owner, repo, pullNumber)
+   mcp__github__pull_request_read(method: "get_files", owner, repo, pullNumber)
+   mcp__github__pull_request_read(method: "get_comments", owner, repo, pullNumber)
    ```
 
 2. **Project Context:**
@@ -198,10 +198,11 @@ AskUserQuestion:
       description: "Keep review local, don't post to GitHub"
 ```
 
-If user chooses to submit:
+If user chooses to submit, post it with the GitHub MCP tools, so the review is the agent account's:
 
 ```
-mcp__github__create_and_submit_pull_request_review(
+mcp__github__pull_request_review_write(
+  method: "create",
   owner, repo, pullNumber,
   body: "{review content}",
   event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT"
@@ -264,9 +265,10 @@ mcp__github__create_and_submit_pull_request_review(
 
 ---
 
-**Version:** 1.1.0
-**Last Updated:** 2025-12-31
+**Version:** 1.1.1
+**Last Updated:** 2026-11-16
 **Maintained By:** Escapement
 **Changelog:**
+- v1.1.1: Use the GitHub MCP server's current tools (`pull_request_read`, `pull_request_review_write`) (#80)
 - v1.1.0: Added AskUserQuestion for review submission confirmation
 - v1.0.0: Initial conversion from commands/pr-review.md

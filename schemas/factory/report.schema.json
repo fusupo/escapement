@@ -1,0 +1,514 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/fusupo/escapement/schemas/factory/report.schema.json",
+  "title": "Escapement factory validation report",
+  "description": "One attempt's validation report, attempts/{n}/report.json (docs/FACTORY_DESIGN.md §5.3, outcomes §5.4). Written by the runner; a report applies only while the branch head equals head_sha and the contract digest is the approved one.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "run_id",
+    "attempt",
+    "status",
+    "outcome",
+    "validation_scope",
+    "head_sha",
+    "merge_base_sha",
+    "target_ref",
+    "target_sha",
+    "contract_digest",
+    "policy_version",
+    "tree_clean_after",
+    "tier",
+    "changes",
+    "phases",
+    "evidence",
+    "findings",
+    "flags"
+  ],
+  "properties": {
+    "revision": {
+      "description": "Report revision. Absent in report.json (revision 1). record-manual writes report.r{k}.json, k >= 2, when human outcomes resolve pending_manual; earlier revisions are never changed (§5.5).",
+      "type": "integer",
+      "minimum": 2
+    },
+    "supersedes": {
+      "description": "File name of the revision this one replaces, in the same attempt directory.",
+      "type": "string",
+      "minLength": 1
+    },
+    "manual_outcomes": {
+      "description": "Human outcomes for manual evidence, recorded with factory record-manual and bound to this report's head_sha and contract_digest.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["evidence_id", "outcome", "note", "recorder", "recorded_at"],
+        "properties": {
+          "evidence_id": { "type": "string", "minLength": 1 },
+          "outcome": { "enum": ["pass", "fail"] },
+          "note": { "type": "string", "minLength": 1 },
+          "recorder": { "type": "string", "minLength": 1 },
+          "recorded_at": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "version": {
+      "const": 1
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "status": {
+      "description": "Attempt state when the report was written. Drafts are written before review.",
+      "enum": [
+        "checks_running",
+        "awaiting_review",
+        "finalizing",
+        "complete",
+        "interrupted"
+      ]
+    },
+    "outcome": {
+      "description": "Null in a draft; set once the attempt completes.",
+      "enum": [
+        "pass",
+        "fail",
+        "blocked",
+        "error",
+        "pending_manual",
+        "interrupted",
+        null
+      ]
+    },
+    "validation_scope": {
+      "enum": [
+        "branch",
+        "merge_result"
+      ]
+    },
+    "head_sha": {
+      "$ref": "#/$defs/sha"
+    },
+    "merge_base_sha": {
+      "$ref": "#/$defs/sha"
+    },
+    "target_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "target_sha": {
+      "$ref": "#/$defs/sha"
+    },
+    "contract_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "policy_version": {
+      "description": "Runner version plus the digest of the project's factory settings, e.g. factory@1.0.0+settings:sha256:…",
+      "type": "string",
+      "minLength": 1
+    },
+    "lockfile_digest": {
+      "description": "Digest of the dependency lockfile(s), or null when the project has none.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "tree_clean_after": {
+      "type": "boolean"
+    },
+    "tier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "proposed",
+        "actual",
+        "reasons"
+      ],
+      "properties": {
+        "proposed": {
+          "$ref": "#/$defs/tier"
+        },
+        "actual": {
+          "$ref": "#/$defs/tier"
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "changes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "new_evidence",
+        "modified_assertions",
+        "execution_policy"
+      ],
+      "properties": {
+        "new_evidence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "modified_assertions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "execution_policy": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "phases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "outcome"
+        ],
+        "properties": {
+          "name": {
+            "enum": [
+              "static",
+              "evidence",
+              "review",
+              "scenarios"
+            ]
+          },
+          "outcome": {
+            "enum": [
+              "pass",
+              "fail",
+              "blocked",
+              "error",
+              "pending_manual"
+            ]
+          },
+          "duration_s": {
+            "type": "number",
+            "minimum": 0
+          },
+          "log": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "executed",
+          "supports_criterion"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "executed": {
+            "description": "The runner's deterministic result. not_run: an earlier phase stopped the attempt.",
+            "enum": [
+              "passed",
+              "failed",
+              "skipped",
+              "not_found",
+              "error",
+              "not_run",
+              "pending_manual"
+            ]
+          },
+          "supports_criterion": {
+            "description": "The reviewer's judgment; null until review.",
+            "enum": [
+              "yes",
+              "no",
+              "partial",
+              null
+            ]
+          },
+          "procedure_adequate": {
+            "enum": [
+              "yes",
+              "no",
+              null
+            ]
+          },
+          "exit_code": {
+            "type": "integer"
+          },
+          "log": {
+            "type": "string"
+          },
+          "excerpt": {
+            "type": "string"
+          },
+          "rationale": {
+            "description": "The reviewer's rationale for its judgment; set once the verdict is recorded.",
+            "type": "string"
+          }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "severity",
+          "detail"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "severity": {
+            "enum": [
+              "blocking",
+              "advisory"
+            ]
+          },
+          "detail": {
+            "type": "string",
+            "minLength": 1
+          },
+          "location": {
+            "type": "string"
+          },
+          "evidence_digest": {
+            "description": "Digest of normalized failure output, so the fix loop can tell a different failure from no change.",
+            "$ref": "#/$defs/digest"
+          }
+        }
+      }
+    },
+    "flags": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "attempts_used": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "wall_clock_s": {
+          "type": "number",
+          "minimum": 0
+        },
+        "tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        }
+      }
+    },
+    "invocations": {
+      "description": "Every command the attempt ran, binding logs and structured results to the invocation that produced them (§4.4). Paths are relative to the attempt directory.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "phase",
+          "command",
+          "started_at",
+          "exit_code",
+          "outcome",
+          "log"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "phase": {
+            "enum": [
+              "setup",
+              "static",
+              "verify",
+              "evidence"
+            ]
+          },
+          "command": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string"
+          },
+          "duration_s": {
+            "type": "number",
+            "minimum": 0
+          },
+          "exit_code": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "outcome": {
+            "description": "pass: exit 0; fail: non-zero exit; error: stopped by the runner (reason) or failed to start.",
+            "enum": [
+              "pass",
+              "fail",
+              "error"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "log": {
+            "type": "string"
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "path",
+                "digest"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "digest": {
+                  "$ref": "#/$defs/digest"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "review": {
+      "description": "The recorded review (§4.9), present once record-review has finalized the attempt. The draft report is kept beside it as report.draft.json.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "verdict",
+        "verdict_digest",
+        "source_digest",
+        "recorded_at",
+        "sensitive_paths",
+        "modified_assertions"
+      ],
+      "properties": {
+        "verdict": {
+          "description": "The recorded verdict, relative to the attempt directory.",
+          "type": "string"
+        },
+        "verdict_digest": {
+          "description": "Digest of the verdict's canonical JSON; re-recording the same verdict is a no-op.",
+          "$ref": "#/$defs/digest"
+        },
+        "source_digest": {
+          "description": "Digest of the source snapshot the reviewer read.",
+          "$ref": "#/$defs/digest"
+        },
+        "recorded_at": {
+          "type": "string",
+          "description": "When the verdict was recorded (ISO 8601, UTC)."
+        },
+        "sensitive_paths": {
+          "description": "The reviewer's sign-off for every changed sensitive path and execution-policy change.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "signoff",
+              "rationale"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "signoff": {
+                "enum": [
+                  "approve",
+                  "concern"
+                ]
+              },
+              "rationale": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "modified_assertions": {
+          "description": "The reviewer's justification for every modified-assertion location.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "location",
+              "justified",
+              "rationale"
+            ],
+            "properties": {
+              "location": {
+                "type": "string"
+              },
+              "justified": {
+                "type": "boolean"
+              },
+              "rationale": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "tier": {
+      "enum": [
+        "standard",
+        "sensitive"
+      ]
+    },
+    "sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

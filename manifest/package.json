@@ -1,0 +1,53 @@
+{
+  "name": "escapement-manifest",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "test": "node --import tsx test-schema.ts",
+    "seed": "node --import tsx seed.ts",
+    "test:seed": "node --import tsx test-seed.ts",
+    "manifest": "node --import tsx manifest-cli.ts",
+    "test:queries": "node --import tsx test-queries.ts",
+    "test:plan": "node --import tsx test-plan.ts",
+    "test:init": "node --import tsx test-init.ts",
+    "test:cli": "node --import tsx test-cli.ts",
+    "test:check": "node --import tsx test-check.ts",
+    "test:migrate": "node --import tsx test-migrate.ts",
+    "test:factory-context": "node --import tsx test-factory-context.ts",
+    "test:factory-state": "node --import tsx test-factory-state.ts",
+    "test:factory-locks": "node --import tsx test-factory-locks.ts",
+    "test:factory-runs": "node --import tsx test-factory-runs.ts",
+    "test:factory-exec": "node --import tsx test-factory-exec.ts",
+    "test:factory-resume": "node --import tsx test-factory-resume.ts",
+    "test:factory-settings": "node --import tsx test-factory-settings.ts",
+    "test:factory-tiers": "node --import tsx test-factory-tiers.ts",
+    "test:factory-schemas": "node --import tsx test-factory-schemas.ts",
+    "test:factory-readiness": "node --import tsx test-factory-readiness.ts",
+    "test:factory-revision": "node --import tsx test-factory-revision.ts",
+    "test:factory-classify": "node --import tsx test-factory-classify.ts",
+    "test:factory-junit": "node --import tsx test-factory-junit.ts",
+    "test:factory-validate": "node --import tsx test-factory-validate.ts",
+    "test:factory-review": "node --import tsx test-factory-review.ts",
+    "test:factory-authorization": "node --import tsx test-factory-authorization.ts",
+    "test:factory-github": "node --import tsx test-factory-github.ts",
+    "test:factory-pr": "node --import tsx test-factory-pr.ts",
+    "test:factory-manual": "node --import tsx test-factory-manual.ts",
+    "test:factory-archive": "node --import tsx test-factory-archive.ts",
+    "test:factory-guard": "node --import tsx test-factory-guard.ts",
+    "test:factory-fault": "node --import tsx test-factory-fault.ts",
+    "test:run-suites": "node --import tsx test-run-suites.ts"
+  },
+  "dependencies": {
+    "ajv": "^8.17.1",
+    "better-sqlite3": "^11.0.0",
+    "fast-xml-parser": "5.11.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^25.5.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

@@ -4,13 +4,16 @@ description: Archive completed scratchpads and session logs to project history. 
 tools:
   - Read
   - Write
+  - Edit
   - Bash:mkdir *
   - Bash:mv *
   - Bash:cp *
   - Bash:realpath *
   - Bash:git *
   - Bash:python3 *
+  - Bash:bash *
   - Bash:rm *
+  - Bash:find *
   - Glob
   - Grep
   - AskUserQuestion
@@ -39,7 +42,13 @@ This skill activates when the user says things like:
 
 ### Phase 1: Detect Context Path
 
-**Read project's CLAUDE.md** and check for Escapement Settings:
+**Read the context-path setting** with the shared parser:
+
+```bash
+CONTEXT_PATH=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/get-context-path.sh" CLAUDE.md)
+```
+
+It reads only the `## Escapement Settings` section of CLAUDE.md and ignores fenced code blocks, so documentation examples such as this one never match:
 
 ```markdown
 ## Escapement Settings
@@ -47,7 +56,9 @@ This skill activates when the user says things like:
 - **context-path**: ../myproject-ctx
 ```
 
-**If context-path is set:**
+Empty output means context-path is not set. Don't grep or sed CLAUDE.md for the setting yourself: the first match is often an example (#57).
+
+**If context-path is set** (non-empty output):
 - Resolve the path relative to project root
 - Determine current branch name
 - Target directory: `{context-path}/{branch}/archive/`
@@ -57,6 +68,56 @@ This skill activates when the user says things like:
 **If context-path is NOT set:**
 - Fall back to `docs/dev/cc-archive/` (existing behavior)
 - Set `ARCHIVE_MODE=in-repo`
+
+### Phase 1.5: Capture Session Tail
+
+The PreCompact hook only writes session logs at compaction, so the conversation since the last compaction (or the last archive) has no log yet. Save it now so it is archived with this work, not with whichever issue the next compaction happens in. Run this **before** Phase 2 so the new log is found with the others.
+
+1. **Slice the current session's transcript** without moving its cursor yet:
+   ```bash
+   SLICER="${CLAUDE_PLUGIN_ROOT}/scripts/slice-session-log.sh"
+   TRANSCRIPT=$(bash "$SLICER" find "${CLAUDE_CODE_SESSION_ID:-}") &&
+     bash "$SLICER" slice "$TRANSCRIPT" . --no-advance
+   ```
+   - `find` fails (no `CLAUDE_CODE_SESSION_ID`, or no transcript): warn `Session tail not captured: {error}` and go on to Phase 2.
+   - `EMPTY`: nothing new since the last log. Go on to Phase 2.
+   - Otherwise it prints `FILE=… START=… END=… LINES=…`. Keep `FILE` and `END`.
+
+2. **Check whose conversation it is.** Transcript entries record the git branch they happened on:
+   ```bash
+   python3 -I - "$FILE" <<'EOF'
+   import collections, json, sys
+   branches, times = collections.Counter(), []
+   for line in open(sys.argv[1], encoding="utf-8"):
+       try:
+           entry = json.loads(line)
+       except json.JSONDecodeError:
+           continue
+       if entry.get("gitBranch"):
+           branches[entry["gitBranch"]] += 1
+       if entry.get("timestamp"):
+           times.append(entry["timestamp"])
+   print(dict(branches), times[0] if times else "-", times[-1] if times else "-")
+   EOF
+   ```
+
+3. **Include or leave it:**
+   - **Every branch is the current branch** (`git branch --show-current`): include it without asking. Run `bash "$SLICER" commit "$TRANSCRIPT" "$END"` and report `Captured session tail: {LINES} lines -> {FILE}`.
+   - **Otherwise** (e.g. archiving from `develop` after a merge, or a session that moved on to other work), ask:
+     ```
+     AskUserQuestion:
+       question: "The session since the last log ({LINES} lines, {size}, {first} to {last}) ran on branches {branch: count, ...}. Include it in this archive?"
+       header: "Session tail"
+       options:
+         - label: "Include in this archive"
+           description: "Archive it with this work"
+         - label: "Leave for the next log"
+           description: "Don't archive it now; the next session log picks it up"
+     ```
+     - **Include:** run `bash "$SLICER" commit "$TRANSCRIPT" "$END"`
+     - **Leave:** `rm "$FILE"`. The cursor stays put, so nothing is lost.
+
+The rest of this archive-work run lands in the session's next log.
 
 ### Phase 2: Detect Artifacts (Parallel)
 
@@ -69,7 +130,8 @@ This skill activates when the user says things like:
 2. **Find Session Logs:**
    - `Glob: SESSION_LOG_*.jsonl` in project root (current format — raw JSONL transcripts)
    - `Glob: SESSION_LOG_*.md` in project root (legacy format — pre-converted markdown)
-   - These are created by the PreCompact hook before auto-compaction
+   - These are created by the PreCompact hook at each compaction, and by Phase 1.5 for the session tail
+   - Each covers only the conversation since the previous log, not the whole session
    - Associate with scratchpad (same issue context)
 
 3. **Find Other Related Files:**
@@ -80,6 +142,13 @@ This skill activates when the user says things like:
    - Current branch for context
    - Recent commits for PR detection
    - HEAD SHA for linking
+
+5. **Find a Factory Run:** setup-work records an authorized run in the scratchpad's `## Factory Run` section (`**Run:** {run_id}`). When there is one:
+   ```bash
+   FACTORY="${CLAUDE_PLUGIN_ROOT}/scripts/factory.sh"
+   bash "$FACTORY" --json status '{run_id}'
+   ```
+   Note `.result.run.artifact_dir`, `.result.run.state` and `.result.run.pr_number` for Phase 6.5. Single-quote the run ID: it contains `#`. No section, or `status` fails (`no_such_run`), means there's no run to archive.
 
 **After parallel detection, verify completion:**
 - Check if scratchpad tasks are all complete
@@ -137,6 +206,8 @@ This produces a markdown file with:
 - Thinking blocks and system messages stripped
 - Long content truncated to 100 lines
 
+Because each log covers only its own stretch of the session, the metadata Timestamp is when that stretch began (usually the previous compaction), not when the session started.
+
 **The resulting `.md` file** is ready to be moved to the archive directory in Phase 4 (alongside any legacy `.md` session logs).
 
 **Legacy `.md` files:** Session logs already in `.md` format (from before this change) need no conversion — they pass through to Phase 4 directly.
@@ -147,7 +218,7 @@ This produces a markdown file with:
 
    **Context mode:**
    ```bash
-   CONTEXT_PATH=$(sed -n 's/^[[:space:]]*-[[:space:]]*\*\*context-path\*\*:[[:space:]]*\([^[:space:]]*\).*/\1/p' CLAUDE.md | head -1)
+   CONTEXT_PATH=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/get-context-path.sh" CLAUDE.md)
    BRANCH=$(git branch --show-current)
    ARCHIVE_DIR="$CONTEXT_PATH/$BRANCH/archive"
    mkdir -p "$ARCHIVE_DIR"
@@ -220,6 +291,123 @@ This produces a markdown file with:
    The context directory is NOT a git repo managed by this skill — the operator handles
    that separately.
 
+### Phase 4.5: Project Lore Retro
+
+Before confirming the archive, perform a retro pass on `PROJECT_LORE.md` — the cumulative, cross-branch record of non-obvious project context. The archive moment is the highest-signal time for this: the work is done, but the mental model is still loaded.
+
+**Lore file location (cumulative, NOT under `{branch}/`):**
+- Context mode: `{context-path}/PROJECT_LORE.md`
+- In-repo mode: `PROJECT_LORE.md` at project root
+
+**What the lore file captures** (each entry: one line, tagged, with a *why*):
+- `[invariant]` — load-bearing constraints that must hold
+- `[gotcha]` — surprising behaviors in tools/libs/system
+- `[glossary]` — project-specific vocabulary
+- `[coupling]` — non-obvious "change X, check Y" relationships
+- `[do-not-touch]` — looks refactorable, has hidden constraints
+
+**Inclusion test:** *would a future session waste time, repeat a mistake, or make a wrong choice without this?* If no, skip.
+
+**Out of scope:** what code does (readable from source), what changed (git history), current task state (scratchpad), retrospective narrative ("this was tricky"), full decision records (if still load-bearing, it's an invariant).
+
+**Format bias:** high-signal, grep-able one-liners over narrative. Context is expensive.
+
+#### Steps
+
+1. **Identify scope of work:**
+   ```bash
+   MERGE_BASE=$(git merge-base HEAD origin/main 2>/dev/null || git merge-base HEAD main)
+   CHANGED_FILES=$(git diff --name-only "$MERGE_BASE" HEAD)
+   ```
+
+2. **Reconcile (edit/remove stale entries):**
+   If `PROJECT_LORE.md` exists at the resolved path:
+   - Read it
+   - Identify entries that reference files or domains in `$CHANGED_FILES`
+   - Surface those entries to the user as "potentially affected by this work"
+   - For each flagged entry, ask the user whether to keep / edit / remove:
+     ```
+     AskUserQuestion:
+       question: "This lore entry may be stale after this work. Action?"
+       header: "Reconcile"
+       options:
+         - "Keep as-is"
+         - "Edit (I'll provide replacement text)"
+         - "Remove"
+     ```
+   - Apply user choices. Skip this step if no entries are flagged.
+
+3. **Capture new entries:**
+   Ask the user whether the completed work surfaced lore worth capturing:
+   ```
+   AskUserQuestion:
+     question: "Any new project lore from this work?"
+     header: "Capture"
+     options:
+       - "Yes, walk me through categories"
+       - "No, skip"
+   ```
+   If yes, for each category prompt the user for entries, applying the inclusion test. When in doubt, **don't add** — noise is worse than omission.
+
+4. **Write `PROJECT_LORE.md`:**
+   Maintain this structure (initialize if newly creating):
+   ```markdown
+   # Project Lore
+
+   Non-obvious context for future sessions. Each entry: one-line rule, *why*.
+   Inclusion test: would a future session waste time, repeat a mistake, or
+   make a wrong choice without this?
+
+   ## Invariants
+   - rule — *why: reason*
+
+   ## Gotchas
+   - rule — *why: reason*
+
+   ## Glossary
+   - term — *why: definition/context*
+
+   ## Coupling
+   - rule — *why: reason*
+
+   ## Do-not-touch
+   - rule — *why: reason*
+   ```
+
+5. **First-run nudge (CLAUDE.md reference):**
+   If `PROJECT_LORE.md` was **newly created** in this retro, check whether the project's `CLAUDE.md` already references it:
+   ```bash
+   grep -q "PROJECT_LORE" CLAUDE.md
+   ```
+   If no match, offer to add a reference so the file auto-loads in future sessions:
+   ```
+   AskUserQuestion:
+     question: "Add @{lore-path}/PROJECT_LORE.md reference to CLAUDE.md so it auto-loads?"
+     header: "Auto-load"
+     options:
+       - "Yes, add reference"
+       - "No, I'll handle it manually"
+   ```
+   If yes, append to CLAUDE.md under an appropriate section (e.g., after "Escapement Settings" or in a "Project Context" section):
+   ```markdown
+   ## Project Context
+
+   @{relative-path-to-lore-file}
+   ```
+   - Context mode: `@../myproject-ctx/PROJECT_LORE.md` (or whatever the resolved path is)
+   - In-repo mode: `@PROJECT_LORE.md`
+
+   This is a **one-time nudge**, not enforcement — the user retains control.
+
+#### Skip condition
+
+If all of the following are true, skip the retro entirely:
+- No scratchpad tasks completed
+- No code changes (empty `$CHANGED_FILES`)
+- No existing `PROJECT_LORE.md` to reconcile
+
+In that case, there is nothing to reconcile and unlikely genuine lore to capture.
+
 ### Phase 5: Confirm with User
 
 ```
@@ -248,6 +436,13 @@ Code repo changes:
 Context directory changes:
    - Scratchpad, session logs, and summary will be written
    - You'll need to commit the context directory separately if it's git-tracked
+```
+
+**With a factory run (Phase 2, step 5), also show:**
+```
+Factory run {run_id} ({state}, PR #{pr_number}):
+   - contract, reports, verdicts and PR body copied to {archive}/runs/{run_id}/
+   - the run is closed: merged if its PR merged, otherwise abandoned
 ```
 
 ### Phase 6: Execute Archive
@@ -325,6 +520,38 @@ Context directory changes:
    # PR: #{pr_number}
    ```
 
+### Phase 6.5: Archive the Factory Run
+
+Only when Phase 2 found a run. Its artifacts stay where they are (the factory database records their paths); the archive keeps a copy of what explains the outcome. Logs, test results and review snapshots are left out: they are large, and they stay in the artifact dir.
+
+1. **Copy** the contract, every report revision, the verdicts and the PR body into `{ARCHIVE_DIR}/runs/{run_id}/`, keeping their layout:
+   ```bash
+   ART='{artifact_dir}'
+   DEST="$ARCHIVE_DIR/runs/{run_id}"
+   (cd "$ART" && find . -type f \( -name contract.json -o -name review.json -o -name report.json -o -name 'report.r[0-9]*.json' -o -path ./pr/body.md \)) |
+     while IFS= read -r f; do mkdir -p "$DEST/$(dirname "$f")" && cp "$ART/$f" "$DEST/$f"; done
+   ```
+   In in-repo mode, also `git add "$DEST"` so the copy is committed with the archive.
+
+2. **Record it and close the run**, so the worktree can start its next run:
+   ```bash
+   bash "$FACTORY" --json archive '{run_id}' --path "$DEST" --close
+   ```
+   - **`.ok`:** the run is `closed`, as `.result.closed` (`merged` when its PR merged, `abandoned` when it had none or it was closed unmerged).
+   - **Refused `pr_open`:** the PR is still open. Ask:
+     ```
+     AskUserQuestion:
+       question: "PR #{pr_number} of factory run {run_id} is still open. Close the run anyway?"
+       header: "Factory run"
+       options:
+         - label: "Leave the run open"
+           description: "Record the archive path only; close it after the PR is merged or closed"
+         - label: "Close as abandoned"
+           description: "The PR stays as it is; the run is closed as abandoned"
+     ```
+     **Leave open:** `factory archive '{run_id}' --path "$DEST"`. **Close:** add `--abandon`.
+   - **Refused `no_agent_token`:** reading the PR's state needs the agent's GitHub token. Record the path without `--close`, and tell the operator to close the run later with `factory archive '{run_id}' --path "$DEST" --close`.
+
 ### Phase 7: Report Result
 
 **Context mode:**
@@ -339,9 +566,17 @@ Files archived (to context directory):
    - SESSION_LOG_*.md (if any existed)
    - README.md (summary generated)
 
+Factory run (if any):
+   - {run_id}: closed ({merged|abandoned}), or left open
+   - Artifacts copied to {context-path}/{branch}/archive/runs/{run_id}/
+
 INDEX.md updated:
    - {context-path}/INDEX.md
    - Added row: {date} | {branch} | #{issue_number} | {status}
+
+Project lore (if changed):
+   - {context-path}/PROJECT_LORE.md
+   - {N} entries added / {M} reconciled
 
 Code repo cleanup:
    - Removed SCRATCHPAD_{issue_number}.md (git rm)
@@ -372,11 +607,16 @@ Cleaned up:
    - Removed scratchpad from project root (tracked via git mv)
    - Removed session logs from project root
 
+Project lore (if changed):
+   - PROJECT_LORE.md
+   - {N} entries added / {M} reconciled
+
 {If committed}
 Committed: {commit hash}
    - Added: archive directory with scratchpad, session logs, README
    - Removed: SCRATCHPAD_{issue_number}.md from project root
    - Removed: SESSION_LOG_*.md from project root
+   - Modified: PROJECT_LORE.md (if changed)
 ```
 
 ## Archive Options
@@ -387,7 +627,7 @@ Committed: {commit hash}
 - Commit the archive
 
 ### Option 2: Delete Only
-If user prefers not to keep history:
+If user prefers not to keep history (a factory run is left untouched: not copied, not closed):
 ```
 AskUserQuestion:
   question: "How to handle the scratchpad?"
@@ -466,6 +706,9 @@ No PR found for this work.
 **Invokes:**
 - `commit-changes` skill - To commit archive
 
+**Calls:**
+- `scripts/factory.sh` `status` and `archive` for a factory run (Phase 6.5)
+
 **Reads from:**
 - Scratchpad - Content to archive
 - Git history - PR information
@@ -494,10 +737,14 @@ No PR found for this work.
 
 ---
 
-**Version:** 2.2.1
-**Last Updated:** 2026-02-26
+**Version:** 2.5.0
+**Last Updated:** 2026-11-16
 **Maintained By:** Escapement
 **Changelog:**
+- v2.5.0: Phase 6.5 archives a factory run: copies its contract, reports, verdicts and PR body, records archive_path and closes the run (merged or abandoned, from its PR) (#64)
+- v2.4.1: Read context-path with scripts/get-context-path.sh, which ignores examples in fenced blocks and outside `## Escapement Settings` (#57)
+- v2.4.0: Added Phase 1.5 Capture Session Tail — save the conversation since the last session log, with a branch check before including another branch's work (#55)
+- v2.3.0: Added Phase 4.5 Project Lore Retro — reconcile + capture non-obvious context (invariants, gotchas, glossary, coupling, do-not-touch) at archive time
 - v2.2.1: Extract JSONL→markdown conversion to reusable script (scripts/convert-session-log.py)
 - v2.2.0: Maintain INDEX.md manifest at context-path root on archive (#25)
 - v2.1.0: Added JSONL→markdown conversion (Phase 3.5) for simplified PreCompact hook (#27)

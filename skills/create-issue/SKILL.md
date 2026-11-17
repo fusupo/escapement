@@ -173,7 +173,8 @@ Use `AskUserQuestion` to gather what's missing. Ask only what's needed - don't o
 
 1. **Create the issue:**
    ```
-   mcp__github__create_issue(
+   mcp__github__issue_write(
+     method: "create",
      owner: "{owner}",
      repo: "{repo}",
      title: "{title}",
@@ -237,8 +238,8 @@ Are you in a git repository? Specify the target:
 Failed to create issue: {error message}
 
 This might be a permissions issue. Check:
-- GitHub authentication: gh auth status
-- Repository access: do you have write access?
+- GitHub MCP authentication: `mcp__github__get_me` names the account the issue is created as (the agent)
+- Repository access: does that account have write access?
 ```
 
 ### No Title Provided
@@ -282,6 +283,8 @@ AskUserQuestion:
 
 ---
 
-**Version:** 1.0.0
-**Last Updated:** 2026-02-18
+**Version:** 1.0.1
+**Last Updated:** 2026-11-16
 **Maintained By:** Escapement
+**Changelog:**
+- v1.0.1: Create the issue with `issue_write` (the GitHub MCP server's current tool); check the MCP account, not a CLI login (#80)
