@@ -1,4 +1,5 @@
 import { schemaErrors } from "./schemas.ts";
+import { FactoryError } from "./util.ts";
 
 /**
  * The plan critique (docs/FACTORY_DESIGN.md §3.5, #99): a fresh-context
@@ -98,4 +99,50 @@ export function critiqueErrors(data: unknown, opts: { final?: boolean } = {}): s
     for (const id of ids.keys()) if (!given.has(id)) problems.push(`finding ${id}: no disposition (accepted with its plan change, or rejected with a reason)`);
   }
   return problems;
+}
+
+export type CritiqueCheck = {
+  valid: true;
+  final: boolean;
+  verdict: Critique["verdict"];
+  findings: { blocking: number; major: number; minor: number };
+  concerns: ChecklistItem[];
+  tier_raise: Critique["tier_raise"] | null;
+  dispositions: number;
+  /** Findings the operator decided because the planner and critic disagreed (or the critic escalated). */
+  unresolved: string[];
+};
+
+/** Parse a critique document's text, or refuse it (`bad_critique`) with every problem listed. */
+export function parseCritique(text: string, opts: { final?: boolean; source?: string } = {}): Critique {
+  const what = opts.source ?? "critique";
+  let data: unknown;
+  try {
+    data = JSON.parse(text);
+  } catch (err) {
+    throw new FactoryError("bad_critique", `${what} is not valid JSON: ${(err as Error).message}`);
+  }
+  const problems = critiqueErrors(data, { final: opts.final });
+  if (problems.length) throw new FactoryError("bad_critique", `${what} is not a valid critique:\n  - ${problems.join("\n  - ")}`);
+  return data as Critique;
+}
+
+/**
+ * `factory check-critique <file> [--final]` (#99): check a critique against
+ * critique.schema.json and the rules beyond it, with no run and no
+ * database, so a host can check the critic's output before plan approval.
+ */
+export function checkCritique(text: string, opts: { final?: boolean; source?: string } = {}): CritiqueCheck {
+  const c = parseCritique(text, opts);
+  const count = (s: CritiqueFinding["severity"]) => c.findings.filter((f) => f.severity === s).length;
+  return {
+    valid: true,
+    final: opts.final ?? false,
+    verdict: c.verdict,
+    findings: { blocking: count("blocking"), major: count("major"), minor: count("minor") },
+    concerns: c.checklist.filter((e) => e.result === "concern").map((e) => e.item),
+    tier_raise: c.tier_raise ?? null,
+    dispositions: c.dispositions?.length ?? 0,
+    unresolved: (c.dispositions ?? []).filter((d) => d.unresolved).map((d) => d.finding),
+  };
 }

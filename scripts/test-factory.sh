@@ -223,6 +223,20 @@ if [[ "$(jq -r '.result.schema.title' <<<"$out")" == *"verdict"* ]]; then ok; el
 f schema nonsense >/dev/null 2>&1
 if [[ $? -eq 1 ]]; then ok; else bad "schema-unknown"; fi
 
+# check-critique: a plan critique against its schema and rules, no run, no database (#99)
+crit="$here/fixtures/critique"
+out="$(ESCAPEMENT_MANIFEST_DIR="$tmp/nodb" f --json check-critique "$crit/valid.json")"
+status=$?
+if [[ $status -eq 0 && "$(jq -r '.ok and .result.verdict == "revise" and .result.findings.blocking == 1 and .result.unresolved == ["F-2"]' <<<"$out")" == true && ! -e "$tmp/nodb" ]]; then ok; else bad "check-critique-valid" "status=$status out=$out"; fi
+out="$(f --json check-critique "$crit/invalid.json")"
+status=$?
+if [[ $status -eq 1 && "$(jq -r '.error.code == "bad_critique" and (.error.message | contains("issue_size: not judged") and contains("approve can'"'"'t carry a blocking finding"))' <<<"$out")" == true ]]; then ok; else bad "check-critique-invalid" "status=$status out=$out"; fi
+out="$(jq 'del(.dispositions)' "$crit/valid.json" | f --json check-critique - --final)"
+status=$?
+if [[ $status -eq 1 && "$(jq -r '.error.message | contains("F-1: no disposition")' <<<"$out")" == true ]]; then ok; else bad "check-critique-final" "status=$status out=$out"; fi
+out="$(jq 'del(.dispositions)' "$crit/valid.json" | f check-critique -)"
+if [[ $? -eq 0 && "$out" == "valid: revise, 1 blocking, 1 major, 0 minor finding(s)"* ]]; then ok; else bad "check-critique-stdin" "$out"; fi
+
 # validate: a project with static and verify checks. verify copies a JUnit
 # file into $FACTORY_RESULTS_DIR; ci/verify-exit sets its exit status.
 make_vproject() {

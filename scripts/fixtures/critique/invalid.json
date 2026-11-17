@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "verdict": "approve",
+  "summary": "Looks fine.",
+  "checklist": [
+    {
+      "item": "evidence_capability",
+      "result": "ok",
+      "note": "checked"
+    },
+    {
+      "item": "clause_coverage",
+      "result": "ok",
+      "note": "checked"
+    },
+    {
+      "item": "manual_procedure_adequacy",
+      "result": "ok",
+      "note": "checked"
+    },
+    {
+      "item": "new_behavior_fails_without_change",
+      "result": "ok",
+      "note": "checked"
+    },
+    {
+      "item": "predicted_files",
+      "result": "ok",
+      "note": "checked"
+    },
+    {
+      "item": "simpler_approach",
+      "result": "ok",
+      "note": "checked"
+    },
+    {
+      "item": "lore_conflict",
+      "result": "ok",
+      "note": "checked"
+    },
+    {
+      "item": "manifest_coupling",
+      "result": "ok",
+      "note": "checked"
+    },
+    {
+      "item": "tier",
+      "result": "concern",
+      "note": "checked"
+    }
+  ],
+  "findings": [
+    {
+      "id": "F-1",
+      "severity": "blocking",
+      "checklist": "clause_coverage",
+      "detail": "AC-2's CLI clause has no evidence."
+    }
+  ]
+}

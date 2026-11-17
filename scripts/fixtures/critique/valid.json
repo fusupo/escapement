@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "verdict": "revise",
+  "summary": "Two gaps: AC-2's CLI clause has no evidence, and AC-3's manual procedure doesn't say what to look for.",
+  "checklist": [
+    {
+      "item": "evidence_capability",
+      "result": "ok",
+      "note": "checked against the issue, the scratchpad and the code"
+    },
+    {
+      "item": "clause_coverage",
+      "result": "concern",
+      "note": "AC-2 names the API and the CLI; only the API has evidence."
+    },
+    {
+      "item": "manual_procedure_adequacy",
+      "result": "concern",
+      "note": "AC-3.e1 says 'check the docs' without saying what the docs must state."
+    },
+    {
+      "item": "new_behavior_fails_without_change",
+      "result": "ok",
+      "note": "checked against the issue, the scratchpad and the code"
+    },
+    {
+      "item": "predicted_files",
+      "result": "ok",
+      "note": "checked against the issue, the scratchpad and the code"
+    },
+    {
+      "item": "simpler_approach",
+      "result": "ok",
+      "note": "checked against the issue, the scratchpad and the code"
+    },
+    {
+      "item": "lore_conflict",
+      "result": "ok",
+      "note": "checked against the issue, the scratchpad and the code"
+    },
+    {
+      "item": "manifest_coupling",
+      "result": "ok",
+      "note": "checked against the issue, the scratchpad and the code"
+    },
+    {
+      "item": "tier",
+      "result": "ok",
+      "note": "checked against the issue, the scratchpad and the code"
+    },
+    {
+      "item": "issue_size",
+      "result": "ok",
+      "note": "checked against the issue, the scratchpad and the code"
+    }
+  ],
+  "findings": [
+    {
+      "id": "F-1",
+      "severity": "blocking",
+      "checklist": "clause_coverage",
+      "ref": "AC-2",
+      "detail": "AC-2 says expired tokens are rejected by the API and the CLI; AC-2.e1 tests only the API.",
+      "suggestion": "Add a command item that runs the CLI with an expired token and expects exit 1."
+    },
+    {
+      "id": "F-2",
+      "severity": "major",
+      "checklist": "manual_procedure_adequacy",
+      "ref": "AC-3.e1",
+      "detail": "The procedure says 'check the docs'; a reviewer can't tell a pass from a fail.",
+      "suggestion": "Name the section and the sentence it must contain."
+    }
+  ],
+  "dispositions": [
+    {
+      "finding": "F-1",
+      "accepted": true,
+      "plan_change": "Added AC-2.e2, a command item running the CLI with an expired token.",
+      "decided_by": "planner"
+    },
+    {
+      "finding": "F-2",
+      "accepted": false,
+      "reason": "The docs section is generated from the code, so the test in AC-1.e1 already covers it.",
+      "unresolved": true,
+      "decided_by": "operator"
+    }
+  ]
+}

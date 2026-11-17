@@ -21,6 +21,7 @@ import { FactoryError, parseDuration } from "./factory/util.ts";
 import { checkReadiness } from "./factory/readiness.ts";
 import { SCHEMA_NAMES, schemaPath, isSchemaName } from "./factory/schemas.ts";
 import { PROMPT_NAMES, promptPath, isPromptName } from "./factory/prompts.ts";
+import { checkCritique } from "./factory/critique.ts";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 
@@ -82,8 +83,13 @@ Commands:
                                 this project? Prints ready or needs_human with
                                 questions (no run needed). Without --contract,
                                 checks only the project's settings
+  check-critique <file> [--final]
+                                Check a plan critique (- reads stdin) against
+                                critique.schema.json and its rules (no run
+                                needed); --final: every finding needs a
+                                disposition
   schema [name]                 Path of a published JSON Schema (contract, report,
-                                verdict, readiness); --print for its content
+                                verdict, readiness, critique); --print for its content
   prompt [name]                 Path of an agent prompt the factory ships
                                 (reviewer); --print for its content
   exclude <pattern>...          Add .gitignore-style patterns for the host's
@@ -132,6 +138,7 @@ Options:
   --abandon             archive: close the run as abandoned
   --all                 status: include closed runs
   --print               schema, prompt: print the content instead of the path
+  --final               check-critique: the record after the critique round
 
 Durations: 30s, 15m, 2h, 1d. Settings are read from the run's worktree
 CLAUDE.md, "## Escapement Settings" (docs/FACTORY_CLI.md).`;
@@ -156,7 +163,7 @@ const VALUE_FLAGS = new Set([
   "--recorder",
   "--path",
 ]);
-const BOOL_FLAGS = new Set(["--json", "--all", "--print", "--close", "--abandon", "--help", "-h"]);
+const BOOL_FLAGS = new Set(["--json", "--all", "--print", "--close", "--abandon", "--final", "--help", "-h"]);
 
 type Parsed = { flags: Map<string, string | true>; positional: string[]; rest: string[] };
 
@@ -215,6 +222,15 @@ function attemptArg(value: string | undefined): number {
   return Number(text);
 }
 
+/** A file's text, or stdin for `-`. */
+function readInput(file: string, what: string): string {
+  try {
+    return file === "-" ? readFileSync(0, "utf-8") : readFileSync(resolve(file), "utf-8");
+  } catch (err) {
+    throw new FactoryError("usage", `cannot read ${what} ${file}: ${(err as Error).message}`);
+  }
+}
+
 function need(value: string | undefined, what: string): string {
   if (!value) throw new FactoryError("usage", `missing ${what}`);
   return value;
@@ -257,7 +273,7 @@ const KNOWN_DB_COMMANDS = new Set([
 ]);
 
 /** Commands that don't touch the manifest database, so hosts can run them anywhere. */
-const NO_DB_COMMANDS = new Set(["check", "schema", "prompt", "exclude", "agent", "push"]);
+const NO_DB_COMMANDS = new Set(["check", "check-critique", "schema", "prompt", "exclude", "agent", "push"]);
 
 function dispatchNoDb(command: string, p: Parsed): Outcome {
   const [arg] = p.positional;
@@ -281,6 +297,18 @@ function dispatchNoDb(command: string, p: Parsed): Outcome {
         ...r.questions.map((q) => `  - [${q.about}${q.ref ? ` ${q.ref}` : ""}] ${q.question}`),
         ...(r.tier ? [`  tier: ${r.tier.tier}${r.tier.reasons.length ? ` (${r.tier.reasons.join("; ")})` : ""}`] : []),
         `  required checks: ${r.required_checks.map((c) => `${c.name}=${c.command ?? "(not configured)"}`).join(", ") || "none"}`,
+      ];
+      return { result: r, text: lines.join("\n") };
+    }
+    case "check-critique": {
+      const file = need(arg, "critique file (or - for stdin)");
+      const r = checkCritique(readInput(file, "critique"), { final: p.flags.has("--final"), source: file === "-" ? "(stdin)" : file });
+      const f = r.findings;
+      const lines = [
+        `valid${r.final ? " (final)" : ""}: ${r.verdict}, ${f.blocking} blocking, ${f.major} major, ${f.minor} minor finding(s)`,
+        ...(r.concerns.length ? [`  concerns: ${r.concerns.join(", ")}`] : []),
+        ...(r.tier_raise ? [`  tier raise: ${r.tier_raise.to} (${r.tier_raise.reason})`] : []),
+        ...(r.dispositions ? [`  dispositions: ${r.dispositions}${r.unresolved.length ? `, decided by the operator: ${r.unresolved.join(", ")}` : ""}`] : []),
       ];
       return { result: r, text: lines.join("\n") };
     }
