@@ -184,6 +184,22 @@ async function run() {
   m = matchAuthorization(db, here);
   assert(r.report_revision === 2 && m.matched && m.next === "await_merge", "refreshed from revision 2: await_merge again");
 
+  console.log("\nAttempt history in the PR (#92)\n");
+  {
+    const h = setup(db, "acme/w#45", "45-h");
+    db.prepare(
+      `INSERT INTO factory_attempts (run_id, attempt, status, outcome, head_sha, contract_digest, policy_version, failed_phase, findings_json, started_at)
+         VALUES (?, 1, 'complete', 'fail', 'x', ?, 'p', 'evidence', ?, ?)`,
+    ).run(h.run.run_id, h.run.contract_digest, JSON.stringify([{ id: "evidence:AC-1.e1", severity: "blocking", detail: "failed" }]), new Date().toISOString());
+    validated(db, h.run.run_id, "pass");
+    const res = await openPr(db, h.run.run_id, { ...o, title: "feat: h (#45)" });
+    const body = stub.state().prs.find((p) => p.number === res.pr_number)!.body;
+    assert(
+      res.attempt === 2 && body.includes("**Attempts**") && body.includes("| 1 | ❌ fail | evidence: 1 blocking finding |") && body.includes("| 2 | ✅ pass | - |"),
+      "factory pr writes every attempt into the PR body",
+    );
+  }
+
   console.log("\nCrash between create and record (AC-3)\n");
   const b = setup(db, "acme/w#43", "43-y");
   validated(db, b.run.run_id, "pending_manual", {
