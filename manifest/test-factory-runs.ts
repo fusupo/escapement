@@ -215,6 +215,11 @@ async function run() {
     writeFileSync(join(changedContract.artifact_dir, "contract.json"), contractJson(changedContract.run_id, { risk_tier_proposed: "sensitive" }));
     throws(() => continueRun(db, changedContract.run_id, { reason: "x", maxAttempts: 3 }), /contract_mismatch/, "and when the contract changed");
     throws(() => continueRun(db, changedContract.run_id, { reason: " ", maxAttempts: 3 }), /usage/, "continue needs a reason");
+    // A failed manual check sets the attempt's outcome to fail and escalates a pr_open run (record-manual).
+    const withPr = escalatedAfter([["fail"]]);
+    db.prepare("UPDATE factory_runs SET pr_number = 41 WHERE run_id = ?").run(withPr.run_id);
+    throws(() => continueRun(db, withPr.run_id, { reason: "x", maxAttempts: 3 }), /has_pr/, "continue is refused once the run has a PR");
+    assert(getRun(db, withPr.run_id).state === "escalated", "and the run stays escalated (#97)");
     const blockedRun = escalatedAfter([["fail"]]);
     db.prepare("UPDATE factory_runs SET state = 'blocked' WHERE run_id = ?").run(blockedRun.run_id);
     throws(() => continueRun(db, blockedRun.run_id, { reason: "x", maxAttempts: 3 }), /wrong_state/, "a blocked run can't continue (only escalated)");

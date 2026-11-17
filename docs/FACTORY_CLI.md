@@ -367,6 +367,7 @@ Refused, blocked (exit 2), and nothing changes, when:
 | `run_deadline` | the run deadline has passed: going on needs a new run and budget |
 | `not_authorized` | the run has no active authorization |
 | `contract_mismatch` | `{artifact_dir}/contract.json` is missing or no longer has the approved digest |
+| `has_pr` | the run already has a PR. A failed manual check escalates a `pr_open` run with the attempt's outcome set to `fail`, but going back after the PR opened isn't supported yet (#97) |
 | `no_failed_attempt` | the latest attempt isn't a completed `fail` or `error`, or there is none |
 | `attempt_budget` | every attempt (`max-attempts`) is used |
 

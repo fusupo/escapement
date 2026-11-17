@@ -96,7 +96,7 @@ bash "$FACTORY" --check && bash "$FACTORY" --json authorization
   ```
   If it fails (`no_agent_token`, or `agent_env_permissions`), stop before any work: "Factory run {run_id} commits and opens its PR as the AI agent: put ESCAPEMENT_AGENT_GH_TOKEN in ~/.config/escapement/agent.env (chmod 600) or export it, then resume." Nothing is escalated; this is setup, not a failure of the run.
 
-**Escalated after a failed attempt.** When `.result.state` is `escalated` and the latest attempt in `factory status '{run_id}' --json` (`.result.attempts`, the last one) is `complete` with outcome `fail` or `error`, the run stopped to wait on the operator (docs/FACTORY_DESIGN.md §6.2). Tell them in plain words why (`.result.run.state_reason`, and the attempt's blocking findings and error from its report), then ask; never show them runner commands:
+**Escalated after a failed attempt.** When `.result.state` is `escalated`, the run has no PR yet (`.result.run.pr_number` is null in `factory status '{run_id}' --json`), and the latest attempt there (`.result.attempts`, the last one) is `complete` with outcome `fail` or `error`, the run stopped to wait on the operator (docs/FACTORY_DESIGN.md §6.2). A run whose PR is open (escalated by a failed manual check, for example) can't go back to implementation yet (#97): offer only abandon and start over. Tell them in plain words why (`.result.run.state_reason`, and the attempt's blocking findings and error from its report), then ask; never show them runner commands:
 
 ```
 AskUserQuestion:
@@ -115,7 +115,7 @@ AskUserQuestion:
   ```bash
   bash "$FACTORY" --json continue '{run_id}' --reason '{what the operator decided}'
   ```
-  On `.ok`, ask `factory authorization` again: it matches with `next: implement` and a `fix`, and the Authorized Path takes it from there. If it is refused, say why in plain words and offer the other two options: `run_deadline` (the run's time is up), `attempt_budget` (every attempt is used), `not_authorized` or `contract_mismatch` (the approval no longer holds), `no_failed_attempt` (nothing to fix).
+  On `.ok`, ask `factory authorization` again: it matches with `next: implement` and a `fix`, and the Authorized Path takes it from there. If it is refused, say why in plain words and offer the other two options: `run_deadline` (the run's time is up), `attempt_budget` (every attempt is used), `not_authorized` or `contract_mismatch` (the approval no longer holds), `no_failed_attempt` (nothing to fix), `has_pr` (the PR is already open).
 - **Abandon:** close the run with archive-work, or `factory archive '{run_id}' --path … --abandon`.
 - **Start over:** abandon it as above, then invoke setup-work for the issue.
 

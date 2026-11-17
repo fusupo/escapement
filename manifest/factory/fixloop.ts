@@ -176,6 +176,9 @@ function latestAttempt(db: Database, runId: string): AttemptRow | null {
  * - the run deadline has passed (`run_deadline`): a hard stop;
  * - the run has no active authorization (`not_authorized`), or its
  *   contract file no longer matches it (`contract_mismatch`);
+ * - the run already has a PR (`has_pr`): a failed manual check escalates
+ *   a `pr_open` run with the attempt's outcome set to `fail`, but going
+ *   back to implementation after the PR opened isn't supported (#97);
  * - the latest attempt isn't a completed `fail` or `error`
  *   (`no_failed_attempt`): there's nothing for the implementer to fix;
  * - every attempt is used (`attempt_budget`).
@@ -210,6 +213,9 @@ export function continueRun(
     if (run.state === "implementing" && failed) return answer(run, false);
     if (run.state !== "escalated") {
       throw new FactoryError("wrong_state", `run ${runId} is ${run.state}; only an escalated run can continue`);
+    }
+    if (run.pr_number !== null) {
+      throw blocked("has_pr", `run ${runId} already has PR #${run.pr_number}; going back to implementation after the PR opened isn't supported yet (#97)`);
     }
     if (deadlinePassed(run, opts.now)) {
       throw blocked("run_deadline", `run ${runId} passed its deadline (${run.deadline_at}); going on needs a new run and budget`);
