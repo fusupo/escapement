@@ -9,7 +9,7 @@ import { currentReport } from "./attempts.ts";
 import { identityHolds } from "./revision.ts";
 import { withLocks, worktreeLock } from "./locks.ts";
 import { agentToken, gh, ghJson, pushBranch, remoteOf } from "./github.ts";
-import { renderSection, withSection, type ReportView, type CriterionView } from "./report-section.ts";
+import { renderSection, withSection, type ReportView, type CriterionView, type AttemptSummary } from "./report-section.ts";
 import type { Owner } from "./owner.ts";
 
 /**
@@ -130,7 +130,7 @@ export async function openPr(
     }
 
     const contract = readJson<{ criteria: CriterionView[] }>(join(run.artifact_dir, "contract.json"), "contract");
-    const section = renderSection(report, contract.criteria, run.branch);
+    const section = renderSection(report, contract.criteria, run.branch, attemptHistory(db, run.run_id));
     const base = opts.narrative ?? existing?.body ?? "";
     const body = withSection(base, section);
     const bodyPath = join(run.artifact_dir, "pr", "body.md");
@@ -193,5 +193,23 @@ export async function openPr(
       outcome: report.outcome,
       body_path: bodyPath,
     };
+  });
+}
+
+/** Every attempt of the run, for the PR's history table (§6.2). */
+export function attemptHistory(db: Database, runId: string): AttemptSummary[] {
+  const rows = db
+    .prepare(
+      "SELECT attempt, status, outcome, failed_phase, error_cause, error_reason, findings_json FROM factory_attempts WHERE run_id = ? ORDER BY attempt",
+    )
+    .all(runId) as (Omit<AttemptSummary, "blocking"> & { findings_json: string | null })[];
+  return rows.map(({ findings_json, ...a }) => {
+    let blocking = 0;
+    try {
+      blocking = ((findings_json ? JSON.parse(findings_json) : []) as { severity: string }[]).filter((f) => f.severity === "blocking").length;
+    } catch {
+      blocking = 0;
+    }
+    return { ...a, blocking };
   });
 }

@@ -27,6 +27,28 @@ export type ReportView = {
 
 export type CriterionView = { id: string; text: string; evidence: { id: string; type: string }[] };
 
+/** One attempt of the run, for the section's history (§6.2: the PR shows every try). */
+export type AttemptSummary = {
+  attempt: number;
+  status: string;
+  outcome: string | null;
+  failed_phase: string | null;
+  error_cause: string | null;
+  error_reason: string | null;
+  /** Blocking findings the attempt ended with. */
+  blocking: number;
+};
+
+function attemptWhy(a: AttemptSummary): string {
+  if (a.status === "interrupted") return "interrupted (the runner stopped mid-attempt)";
+  if (a.outcome === "error") return `${a.error_cause ?? "error"}: ${a.error_reason ?? "no reason recorded"}`;
+  if (a.outcome === "fail") {
+    const where = a.failed_phase ?? "review";
+    return `${where}: ${a.blocking} blocking finding${a.blocking === 1 ? "" : "s"}`;
+  }
+  return "";
+}
+
 const OUTCOME_LABEL: Record<string, string> = {
   pass: "✅ pass",
   pending_manual: "⏳ pending manual checks",
@@ -55,7 +77,7 @@ export function cell(text: string, max = 300): string {
 
 const short = (sha: string) => sha.slice(0, 10);
 
-export function renderSection(report: ReportView, criteria: CriterionView[], branch: string): string {
+export function renderSection(report: ReportView, criteria: CriterionView[], branch: string, history: AttemptSummary[] = []): string {
   const lines: string[] = [SECTION_BEGIN, "## Factory validation report", ""];
   const outcome = report.outcome ?? "none";
   lines.push(`**Outcome:** ${OUTCOME_LABEL[outcome] ?? cell(outcome)}`);
@@ -69,6 +91,15 @@ export function renderSection(report: ReportView, criteria: CriterionView[], bra
   );
   lines.push(`- **Contract:** \`${cell(report.contract_digest)}\``);
   lines.push("");
+
+  if (history.length > 1) {
+    lines.push("**Attempts**", "", "| Attempt | Outcome | Why |", "|---|---|---|");
+    for (const a of history) {
+      const outcome = a.status === "interrupted" ? "interrupted" : (a.outcome ?? a.status);
+      lines.push(`| ${a.attempt} | ${OUTCOME_LABEL[outcome] ?? cell(outcome)} | ${cell(attemptWhy(a), 200) || "-"} |`);
+    }
+    lines.push("");
+  }
 
   const results = new Map(report.evidence.map((e) => [e.id, e]));
   lines.push("| Criterion | Evidence | Result | Supports |", "|---|---|---|---|");

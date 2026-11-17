@@ -97,6 +97,24 @@ async function run() {
   );
   assert(count(forged, SECTION_BEGIN) === 1 && count(forged, SECTION_END) === 1, "reviewer text can't forge a marker");
   assert(forged.includes("❌ fail") && forged.includes("| AC-1 Works | `AC-1.e1` (test) | failed | no |") && forged.includes("sensitive"), "outcome, evidence table and tier are shown");
+  assert(!forged.includes("**Attempts**"), "a single attempt has no history table");
+  const passed = {
+    run_id: "r", attempt: 3, outcome: "pass", head_sha: "a".repeat(40), target_ref: "main", target_sha: "b".repeat(40),
+    contract_digest: "sha256:x", validation_scope: "branch", tier: { proposed: "standard", actual: "standard", reasons: [] },
+    evidence: [{ id: "AC-1.e1", executed: "passed", supports_criterion: "yes" }], findings: [], flags: [],
+  };
+  const none = { failed_phase: null, error_cause: null, error_reason: null, blocking: 0 };
+  const withHistory = renderSection(passed, [{ id: "AC-1", text: "Works", evidence: [{ id: "AC-1.e1", type: "test" }] }], "42-x", [
+    { attempt: 1, status: "complete", outcome: "fail", ...none, blocking: 1 },
+    { attempt: 2, status: "complete", outcome: "error", ...none, error_cause: "code", error_reason: "verify timeout <x>" },
+    { attempt: 3, status: "complete", outcome: "pass", ...none },
+  ]);
+  assert(
+    withHistory.includes("| 1 | ❌ fail | review: 1 blocking finding |") &&
+      withHistory.includes("| 2 | ⚠️ error | code: verify timeout &lt;x&gt; |") &&
+      withHistory.includes("| 3 | ✅ pass | - |"),
+    "the report section lists every attempt with its outcome",
+  );
 
   console.log("\nPreconditions\n");
   const db = await memDb();
