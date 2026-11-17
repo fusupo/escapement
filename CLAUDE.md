@@ -46,9 +46,9 @@ escapement/
 │   ├── manifest.sh             # Runs the manifest CLI from any cwd (skills call this, never manifest-cli.ts directly)
 │   ├── factory.sh              # Runs the factory runner CLI from any cwd (docs/FACTORY_CLI.md)
 │   └── slice-session-log.sh    # Writes the transcript part no earlier session log covers
-├── schemas/factory/     # Published JSON Schemas for factory documents (contract, report, verdict, readiness)
-├── prompts/factory/     # Agent prompts the factory ships as data (validation-reviewer); hosts find them with `factory.sh prompt`
-├── agents/              # Subagents: scratchpad-planner, validation-reviewer (a thin wrapper over prompts/factory/)
+├── schemas/factory/     # Published JSON Schemas for factory documents (contract, report, verdict, readiness, critique)
+├── prompts/factory/     # Agent prompts the factory ships as data (validation-reviewer, plan-critic); hosts find them with `factory.sh prompt`
+├── agents/              # Subagents: scratchpad-planner, plan-critic, validation-reviewer (the last two thin wrappers over prompts/factory/)
 ├── docs/                # Extended documentation
 │   ├── WORKFLOW.md      # Workflow explanation
 │   ├── CUSTOMIZATION.md # Customization guide
@@ -105,6 +105,7 @@ escapement/
 **Agents are specialized subagents** for delegation. Defined as markdown files in `agents/`.
 
 - `scratchpad-planner`: codebase analysis for `setup-work`.
+- `plan-critic`: the factory's fresh-context plan critic, run once by `setup-work` before plan approval. Like the reviewer, its instructions live in `prompts/factory/plan-critic.md`; keep the agent file a thin wrapper.
 - `validation-reviewer`: the factory's fresh-context reviewer. Its instructions live in `prompts/factory/validation-reviewer.md` so other runtimes can run the same reviewer; keep the agent file a thin wrapper that reads that prompt.
 
 ## Development Commands

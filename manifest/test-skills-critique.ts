@@ -69,8 +69,40 @@ function setupWork() {
   assert(critique.includes("set the contract's `risk_tier_proposed` to `sensitive`"), "a critic's tier raise is applied, never asked");
 }
 
+function docs() {
+  console.log("\nThe docs record it as built\n");
+  const design = read("docs/FACTORY_DESIGN.md");
+  const s35 = section(design, "### 3.5 Critique loop");
+  assert(
+    s35 !== "" && !design.includes("### 3.5 Critique loop (next)") && !design.includes("6. critique loop            [next]") &&
+      s35.includes("*As built (#99):*") &&
+      ["plan-critic.md", "critique.schema.json", "check-critique", "record-critique", "`critique_finding`", "## Plan Critique", "Critic:", "Planner:"].every((w) => s35.includes(w)),
+    "FACTORY_DESIGN.md §3.5 is marked as built by #99 and no longer next",
+  );
+  const step11 = design.split("\n").find((l) => /^11\. /.test(l)) ?? "";
+  const next = section(design, "### 2.2 Next (in order)");
+  assert(
+    /^11\. \*\*#99 Plan critique\*\*, one round\. \*\*Done\.\*\*/.test(step11) && /2\. \*\*Plan critique\*\*[^\n]*\*\*Done\*\* \(#99/.test(next),
+    "FACTORY_DESIGN.md §10 step 11 is Done and names #99, and §2.2 lists plan critique as done",
+  );
+  assert(
+    /rejected manual procedure escalates at once \(#99\)/.test(section(design, "### 6.2 Fix loop")),
+    "FACTORY_DESIGN.md §6.2 records the rejected-manual-procedure backstop",
+  );
+  const cli = read("docs/FACTORY_CLI.md");
+  const schemas = read("schemas/factory/README.md");
+  assert(
+    cli.includes("### check-critique") && cli.includes("### record-critique") &&
+      cli.includes("| `check-critique <file> [--final]` |") && cli.includes("| `record-critique <run_id> <file>` |") &&
+      cli.includes("- **check-critique:**") && cli.includes("- **record-critique:**") &&
+      schemas.includes("| `critique.schema.json` |"),
+    "FACTORY_CLI.md documents check-critique and record-critique, and the schemas README lists critique.schema.json",
+  );
+}
+
 try {
   setupWork();
+  docs();
   console.log("\nAll setup-work critique checks passed.");
 } catch (err) {
   console.error(err);

@@ -115,7 +115,7 @@ One run through the first release. This table only gathers what §3.6, §4.1, §
 ### 2.2 Next (in order)
 
 1. **Bounded fix loop** — on `fail`, implementer iterates on findings instead of stopping. **Done** (#92, §6.2).
-2. **Plan critique** — one round, measured from its first run.
+2. **Plan critique** — one round, measured from its first run. **Done** (#99, §3.5).
 3. **Gate in report-only mode** — compute and record a recommendation; always ping.
 
 ### 2.3 Later
@@ -148,7 +148,7 @@ issue
   → 3. risk tier (proposed)     [first]
   → 4. plan                     (existing)
   → 5. contract                 [first]
-  → 6. critique loop            [next]
+  → 6. critique (one round)     [#99]
   → 7. operator approval        (existing; now approves plan + contract → run authorization)
 ```
 
@@ -177,13 +177,22 @@ Projects list `sensitive-paths` (§8). In repositories where markdown controls b
 
 The planner produces the contract (§5) in the run's artifact directory (§4.2). For evidence demonstrating **new or corrected behavior**, the plan states the test should fail without the change; **regression** evidence is expected to already pass.
 
-### 3.5 Critique loop (next)
+### 3.5 Critique loop
 
 A critic agent with fresh context gets the issue, scratchpad, contract, and read access to the codebase — not the planner's transcript.
 
-Checklist: every criterion has capable evidence; new-behavior tests would plausibly fail without the change; predicted files plausible; materially simpler approach?; lore/convention conflicts; hidden coupling with other manifest items; tier right; issue too large.
+Checklist: every criterion has capable evidence, and each clause of a criterion is covered by some evidence item; each manual procedure would prove its criterion if followed; new-behavior tests would plausibly fail without the change; predicted files plausible; materially simpler approach?; lore/convention conflicts; hidden coupling with other manifest items; tier right; issue too large.
 
 Verdict `approve | revise | escalate` with severity-rated findings and optional tier raise. **One round**: `revise` returns to the planner once; anything unresolved goes to the operator with both positions. Each finding is recorded with whether it was accepted and what plan change it caused (§7.2), since a useful critique prevents failures that would otherwise never appear in validation.
+
+*As built (#99):*
+
+- **The critic is data,** like the reviewer: `prompts/factory/plan-critic.md` (`factory prompt critic`) and `schemas/factory/critique.schema.json`, with the Claude Code agent `agents/plan-critic.md` as a thin wrapper. The host writes a brief (the issue, the scratchpad, the draft contract, `factory check`'s readiness, lore and archive context, the repository) and runs the critic as a new agent: never a resumed planner, never with the planner's transcript.
+- **Its checklist** has ten items, each judged `ok` or `concern`: `evidence_capability`, `clause_coverage` (every clause of a criterion has evidence: the gap #92's r2 review found too late), `manual_procedure_adequacy`, `new_behavior_fails_without_change`, `predicted_files`, `simpler_approach`, `lore_conflict`, `manifest_coupling`, `tier`, `issue_size`. Findings are `blocking`, `major` or `minor`. A `tier_raise` is applied, never asked; a critic can't lower a tier.
+- **Checked against the schema.** `factory check-critique` checks a critique with no run or database: the schema, plus every item judged once, unique finding IDs, a finding behind every concern, no blocking finding under `approve`, a finding under `revise` or `escalate`.
+- **One round** in `setup-work` Phase 3.55, after the contract check and Q&A, before plan approval. Whatever the verdict, the planner answers the findings once, accepting each with a plan change or rejecting it with a reason; the revised plan isn't critiqued again, nor is a later "Revise plan". A `blocking` or `major` finding the planner rejects, and any finding of an `escalate` verdict it doesn't accept, is unresolved. The plan summary shows each with both positions, `Critic:` and `Planner:`, before the approval question, and the operator's choice decides it.
+- **Recorded with dispositions.** The scratchpad's `## Plan Critique` lists every finding with its disposition. On "Approve + authorize run", `factory record-critique` checks the final record (every finding with its disposition) and writes `{artifact_dir}/critique.json` plus one `critique_finding` event per finding (§7.2; `tokens` stays null, since hosts don't report it). Plain "Approve" creates no run, so its critique lives only in the scratchpad.
+- **A backstop in the fix loop** for what critique misses (§6.2): a manual procedure the reviewer rejects escalates the run at once.
 
 ### 3.6 Plan approval → run authorization
 
@@ -597,11 +606,12 @@ On `fail`, the implementer receives findings only, fixes, commits, and re-valida
 
 *As built (#92):*
 
-- **Which outcomes loop.** After a `fail`, or an `error` caused by the code or the run (§5.4), the runner itself moves the run `validating → implementing`. The rules, in order (`decideAfterAttempt` in `manifest/factory/fixloop.ts`): `pass` / `pending_manual` → `validated`; past the deadline → `escalated` (`run_deadline`); an `environment` error → `escalated`, so attempts are never spent on a broken machine; the run's attempt budget used, interrupted attempts included → `escalated` (`attempt_budget`); a blocking `signoff:` or `justification:` finding (a refused sensitive-path or policy sign-off, an assertion change the reviewer won't justify) → `escalated` (`needs_operator`); stuck → `escalated`; otherwise → `implementing`. The run's `state_reason` says which, and `validate` and `record-review` return it as `run_reason`. `error` no longer always escalates: the cause decides.
+- **Which outcomes loop.** After a `fail`, or an `error` caused by the code or the run (§5.4), the runner itself moves the run `validating → implementing`. The rules, in order (`decideAfterAttempt` in `manifest/factory/fixloop.ts`): `pass` / `pending_manual` → `validated`; past the deadline → `escalated` (`run_deadline`); an `environment` error → `escalated`, so attempts are never spent on a broken machine; the run's attempt budget used, interrupted attempts included → `escalated` (`attempt_budget`); a blocking `signoff:` or `justification:` finding (a refused sensitive-path or policy sign-off, an assertion change the reviewer won't justify), or since #99 a rejected manual procedure → `escalated` (`needs_operator`); stuck → `escalated`; otherwise → `implementing`. The run's `state_reason` says which, and `validate` and `record-review` return it as `run_reason`. `error` no longer always escalates: the cause decides.
 - **Stuck compares the runner's own findings only.** Check and evidence findings carry an `evidence_digest` of their normalized failure output. Reviewer findings (`review:N`) don't: each attempt's reviewer is fresh and words the same problem differently, so they are bounded by `max-attempts` alone.
 - **Regression** is a report flag, `regression: evidence {id} passed in attempt {k} and is {executed} now`. It informs the implementer and the reviewer; it never fails an attempt on its own.
 - **The handoff.** While the run is back in `implementing`, `factory authorization` carries `fix`: the attempt, its outcome, its blocking findings, the error's cause and the report path. `next` stays `implement`. `do-work` fixes exactly those findings, commits, and validates a new attempt. It escalates itself when a fix would change the contract (that needs `approve` again), the project's checks or test configuration, or an assertion the reviewer won't accept.
 - **The operator's way back.** `factory continue '<run_id>' --reason …` takes an `escalated` run whose latest attempt was a `fail` or `error` (any cause: the operator judges whether the environment is fixed) back to `implementing`. Same contract, digest and authorization; the deadline and the attempt budget are never reset, and a passed deadline refuses. `do-work` offers it in plain words, with "abandon" and "start over", and runs the commands itself. A `blocked` run isn't continued: the manifest tracks what blocks work.
+- **A rejected manual procedure escalates at once (#99).** A reviewer's `judgment:{id}` finding carries the judged item's `evidence_type`. When it is `manual` (`procedure_adequate: no`), the run escalates as `needs_operator` with attempts to spare: the instructions are in the approved contract, so no attempt can fix them, and only a re-approved contract can. `do-work` offers only abandon and start over. A `judgment:` finding on test or command evidence (`supports_criterion` `no` or `partial`) still loops, since a better test is the implementer's to write, and so does one recorded before findings carried `evidence_type`.
 - **The PR** opens only after a `pass` or `pending_manual` attempt, as before, and its report lists every attempt with its outcome when there was more than one. Re-entering implementation after the PR is open, including after a failed manual check, is #97.
 - **Review of r1 (#92's own first run).** Its fresh reviewer found that `continue` accepted a run escalated from `pr_open` by a failed manual check (`record-manual` sets that attempt's outcome to `fail`), so `continue` now refuses a run with a PR (`has_pr`). The attempt budget is fixed at first approval, like the deadline (`factory_runs.max_attempts`), so a commit to the branch's settings can't raise it. A runner error mid-validation now writes the attempt's report too.
 - **Crash safety.** New fault points `record-review.committed` and `continue.committed`. `scripts/test-factory.sh` kills the runner after a failed attempt moved the run back, during the next attempt's checks, after a review sent it back and after `continue`, and checks that `resume` and `next` carry on with nothing reset.
@@ -764,7 +774,7 @@ All keys optional. Missing `static`/`verify` → `blocked` ("not configured"). `
 | `archive-work` | archive run artifact dir; record `archive_path` | first |
 | agents | `validation-reviewer` | first |
 | `do-work` | fix loop (§6.2) | next |
-| `setup-work` + `plan-critic` agent | critique loop (§3.5) | next |
+| `setup-work` + `plan-critic` agent | critique loop (§3.5) | next (as built: #99) |
 | gate + `manifest-sync` | report-only recommendation; operator action and merge SHA recording | next |
 | `PreToolUse` exec hook | optional enforcement of `factory exec` | first (as built: on during runs, opt out per project) |
 
@@ -790,7 +800,7 @@ Status as of 2026-11-17; tracked in #66.
 
 **Host-agnostic interface (added 2026-11-15 to #59–#62).** The factory must be usable by hosts other than the Escapement skills, for example Escapement Studio calling it as a subprocess. Requirements: `--json` output on every command; external work-item IDs (no required manifest `work_items` row; `manifest_id` optional in the contract); storage passed explicitly (`--project-root`, optional artifact-dir override); invocation through a plugin-root wrapper (`scripts/factory.sh`) with no skill calls from the runner; contract, report and verdict schemas published as standalone JSON Schema; the `.git/info/exclude` obligation for hosts documented and tested; the reviewer defined as a prompt plus verdict schema, with the Claude Code agent as a thin wrapper.
 10. **#92 Bounded fix loop.** **Done.** The runner loops a `fail` or an implementer-fixable `error` back to implementing within `max-attempts`, with stuck detection on deterministic findings, regression flags and error causes (migration 3); `factory continue` is the operator's way back from `escalated`; the PR shows the attempt history; crash tests at each boundary (§6.2). Re-entry after the PR is open is #97.
-11. **Plan critique**, one round.
+11. **#99 Plan critique**, one round. **Done.** The `plan-critic` agent (a prompt plus `critique.schema.json`) critiques the plan and contract in `setup-work` before approval; unresolved findings reach the operator with both positions; dispositions are recorded in the scratchpad and, with `record-critique`, on the run as `critique_finding` events. In the fix loop, a rejected manual procedure now escalates at once (§3.5, §6.2).
 12. **Gate, report-only.**
 13. **Later:** merge-result validation, enforcing gate, async escalation, hidden scenarios, test-first, outer loop.
 
