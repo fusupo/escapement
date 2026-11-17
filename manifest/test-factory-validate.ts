@@ -210,6 +210,22 @@ async function run() {
     assert(rep.error?.cause === "environment" && rep.error.reason === "setup failed (exit 5)", "a failed setup is the environment's error");
   }
   {
+    // verify leaves an unreadable directory where the results go, so the runner itself fails reading them.
+    const { db, run } = await project({ branch: { "ci/verify.sh": 'mkdir "$FACTORY_RESULTS_DIR/junit.xml" && chmod 000 "$FACTORY_RESULTS_DIR/junit.xml"\n' } });
+    await throws_(() => validate(db, run.run_id), /EACCES|permission denied/i, "a runner error during validation is still raised");
+    const a = getAttempt(db, run.run_id, 1);
+    const locked = join(dirname(a.report_path ?? join(run.artifact_dir, "attempts", "1", "report.json")), "results");
+    sh("chmod", ["-R", "u+rwx", locked], run.artifact_dir);
+    const rep = report(a.report_path!);
+    assert(
+      a.status === "complete" && a.outcome === "error" && a.error_cause === "environment" && rep.outcome === "error" &&
+        rep.error?.cause === "environment" && /^runner error: /.test(rep.error.reason) && rep.findings.some((f) => f.id === "runner") &&
+        rep.invocations.some((i) => i.phase === "verify"),
+      "a runner error during validation writes a report with error cause environment",
+    );
+    assert(getRun(db, run.run_id).state === "escalated", "and the run escalates: the runner's error is the operator's");
+  }
+  {
     const { db, run } = await project({ branch: { "ci/static-exit": "2\n" } });
     const rep = report((await validate(db, run.run_id)).report_path);
     assert(rep.outcome === "fail" && rep.error === undefined && getAttempt(db, run.run_id, 1).error_cause === null, "a fail has no error cause");

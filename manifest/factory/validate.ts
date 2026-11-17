@@ -390,17 +390,82 @@ export async function validateRun(db: Database, runId: string, opts: ValidateOpt
       const current = getAttempt(db, runId, row.attempt);
       if (current.status === "checks_running") {
         const why = `runner error: ${(err as Error).message}`;
-        transitionAttempt(db, runId, row.attempt, "complete", {
-          owner: null,
-          outcome: "error",
-          reason: why,
-          error: { cause: "environment", reason: why },
+        const error: AttemptError = { cause: "environment", reason: why };
+        const written = writeErrorReport(at, { identity, policy, prep, contract, error });
+        tx(db, () => {
+          if (written) {
+            db.prepare("UPDATE factory_attempts SET report_path = ?, findings_json = ? WHERE run_id = ? AND attempt = ?").run(
+              written.path,
+              JSON.stringify(written.findings),
+              runId,
+              row.attempt,
+            );
+          }
+          transitionAttempt(db, runId, row.attempt, "complete", { owner: null, outcome: "error", reason: why, error });
         });
         advanceRun(db, runId, row.attempt, { owner: opts.owner });
       }
       throw err;
     }
   });
+}
+
+/**
+ * The report for an attempt the runner itself failed (§5.4: a runner
+ * error is the environment's): what the attempt knew, every evidence item
+ * `not_run`, the invocations so far, a blocking `runner` finding and the
+ * error. Best effort: if it can't be written, the error stays recorded on
+ * the attempt and the original failure is what the caller sees.
+ */
+function writeErrorReport(
+  at: Attempt,
+  ctx: { identity: Identity; policy: string; prep: Prepared; contract: Contract; error: AttemptError },
+): { path: string; findings: Finding[] } | null {
+  try {
+    const { identity, contract, error } = ctx;
+    const path = join(at.dir, "report.json");
+    const runner: Finding = { id: "runner", severity: "blocking", detail: error.reason };
+    // The draft was written before the failure: keep everything it found.
+    if (existsSync(path)) {
+      const draft = JSON.parse(readFileSync(path, "utf-8")) as Report;
+      const findings = [...draft.findings, runner];
+      const final = { ...draft, status: "complete" as const, outcome: "error" as const, findings, error };
+      if (schemaErrors("report", final).length) return null;
+      atomicWrite(path, JSON.stringify(final, null, 2) + "\n");
+      return { path, findings };
+    }
+    const findings: Finding[] = [runner];
+    const report: Report = {
+      version: 1,
+      run_id: at.run.run_id,
+      attempt: at.attempt,
+      status: "complete",
+      outcome: "error",
+      validation_scope: "branch",
+      head_sha: identity.head_sha,
+      merge_base_sha: identity.merge_base_sha,
+      target_ref: identity.target_ref,
+      target_sha: identity.target_sha,
+      contract_digest: ctx.prep.authorization.contract_digest,
+      policy_version: ctx.policy,
+      lockfile_digest: null,
+      tree_clean_after: treeStatus(at.run.worktree_path).clean,
+      tier: { proposed: contract.risk_tier_proposed, actual: contract.risk_tier_proposed, reasons: contract.risk_reasons ?? [] },
+      changes: { new_evidence: 0, modified_assertions: 0, execution_policy: 0 },
+      phases: [],
+      evidence: evidenceOf(contract).map((e) => ({ id: e.id, executed: "not_run", supports_criterion: null })),
+      findings,
+      flags: [],
+      budget: { attempts_used: at.attempt, wall_clock_s: Math.max(0, (Date.now() - Date.parse(at.run.started_at)) / 1000), tokens: null },
+      invocations: at.invocations,
+      error,
+    };
+    if (schemaErrors("report", report).length) return null;
+    atomicWrite(path, JSON.stringify(report, null, 2) + "\n");
+    return { path, findings };
+  } catch {
+    return null;
+  }
 }
 
 async function runPhases(
