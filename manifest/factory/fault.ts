@@ -35,6 +35,10 @@ export const FAULT_POINTS = [
   "record-review.verdict_stored",
   /** record-review: the final report.json is written, the attempt is still finalizing. */
   "record-review.report_written",
+  /** record-review: the attempt is complete and the run has moved on (validated, back to implementing, or escalated), before the result is printed. */
+  "record-review.committed",
+  /** continue: the run is back in implementing, before the result is printed. */
+  "continue.committed",
   /** pr: `gh pr create` succeeded, the PR number is not yet recorded. */
   "pr.created",
   /** pr: the PR number is recorded, before the result is printed. */

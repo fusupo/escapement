@@ -1,7 +1,11 @@
 import type { Database } from "better-sqlite3";
-import { tx, getRun, getAttempt, transitionRun, type AttemptRow, type RunState } from "./state.ts";
-import { deadlinePassed } from "./runs.ts";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { FactoryError, blocked } from "./util.ts";
+import { tx, getRun, getAttempt, transitionRun, type AttemptError, type AttemptRow, type RunRow, type RunState } from "./state.ts";
+import { activeAuthorization, contractDigest, deadlinePassed } from "./runs.ts";
 import { readSettings } from "./settings.ts";
+import { faultPoint } from "./fault.ts";
 import type { Owner } from "./owner.ts";
 
 /**
@@ -140,4 +144,96 @@ export function advanceRun(
     transitionRun(db, runId, d.to, { owner: opts.owner, reason: d.reason });
     return d;
   });
+}
+
+// ── continue: the operator's way back (slice 1) ───────────────────────
+
+export type ContinueResult = {
+  run: RunRow;
+  /** False when the run was already back in implementing after this attempt. */
+  changed: boolean;
+  /** The failed or errored attempt the implementer goes back to fix. */
+  attempt: number;
+  outcome: string;
+  error: AttemptError | null;
+  attempts_used: number;
+  max_attempts: number;
+};
+
+function latestAttempt(db: Database, runId: string): AttemptRow | null {
+  return (
+    (db.prepare("SELECT * FROM factory_attempts WHERE run_id = ? ORDER BY attempt DESC LIMIT 1").get(runId) as AttemptRow | undefined) ??
+    null
+  );
+}
+
+/**
+ * `factory continue <run_id> --reason …` (§6.2, #92): the operator takes an
+ * escalated run back to implementing, under the same contract, digest and
+ * authorization. The next validation is a new attempt; neither the
+ * deadline nor the attempt budget is reset. Refused (blocked) when:
+ *
+ * - the run deadline has passed (`run_deadline`): a hard stop;
+ * - the run has no active authorization (`not_authorized`), or its
+ *   contract file no longer matches it (`contract_mismatch`);
+ * - the latest attempt isn't a completed `fail` or `error`
+ *   (`no_failed_attempt`): there's nothing for the implementer to fix;
+ * - every attempt is used (`attempt_budget`).
+ *
+ * Any `error` cause is accepted: the operator judges whether the
+ * environment is fixed. A run already back in implementing after that
+ * attempt is left as it is.
+ */
+export function continueRun(
+  db: Database,
+  runId: string,
+  opts: { reason: string; owner?: Owner; now?: number; maxAttempts?: number },
+): ContinueResult {
+  const why = opts.reason.trim();
+  if (!why) throw new FactoryError("usage", "continue needs a --reason");
+  const result = tx(db, () => {
+    const run = getRun(db, runId);
+    if (run.state === "closed") throw blocked("run_closed", `run ${runId} is closed`);
+    const latest = latestAttempt(db, runId);
+    const failed = latest !== null && latest.status === "complete" && (latest.outcome === "fail" || latest.outcome === "error");
+    const used = attemptsUsed(db, runId);
+    const max = opts.maxAttempts ?? maxAttemptsFor(run.worktree_path);
+    const answer = (r: RunRow, changed: boolean): ContinueResult => ({
+      run: r,
+      changed,
+      attempt: latest!.attempt,
+      outcome: latest!.outcome!,
+      error: latest!.error_cause ? { cause: latest!.error_cause, reason: latest!.error_reason ?? "" } : null,
+      attempts_used: used,
+      max_attempts: max,
+    });
+    if (run.state === "implementing" && failed) return answer(run, false);
+    if (run.state !== "escalated") {
+      throw new FactoryError("wrong_state", `run ${runId} is ${run.state}; only an escalated run can continue`);
+    }
+    if (deadlinePassed(run, opts.now)) {
+      throw blocked("run_deadline", `run ${runId} passed its deadline (${run.deadline_at}); going on needs a new run and budget`);
+    }
+    const auth = activeAuthorization(db, runId);
+    if (!auth) throw blocked("not_authorized", `run ${runId} has no active authorization`);
+    let content: Buffer;
+    try {
+      content = readFileSync(join(run.artifact_dir, "contract.json"));
+    } catch {
+      throw blocked("contract_mismatch", `run ${runId}'s approved contract is missing`);
+    }
+    if (contractDigest(content) !== auth.contract_digest) {
+      throw blocked("contract_mismatch", `run ${runId}'s contract no longer matches the approved one (${auth.contract_digest}); re-approve it`);
+    }
+    if (!failed) {
+      const what = latest ? `attempt ${latest.attempt} is ${latest.status}${latest.outcome ? ` (${latest.outcome})` : ""}` : "it has no attempt";
+      throw blocked("no_failed_attempt", `run ${runId} can't continue: ${what}; continue takes a run back after a failed or errored attempt`);
+    }
+    if (used >= max) {
+      throw blocked("attempt_budget", `run ${runId} has used all ${max} attempts; going on needs a new run`);
+    }
+    return answer(transitionRun(db, runId, FIX_LOOP, { reason: `continue: ${why}`, owner: opts.owner }), true);
+  });
+  if (result.changed) faultPoint("continue.committed");
+  return result;
 }

@@ -13,7 +13,10 @@ import {
   issueNumberOf,
   contractDigest,
 } from "./factory/runs.ts";
-import { getRun, transitionRun } from "./factory/state.ts";
+import { getRun, transitionRun, transitionAttempt, type AttemptError } from "./factory/state.ts";
+import { allocateAttempt } from "./factory/attempts.ts";
+import { continueRun } from "./factory/fixloop.ts";
+import { currentOwner } from "./factory/owner.ts";
 import { assert, throws, tempDir, cleanup, makeRepo, memDb, contractJson, contractFor } from "./factory/testkit.ts";
 
 const HOUR = 3_600_000;
@@ -157,6 +160,65 @@ async function run() {
   assert(!esc.changed && esc.run.state_reason === "validate blocked: dirty_tree", "escalating an escalated run changes nothing");
   transitionRun(db, e.run_id, "closed", { action: "abandoned" });
   throws(() => escalateRun(db, e.run_id, { reason: "x" }), /run_closed/, "a closed run can't be escalated");
+
+  console.log("\ncontinue (#92)\n");
+  {
+    const owner = currentOwner("test continue");
+    let n = 0;
+    /** An approved run, validated `outcomes.length` times, then escalated. */
+    const escalatedAfter = (outcomes: [string, AttemptError?][]) => {
+      const r = startRun(db, { workItem: `#9${++n}`, ctx: { ...ctx, worktreePath: `/cont${n}` }, artifactDir: tempDir() });
+      approveRun(db, r.run_id, { contractFile: contractFor(r.run_id), budgetMs: HOUR });
+      transitionRun(db, r.run_id, "implementing");
+      for (const [outcome, error] of outcomes) {
+        if (getRun(db, r.run_id).state === "implementing") transitionRun(db, r.run_id, "validating");
+        const a = allocateAttempt(db, r.run_id, { owner, headSha: "abc", contractDigest: getRun(db, r.run_id).contract_digest!, policyVersion: "p" });
+        transitionAttempt(db, r.run_id, a.attempt, "complete", { outcome, error });
+      }
+      transitionRun(db, r.run_id, "escalated", { reason: "attempt: needs the operator" });
+      return getRun(db, r.run_id);
+    };
+
+    const before = escalatedAfter([["error", { cause: "environment", reason: "verify was stopped (spawn_failed)" }]]);
+    const c = continueRun(db, before.run_id, { reason: "installed node", owner, maxAttempts: 3 });
+    const after = getRun(db, before.run_id);
+    const active = runStatus(db, before.run_id).authorization;
+    assert(
+      c.changed && after.state === "implementing" && after.state_reason === "continue: installed node" &&
+        after.contract_digest === before.contract_digest && active?.contract_digest === before.contract_digest &&
+        active?.approved_at !== undefined && after.deadline_at === before.deadline_at && c.attempts_used === 1,
+      "continue keeps the contract digest, authorization and deadline",
+    );
+    assert(c.attempt === 1 && c.outcome === "error" && c.error?.cause === "environment", "it names the attempt to fix, with its error");
+    const again = continueRun(db, before.run_id, { reason: "twice", owner, maxAttempts: 3 });
+    assert(!again.changed && getRun(db, before.run_id).state_reason === "continue: installed node", "continuing twice changes nothing");
+    const a2 = allocateAttempt(db, before.run_id, { owner, headSha: "def", contractDigest: before.contract_digest!, policyVersion: "p", maxAttempts: 3 });
+    assert(a2.attempt === 2, "the next validation is a new attempt");
+
+    const late = escalatedAfter([["fail"]]);
+    db.prepare("UPDATE factory_runs SET deadline_at = ? WHERE run_id = ?").run(new Date(Date.now() - 1000).toISOString(), late.run_id);
+    throws(() => continueRun(db, late.run_id, { reason: "x", maxAttempts: 3 }), /run_deadline/, "continue is refused past the deadline");
+    assert(getRun(db, late.run_id).state === "escalated", "and the run stays escalated");
+
+    const spent = escalatedAfter([["fail"], ["fail"]]);
+    throws(() => continueRun(db, spent.run_id, { reason: "x", maxAttempts: 2 }), /attempt_budget/, "continue is refused when the attempt budget is used up");
+
+    const passed = escalatedAfter([["pass"]]);
+    throws(() => continueRun(db, passed.run_id, { reason: "x", maxAttempts: 3 }), /no_failed_attempt/, "continue is refused when the latest attempt did not fail or error");
+    const none = escalatedAfter([]);
+    throws(() => continueRun(db, none.run_id, { reason: "x", maxAttempts: 3 }), /no_failed_attempt/, "and when there is no attempt");
+
+    const revoked = escalatedAfter([["fail"]]);
+    revokeRun(db, revoked.run_id);
+    throws(() => continueRun(db, revoked.run_id, { reason: "x", maxAttempts: 3 }), /not_authorized/, "and without an active authorization");
+    const changedContract = escalatedAfter([["fail"]]);
+    writeFileSync(join(changedContract.artifact_dir, "contract.json"), contractJson(changedContract.run_id, { risk_tier_proposed: "sensitive" }));
+    throws(() => continueRun(db, changedContract.run_id, { reason: "x", maxAttempts: 3 }), /contract_mismatch/, "and when the contract changed");
+    throws(() => continueRun(db, changedContract.run_id, { reason: " ", maxAttempts: 3 }), /usage/, "continue needs a reason");
+    const blockedRun = escalatedAfter([["fail"]]);
+    db.prepare("UPDATE factory_runs SET state = 'blocked' WHERE run_id = ?").run(blockedRun.run_id);
+    throws(() => continueRun(db, blockedRun.run_id, { reason: "x", maxAttempts: 3 }), /wrong_state/, "a blocked run can't continue (only escalated)");
+  }
 
   db.close();
   console.log("\nAll factory run tests passed.");

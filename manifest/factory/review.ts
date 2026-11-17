@@ -661,6 +661,8 @@ export async function recordReview(
       });
       faultPoint("record-review.verdict_stored");
     }
-    return finalize(db, run, getAttempt(db, runId, attempt), verdict, digest, opts.owner, a.status === "finalizing");
+    const done = finalize(db, run, getAttempt(db, runId, attempt), verdict, digest, opts.owner, a.status === "finalizing");
+    faultPoint("record-review.committed");
+    return done;
   });
 }
