@@ -181,10 +181,10 @@ async function run() {
   {
     const owner = currentOwner("test continue");
     let n = 0;
-    /** An approved run, validated `outcomes.length` times, then escalated. */
-    const escalatedAfter = (outcomes: [string, AttemptError?][]) => {
+    /** An approved run (with `maxAttempts` fixed at approval, if given), validated `outcomes.length` times, then escalated. */
+    const escalatedAfter = (outcomes: [string, AttemptError?][], maxAttempts?: number) => {
       const r = startRun(db, { workItem: `#9${++n}`, ctx: { ...ctx, worktreePath: `/cont${n}` }, artifactDir: tempDir() });
-      approveRun(db, r.run_id, { contractFile: contractFor(r.run_id), budgetMs: HOUR });
+      approveRun(db, r.run_id, { contractFile: contractFor(r.run_id), budgetMs: HOUR, maxAttempts });
       transitionRun(db, r.run_id, "implementing");
       for (const [outcome, error] of outcomes) {
         if (getRun(db, r.run_id).state === "implementing") transitionRun(db, r.run_id, "validating");
@@ -231,6 +231,23 @@ async function run() {
     writeFileSync(join(changedContract.artifact_dir, "contract.json"), contractJson(changedContract.run_id, { risk_tier_proposed: "sensitive" }));
     throws(() => continueRun(db, changedContract.run_id, { reason: "x", maxAttempts: 3 }), /contract_mismatch/, "and when the contract changed");
     throws(() => continueRun(db, changedContract.run_id, { reason: " ", maxAttempts: 3 }), /usage/, "continue needs a reason");
+    // No override: continue uses the budget recorded at approval. These fake
+    // worktrees have no CLAUDE.md, so their max-attempts setting is the default 3.
+    const tight = escalatedAfter([["fail"], ["fail"]], 2);
+    let tightRefusal = "";
+    try {
+      continueRun(db, tight.run_id, { reason: "x", owner });
+    } catch (err) {
+      tightRefusal = `${(err as { code?: string }).code}`;
+    }
+    const roomy = escalatedAfter([["fail"], ["fail"], ["fail"]], 4);
+    const roomyResult = continueRun(db, roomy.run_id, { reason: "x", owner });
+    assert(
+      tightRefusal === "attempt_budget" && getRun(db, tight.run_id).state === "escalated" &&
+        roomyResult.changed && roomyResult.max_attempts === 4 && roomyResult.attempts_used === 3,
+      "continue uses the budget fixed at approval, not the branch's setting",
+    );
+
     // A failed manual check sets the attempt's outcome to fail and escalates a pr_open run (record-manual).
     const withPr = escalatedAfter([["fail"]]);
     db.prepare("UPDATE factory_runs SET pr_number = 41 WHERE run_id = ?").run(withPr.run_id);

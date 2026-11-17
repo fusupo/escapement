@@ -130,6 +130,20 @@ async function run() {
     );
   }
 
+  {
+    const { db, root, run } = await project({ branch: FAILING });
+    // Approved with the default budget, 3; the branch then lowers its setting to 1.
+    commit(root, { "CLAUDE.md": SETTINGS + "- **max-attempts**: 1\n" });
+    const r1 = await validate(db, run.run_id);
+    commit(root, FIXED, "fix");
+    const r2 = await validate(db, run.run_id);
+    assert(
+      getRun(db, run.run_id).max_attempts === 3 && r1.run_state === "implementing" && /1 of 3/.test(r1.run_reason ?? "") &&
+        r2.attempt === 2 && r2.status === "awaiting_review",
+      "validate keeps the approved budget when the branch lowers max-attempts",
+    );
+  }
+
   console.log("\nStuck detection (§6.2)\n");
   {
     const { db, root, run } = await project({ branch: STATIC_MSG });

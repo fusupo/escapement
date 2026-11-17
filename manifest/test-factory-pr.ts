@@ -184,6 +184,21 @@ async function run() {
   m = matchAuthorization(db, here);
   assert(r.report_revision === 2 && m.matched && m.next === "await_merge", "refreshed from revision 2: await_merge again");
 
+  console.log("\nNo PR while the fix loop is going (#92)\n");
+  {
+    const l = setup(db, "acme/w#46", "46-l");
+    transitionRun(db, l.run.run_id, "implementing");
+    transitionRun(db, l.run.run_id, "validating");
+    db.prepare(
+      `INSERT INTO factory_attempts (run_id, attempt, status, outcome, head_sha, contract_digest, policy_version, started_at)
+         VALUES (?, 1, 'complete', 'fail', 'x', ?, 'p', ?)`,
+    ).run(l.run.run_id, l.run.contract_digest, new Date().toISOString());
+    transitionRun(db, l.run.run_id, "implementing", { reason: "attempt 1: fail; fix_loop" });
+    const before = stub.state().prs.length;
+    await rejects(openPr(db, l.run.run_id, { ...o, title: "t" }), /not_validated/, "a run back in implementing after a failed attempt can't open a PR");
+    assert(stub.state().prs.length === before && getRun(db, l.run.run_id).state === "implementing", "nothing is created, and the run stays implementing");
+  }
+
   console.log("\nAttempt history in the PR (#92)\n");
   {
     const h = setup(db, "acme/w#45", "45-h");
