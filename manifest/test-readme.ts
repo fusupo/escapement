@@ -169,6 +169,14 @@ function run(): void {
     "rejects a leftover workflow png",
   );
 
+  // Phrasings that describe shipped work as unbuilt. The manual review (AC-1.e3) covers the rest.
+  const UNBUILT = [
+    /\bbeing built\b/i,
+    /until \[?#58/i,
+    /\bunder (active )?development\b/i,
+    /\bnot (yet )?(built|shipped|implemented)\b/i,
+    /\bcoming (soon|in a (later|future) release)\b/i,
+  ];
   console.log("\nThe real README\n");
   const readme = readFileSync(join(ROOT, "README.md"), "utf-8");
   const violations = checkReadme(readme, { skills: skillDirs(ROOT), readmeDir: dirname(join(ROOT, "README.md")), exists: existsSync });
@@ -180,7 +188,7 @@ function run(): void {
   for (const p of pngs) console.error(`    leftover: ${p}`);
   assert(pngs.length === 0, "no workflow png is left in the repo");
   assert(
-    !/\bbeing built\b/i.test(readme) && !/until \[?#58/i.test(readme),
+    !UNBUILT.some((re) => re.test(readme)),
     "real README does not describe the factory runner as being built",
   );
   const unnamed = [...FACTORY_KEYS, "context-path"].filter((k) => !readme.includes(`\`${k}\``));
