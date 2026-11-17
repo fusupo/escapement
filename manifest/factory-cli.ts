@@ -366,6 +366,13 @@ function describeMatch(r: AuthorizationMatch): string {
     `  authorizes: ${r.authorizes.join(", ")}`,
     `  deadline:  ${r.deadline_at ?? "-"}`,
     ...(r.pr_number !== null ? [`  pr:        #${r.pr_number}`] : []),
+    ...(r.fix
+      ? [
+          `  fix:       attempt ${r.fix.attempt} ${r.fix.outcome}${r.fix.error ? ` (${r.fix.error.cause}: ${r.fix.error.reason})` : ""}`,
+          ...r.fix.blocking_findings.map((f) => `    - ${f.id}: ${f.detail}`),
+          ...(r.fix.report_path ? [`    report: ${r.fix.report_path}`] : []),
+        ]
+      : []),
   ].join("\n");
 }
 
