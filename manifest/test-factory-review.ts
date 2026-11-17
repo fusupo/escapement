@@ -315,6 +315,25 @@ async function failures() {
     const res = await record(db, run.run_id, { ...verdictFor(b), findings: [{ severity: "advisory", detail: "naming" }] });
     assert(res.outcome === "pass", "an advisory finding alone doesn't");
   }
+  {
+    const { db, run, b } = await issued();
+    const rejected: Record<string, [string, string]> = { "AC-1.e1": ["supports_criterion", "partial"], "AC-2.e1": ["supports_criterion", "no"], "AC-3.e1": ["procedure_adequate", "no"] };
+    const v = verdictFor(b);
+    v.evidence = v.evidence.map((e) => (rejected[e.id as string] ? { ...e, [rejected[e.id as string][0]]: rejected[e.id as string][1] } : e));
+    const res = await record(db, run.run_id, v);
+    const typed = readJson<{ findings: { id: string; evidence_type?: string }[] }>(res.report_path)
+      .findings.filter((f) => f.id.startsWith("judgment:"))
+      .map((f) => `${f.id}:${f.evidence_type}`)
+      .join();
+    const stored = (JSON.parse(getAttempt(db, run.run_id, 1).findings_json ?? "[]") as { id: string; evidence_type?: string }[])
+      .filter((f) => f.id.startsWith("judgment:"))
+      .map((f) => `${f.id}:${f.evidence_type}`)
+      .join();
+    assert(
+      typed === "judgment:AC-1.e1:test,judgment:AC-2.e1:command,judgment:AC-3.e1:manual" && stored === typed,
+      "record-review writes the evidence type on every judgment finding",
+    );
+  }
 }
 
 async function recovery() {

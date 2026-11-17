@@ -128,6 +128,15 @@ function reports() {
   }
   assert(schemaErrors("report", { ...report, outcome: "maybe" })[0].startsWith("/outcome: must be one of"), "unknown outcomes are rejected");
   assert(schemaErrors("report", { ...report, head_sha: "HEAD" })[0].startsWith("/head_sha"), "SHAs are full hex object names");
+  const judged = (evidence_type: string) => ({
+    ...report,
+    findings: [{ id: "judgment:AC-3.e1", severity: "blocking", detail: "reviewer: manual procedure is not adequate: x", evidence_type }],
+  });
+  assert(
+    ["test", "command", "manual"].every((t) => schemaErrors("report", judged(t)).length === 0) &&
+      schemaErrors("report", judged("doc"))[0]?.startsWith("/findings/0/evidence_type"),
+    "a report finding may carry evidence_type, and an unknown evidence_type is rejected",
+  );
 }
 
 function verdicts() {

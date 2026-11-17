@@ -310,6 +310,14 @@
           "evidence_digest": {
             "description": "Digest of normalized failure output, so the fix loop can tell a different failure from no change.",
             "$ref": "#/$defs/digest"
+          },
+          "evidence_type": {
+            "description": "On a reviewer judgment:{id} finding, the contract type of the evidence item judged. The fix loop escalates a rejected manual procedure at once (only a re-approved contract can change its instructions) and loops on test or command evidence. Absent on findings recorded before #99.",
+            "enum": [
+              "test",
+              "command",
+              "manual"
+            ]
           }
         }
       }

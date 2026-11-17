@@ -76,7 +76,15 @@ type EvidenceResult = {
   excerpt?: string;
 };
 
-type Finding = { id: string; severity: "blocking" | "advisory"; detail: string; location?: string; evidence_digest?: string };
+type Finding = {
+  id: string;
+  severity: "blocking" | "advisory";
+  detail: string;
+  location?: string;
+  evidence_digest?: string;
+  /** On a reviewer `judgment:{id}` finding: the judged evidence item's contract type (#99). */
+  evidence_type?: "test" | "command" | "manual";
+};
 
 export type Invocation = {
   id: string;
