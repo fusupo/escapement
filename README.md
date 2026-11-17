@@ -12,7 +12,7 @@ Escapement takes GitHub issues to merged pull requests in three layers. Each lay
 | **Factory** | One issue | The AI agent, under an authorization you grant once | An approved plan and validation contract run to a validated PR. You approve the plan and merge |
 | **Manifest** | Many issues, across repos | You, with the skills | A per-user dependency graph: what is ready, what can run in parallel, what drifted |
 
-The workflow skills are the base and need nothing beyond the plugin. The factory and the manifest share a TypeScript CLI and a per-user SQLite database. All three work across every project you load the plugin in, and each project tunes them in its own `CLAUDE.md`.
+The workflow skills are the base and need nothing beyond the plugin. The factory and the manifest are two TypeScript CLIs in one package (`scripts/factory.sh`, `scripts/manifest.sh`), sharing a per-user SQLite database. All three work across every project you load the plugin in, and each project tunes them in its own `CLAUDE.md`.
 
 ```mermaid
 flowchart TB
@@ -145,10 +145,8 @@ stateDiagram-v2
     validated --> pr_open: factory pr
     pr_open --> closed: you merge, archive-work
     validating --> escalated: fail or error
-    validating --> blocked: precondition not met
     implementing --> escalated: blocker
     pr_open --> escalated: a manual check fails
-    blocked --> closed: archive-work abandons it
     escalated --> closed: archive-work abandons it
     closed --> [*]
     note right of validating
@@ -158,6 +156,7 @@ stateDiagram-v2
     end note
 ```
 
+- **Validation preconditions.** If validation can't start (a dirty tree, unusable settings), `factory validate` refuses with `blocked` and changes nothing: the run stays where it is and no attempt is used. The host fixes the cause and validates again, or escalates the run.
 - **Escalation.** When a check fails, the reviewer finds a problem, a blocker comes up or the deadline passes, the run is `escalated` and you get a notification with the report. Any non-terminal state can be escalated, blocked or closed. In this first release a halted run isn't resumed: you close it with `archive-work`, and a new attempt starts with `setup-work`. There is no automatic fix loop yet.
 - **Resume.** If the runner or the session dies mid-run, `factory resume` kills orphaned check processes and reconciles the attempt. `do-work` and `validate-work` pick up from `factory authorization`'s `next` step, and a `factory pr` that died finds the PR it already opened instead of opening a second one.
 - **Gate.** `gate-mode` is `report-only`: the report recommends, and the merge is always yours.
