@@ -96,7 +96,7 @@ Commands:
   schema [name]                 Path of a published JSON Schema (contract, report,
                                 verdict, readiness, critique); --print for its content
   prompt [name]                 Path of an agent prompt the factory ships
-                                (reviewer); --print for its content
+                                (reviewer, critic); --print for its content
   exclude <pattern>...          Add .gitignore-style patterns for the host's
                                 working files to the repository's
                                 .git/info/exclude (no run needed)

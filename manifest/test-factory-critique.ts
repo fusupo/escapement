@@ -1,10 +1,12 @@
 // The plan critique (docs/FACTORY_DESIGN.md §3.5, #99): the critic's
 // document, the rules beyond its schema, and its record on a run.
 import { readFileSync, existsSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname, basename } from "node:path";
 import type { Database } from "better-sqlite3";
 import { CHECKLIST_ITEMS, critiqueErrors, recordCritique, type Critique } from "./factory/critique.ts";
 import { schemaPath } from "./factory/schemas.ts";
+import { promptPath } from "./factory/prompts.ts";
+import { fileURLToPath } from "node:url";
 import { transitionRun } from "./factory/state.ts";
 import { assert, throws, cleanup } from "./factory/testkit.ts";
 import { project } from "./factory/fixtures.ts";
@@ -155,8 +157,48 @@ async function recording() {
   }
 }
 
+/** Every property name and enum value in a JSON Schema. */
+function schemaWords(node: unknown, names: Set<string>, values: Set<string>): void {
+  if (Array.isArray(node)) return node.forEach((n) => schemaWords(n, names, values));
+  if (node === null || typeof node !== "object") return;
+  const o = node as Record<string, unknown>;
+  if (o.properties && typeof o.properties === "object") for (const k of Object.keys(o.properties)) names.add(k);
+  if (Array.isArray(o.enum)) for (const v of o.enum) values.add(String(v));
+  if (typeof o.const === "string") values.add(o.const);
+  for (const [k, v] of Object.entries(o)) if (k !== "enum") schemaWords(v, names, values);
+}
+
+function criticAsData() {
+  console.log("\nThe critic as data\n");
+  const prompt = readFileSync(promptPath("critic"), "utf-8");
+  const names = new Set<string>();
+  const values = new Set<string>();
+  schemaWords(JSON.parse(readFileSync(schemaPath("critique"), "utf-8")), names, values);
+  const quoted = (w: string) => prompt.includes(`\`${w}\``) || prompt.includes(`"${w}"`);
+  const missingNames = [...names].filter((n) => !quoted(n));
+  const missingValues = [...values].filter((v) => !quoted(v));
+  const explains = (item: string, words: RegExp) => new RegExp(`\\*\\*\`${item}\`\\*\\*:[^\\n]*${words.source}`).test(prompt);
+  assert(
+    missingNames.length === 0 && missingValues.length === 0 && CHECKLIST_ITEMS.every((i) => quoted(i)) &&
+      explains("clause_coverage", /each criterion into its clauses/) && explains("manual_procedure_adequacy", /would prove its criterion/),
+    `the critic prompt names every checklist item of the schema, including per-clause evidence coverage and manual procedure adequacy${missingNames.length + missingValues.length ? ` (missing: ${[...missingNames, ...missingValues].join(", ")})` : ""}`,
+  );
+  const brief = ["critic_prompt", "issue.path", "scratchpad.path", "contract.path", "readiness.path", "context.path", "repo.path", "critique.schema", "critique.write_to", "critique.check"];
+  assert(brief.every((f) => prompt.includes(`\`${f}\``)), "it names the brief fields it relies on");
+  assert(/fresh context/.test(prompt) && /haven't seen the planner's reasoning/.test(prompt), "it tells the critic it has fresh context, without the planner's reasoning");
+
+  const agent = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "agents", "plan-critic.md"), "utf-8");
+  assert(
+    basename(promptPath("critic")) === "plan-critic.md" && existsSync(promptPath("critic")) &&
+      /^---\nname: plan-critic\n/.test(agent) && agent.includes("`critic_prompt`") &&
+      !CHECKLIST_ITEMS.some((i) => agent.includes(i)) && !/approve|revise|escalate|blocking/.test(agent),
+    "the plan-critic agent is a thin wrapper over the prompt factory.sh prompt critic finds",
+  );
+}
+
 try {
   rules();
+  criticAsData();
   await recording();
   console.log("\nAll factory critique tests passed.");
 } finally {

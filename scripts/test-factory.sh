@@ -586,6 +586,10 @@ out="$(f prompt reviewer)"
 if [[ "$out" == */prompts/factory/validation-reviewer.md && -f "$out" ]]; then ok; else bad "prompt-path" "$out"; fi
 out="$(f --json prompt reviewer --print)"
 if [[ "$(jq -r '.ok and (.result.content | contains("# Validation reviewer"))' <<<"$out")" == true ]]; then ok; else bad "prompt-print" "$out"; fi
+out="$(f prompt critic)"
+if [[ "$out" == */prompts/factory/plan-critic.md && -f "$out" ]]; then ok; else bad "prompt-critic-path" "$out"; fi
+out="$(f --json prompt)"
+if [[ "$(jq -r '[.result.prompts[].name] == ["reviewer", "critic"]' <<<"$out")" == true ]]; then ok; else bad "prompt-list" "$out"; fi
 out="$(f --json prompt nope)"
 if [[ $? -eq 1 && "$(jq -r .error.code <<<"$out")" == usage ]]; then ok; else bad "prompt-unknown" "$out"; fi
 
