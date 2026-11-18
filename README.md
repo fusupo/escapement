@@ -534,9 +534,15 @@ fusupo
 
 ## Version
 
-**Current:** 4.3.0
+**Current:** 4.4.0
 
 **Changelog:**
+- 4.4.0 (2026-11-18): Browser tests as contract evidence (#104)
+  - **`browser-tests` setting.** A project whose `verify` runs browser tests says so with `browser-tests: playwright`. `factory.sh check` reports it as `browser_tests` (in the published readiness schema, and as a `browser tests:` line in its text); the runner does nothing else with it
+  - **Planning.** On the factory path, `setup-work` hands the setting to the `scratchpad-planner`, which writes UI criteria as browser-test evidence (`e2e/file.spec.ts::Describe › title`, repository-relative) and keeps `manual` for what a machine can't judge, such as a subjective visual or reading prose
+  - **Plan critic.** An eleventh checklist item, `manual_could_be_browser_test`, flags a manual check that could have been a browser test. It is a new required value in the published critique schema; without browser tests the critic judges it `ok`
+  - **Setup docs.** [Browser tests as evidence](docs/FACTORY_CLI.md#browser-tests-as-evidence): Playwright Test pinned, one worker, no retries (a retried pass is invisible in Playwright's JUnit), one project, a per-run dev server on temporary data, JUnit into `$FACTORY_RESULTS_DIR` with `outputDir` outside it, and the rootDir rule: put `playwright.config.ts` at the repository root and set `testDir` on its project, or selectors are `not_found`. fusupo/hackensack-next is the worked example, quoted unchanged
+  - **Pinned shapes.** `manifest/test-factory-junit.ts` resolves selectors against JUnit captured from a real Playwright Test 1.64.1 run
 - 4.3.0 (2026-11-17): Agent-assisted manual checks in a real browser (#103)
   - **Bundled browser.** The plugin ships Microsoft's Playwright MCP server (`@playwright/mcp@0.0.84`, in `plugin.json`): Playwright's own Chromium, headless unless `ESCAPEMENT_BROWSER_HEADLESS=false`, an in-memory profile, output outside the worktree, and only `localhost` and `127.0.0.1` origins (a guard rail, not a security boundary). Install the browser once with `npx -y @playwright/mcp@0.0.84 install-browser chrome-for-testing`
   - **`validate-work` carries out a manual check** on request ("run the manual check AC-2.e1"). It reads the instructions from the run's contract, does the setup they name, carries out each step in the browser or the shell, reports what it saw at each "Check:", and saves screenshots and observations under `{artifact_dir}/manual/{evidence_id}/`. It hands back steps it can't do, stops background processes, and asks you for the outcome. It never decides it. Manual checks no longer need a matched authorization, so they work past the run's deadline
