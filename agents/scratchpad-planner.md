@@ -238,8 +238,9 @@ When setup-work asks for a validation contract (the project is set up for the Es
 
 - **Evidence for every acceptance criterion.** For each one, say what would show it is met:
   - `test`: a selector `path::test name` (or a bare path for a whole file). Name the test the plan will add or the existing test that covers it, and check that the file and naming fit the project's test layout.
+  - **When the project has browser tests** (setup-work passes `browser_tests`, e.g. `playwright`), write UI criteria as Playwright test evidence: name the spec file and the test title the plan will add, as `e2e/file.spec.ts::Describe › title` (or just the title). The path is repository-relative; under the documented layout (`playwright.config.ts` at the repo root, `testDir` set on the project) it equals the classname Playwright writes, so it resolves (docs/FACTORY_CLI.md, Browser tests as evidence). Never write a path relative to some other folder that isn't a real file in the repository.
   - `command`: a command and its expected exit code, optionally a pattern its output must or must not match. Use it only for things a test can't show, such as a CLI's behavior.
-  - `manual`: concrete instructions a human can follow and check, when nothing automated can show it. Vague instructions are a readiness failure.
+  - `manual`: concrete instructions a human can follow and check, when nothing automated can show it. Vague instructions are a readiness failure. In a project with browser tests, keep `manual` for subjective visuals and reading prose, what a machine can't judge; anything a browser could click, type or read on the page is a browser test.
 - **Kind.** `new_behavior` when the evidence should fail without the change: say in the plan that it would. `regression` when it should already pass.
 - **A criterion you can't give evidence is a readiness question**, not something to paper over with a weak test. Say so.
 - **Predicted files**, repository-relative.
@@ -308,7 +309,7 @@ Present to user when:
 
 ---
 
-**Version:** 1.1.0
+**Version:** 1.2.0
 **Created:** 2026-01-01
-**Changed:** 2026-11-16 (1.1.0: validation contract material for setup-work's factory path, #63)
+**Changed:** 2026-11-18 (1.2.0: UI criteria as Playwright test evidence when the project has browser tests, #104); 2026-11-16 (1.1.0: validation contract material for setup-work's factory path, #63)
 **Purpose:** Replace generic Explore agent with specialized planning expertise
