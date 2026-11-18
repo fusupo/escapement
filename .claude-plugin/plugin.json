@@ -6,5 +6,26 @@
     "name": "fusupo"
   },
   "repository": "https://github.com/fusupo/escapement",
-  "license": "MIT"
+  "license": "MIT",
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@playwright/mcp@0.0.84",
+        "--browser",
+        "chromium",
+        "--isolated",
+        "--file-paths",
+        "absolute",
+        "--output-dir",
+        "${TMPDIR:-/tmp}/escapement-playwright",
+        "--allowed-origins",
+        "http://localhost:*;http://127.0.0.1:*"
+      ],
+      "env": {
+        "PLAYWRIGHT_MCP_HEADLESS": "${ESCAPEMENT_BROWSER_HEADLESS:-true}"
+      }
+    }
+  }
 }
