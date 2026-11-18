@@ -19,14 +19,14 @@ Escapement is a Claude Code plugin with the following structure:
 ```
 escapement/
 ├── .claude-plugin/
-│   └── plugin.json      # Plugin manifest (name, version, author)
+│   └── plugin.json      # Plugin manifest (name, version, author) and the bundled Playwright MCP server (mcpServers)
 ├── skills/              # Automated workflow modules
 │   ├── setup-work/      # GitHub issue -> scratchpad -> branch
 │   ├── commit-changes/  # Smart git commits with conventions
 │   ├── create-pr/       # Context-aware pull request creation
 │   ├── review-pr/       # Roadmap-aware PR review
 │   ├── do-work/         # Execute work from scratchpad (authorized factory path)
-│   ├── validate-work/   # Validate a factory run: checks, reviewer, verdict; manual outcomes
+│   ├── validate-work/   # Validate a factory run: checks, reviewer, verdict; manual checks in a browser; manual outcomes
 │   ├── archive-work/    # Archive completed scratchpads (context-path aware)
 │   ├── create-issue/    # Ad hoc GitHub issue creation
 │   ├── stash-artifact/  # Save artifacts to context directory
@@ -76,7 +76,7 @@ escapement/
 | `create-pr` | "Create a PR" | Context-aware pull request creation |
 | `review-pr` | "Review PR #123" | Roadmap-aware code review |
 | `do-work` | "Start working on issue #42" | Execute tasks from scratchpad with TodoWrite; under an authorized factory run, through to an open PR without questions |
-| `validate-work` | "Validate this work" | Factory validation: `factory validate`, the validation-reviewer, `record-review`; manual outcomes |
+| `validate-work` | "Validate this work", "Run the manual check AC-2.e1" | Factory validation: `factory validate`, the validation-reviewer, `record-review`; carries out a manual check in the bundled browser for the operator to decide; manual outcomes (`record-manual --assisted`) |
 | `archive-work` | "Archive this work" | Move completed scratchpads to archive (context-path aware) |
 | `create-issue` | "Create an issue", "File a bug" | Ad hoc GitHub issue creation from natural language |
 | `stash-artifact` | "Stash this script", "Save to context" | Save artifacts to context directory |

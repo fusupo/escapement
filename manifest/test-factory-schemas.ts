@@ -138,6 +138,19 @@ function reports() {
       schemaErrors("report", judged("doc"))[0]?.startsWith("/findings/0/evidence_type"),
     "a report finding may carry evidence_type, and an unknown evidence_type is rejected",
   );
+
+  const human = { evidence_id: "AC-3.e1", outcome: "pass", note: "docs read", recorder: "marc", recorded_at: "2026-11-18T00:00:00.000Z" };
+  const withManual = (m: Record<string, unknown>) => ({ ...report, outcome: "pass", revision: 2, supersedes: "report.json", manual_outcomes: [m] });
+  const assisted = { ...human, assisted: true, attachments: ["manual/AC-3.e1/observations.md", "manual/AC-3.e1/step-2.png"] };
+  assert(
+    schemaErrors("report", withManual(human)).length === 0 &&
+      schemaErrors("report", withManual(assisted)).length === 0 &&
+      schemaErrors("report", withManual({ ...human, assisted: false })).length === 0 &&
+      schemaErrors("report", withManual({ ...human, reviewer: "x" })).length > 0 &&
+      schemaErrors("report", withManual({ ...assisted, attachments: ["../secrets.txt"] })).length > 0 &&
+      schemaErrors("report", withManual({ ...assisted, assisted: "yes" })).length > 0,
+    "a report's manual_outcomes accepts assisted and attachments, and reports without them stay valid",
+  );
 }
 
 function verdicts() {

@@ -4,7 +4,7 @@ The factory runner is a small deterministic CLI that owns a run's state, locks, 
 
 The Escapement skills are one client of the runner. Other hosts, such as Escapement Studio, can call it as a subprocess and read its `--json` output. The runner never invokes a skill or an agent. It runs git and the commands you give it, and, for a run's push and PR, `gh` as the AI agent's GitHub identity (see [GitHub and the agent identity](#github-and-the-agent-identity)).
 
-First-release status: #59 provides `start`, `approve`, `exec`, `status`, `resume` and `revoke`. #60 adds contract validation, settings, `check` and `schema`. #61 adds `validate`. #62 adds `review-input`, `record-review` and `prompt`. #63 adds `exclude`, a settings-only `check`, and a `start` that refuses the target branch; `setup-work` drives `check`, `exclude`, `start` and `approve` (its factory path). #64 adds `authorization`, `agent`, `escalate`, `pr`, `record-manual` and `archive`, GitHub access as the agent, and the exec guard; `do-work`, `commit-changes`, `create-pr`, `validate-work` and `archive-work` drive them (the authorized path, FACTORY_DESIGN.md §6.1). #65 adds fault injection for crash tests, the `validate` next step, and killing a crashed check's process group; Escapement itself is configured as a factory project. #80 adds `push`, so skills push as the agent outside a run too. #99 adds `check-critique`, `record-critique` and the `critic` prompt; `setup-work` runs one round of plan critique before approval, and a reviewer's `judgment:` finding carries `evidence_type`.
+First-release status: #59 provides `start`, `approve`, `exec`, `status`, `resume` and `revoke`. #60 adds contract validation, settings, `check` and `schema`. #61 adds `validate`. #62 adds `review-input`, `record-review` and `prompt`. #63 adds `exclude`, a settings-only `check`, and a `start` that refuses the target branch; `setup-work` drives `check`, `exclude`, `start` and `approve` (its factory path). #64 adds `authorization`, `agent`, `escalate`, `pr`, `record-manual` and `archive`, GitHub access as the agent, and the exec guard; `do-work`, `commit-changes`, `create-pr`, `validate-work` and `archive-work` drive them (the authorized path, FACTORY_DESIGN.md §6.1). #65 adds fault injection for crash tests, the `validate` next step, and killing a crashed check's process group; Escapement itself is configured as a factory project. #80 adds `push`, so skills push as the agent outside a run too. #99 adds `check-critique`, `record-critique` and the `critic` prompt; `setup-work` runs one round of plan critique before approval, and a reviewer's `judgment:` finding carries `evidence_type`. #103 adds `record-manual --assisted --attachment`, shows recorded manual outcomes before the report resolves (`record-manual`, `status`, the PR section), and bundles the Playwright MCP server that `validate-work` uses to carry out a manual check.
 
 ## Running it
 
@@ -77,7 +77,7 @@ pr/body.md                      the PR description as last sent (pr)
 | `agent` | The AI agent's commit identity. No database needed | n/a |
 | `push` | Push the current branch as the agent, with no run (plain skills). Never forced, never the base branch, `main` or `master`. No database needed | n/a |
 | `pr <run_id>` | Push the branch and open or update the run's PR, as the agent | **no** to create; yes to update |
-| `record-manual <run_id> <evidence_id> pass\|fail --note <text>` | Record a human's outcome for manual evidence | yes |
+| `record-manual <run_id> <evidence_id> pass\|fail --note <text> [--assisted [--attachment <file>]...]` | Record a human's outcome for manual evidence | yes |
 | `archive <run_id> --path <dir>` | Record where the run was archived; `--close` closes it | yes |
 | `check [--contract <file>]` | Readiness: is the contract valid and runnable in this project? Without `--contract`, only the settings are checked. No run or database needed | n/a |
 | `check-critique <file> [--final]` | Check a plan critique against `critique.schema.json` and its rules (`-` reads stdin). No run or database needed | n/a |
@@ -107,6 +107,8 @@ Options:
 | `--body-file <file>` | pr: the host's PR description | the PR's own description on update; none on create |
 | `--note <text>` | record-manual (required) | none |
 | `--recorder <name>` | record-manual | the OS user |
+| `--assisted` | record-manual: the agent carried out the check's steps and the human decided | off |
+| `--attachment <file>` | record-manual, with `--assisted`; repeatable, at most 20 | none |
 | `--path <dir>` | archive (required) | none |
 | `--close`, `--abandon` | archive | off |
 | `--all` | status | off |
@@ -458,12 +460,15 @@ Updating an existing PR is bookkeeping: it works past the deadline, and for an `
 
 ### record-manual
 
-`record-manual <run_id> <evidence_id> pass|fail --note <text> [--recorder <name>]` records a human's outcome for `manual` evidence that the current report left `pending_manual` (§5.5). It holds the worktree lock and works past the deadline.
+`record-manual <run_id> <evidence_id> pass|fail --note <text> [--recorder <name>] [--assisted [--attachment <file>]...]` records a human's outcome for `manual` evidence that the current report left `pending_manual` (§5.5). It holds the worktree lock and works past the deadline.
 
 - **Bound to the report.** The report must be for the approved contract (`stale_contract`) and HEAD must still be its `head_sha` (`stale_report`); a new commit invalidates earlier records along with the report. The evidence must be one awaiting a human (`unknown_evidence`, listing those that are). A report that isn't `pending_manual` refuses with `not_pending_manual`, or `already_resolved` once human outcomes decided it.
 - **Records.** Each is a `manual_outcome` event with the outcome, note, recorder, head and contract. The same outcome again is a no-op; a different one replaces it until the report resolves.
+- **Agent-assisted (#103).** `--assisted` marks an outcome the human decided from the agent's walk-through (`validate-work`'s **Carrying Out a Manual Check**). Each `--attachment` names one of the agent's files, which must exist and lie under `{artifact_dir}/manual/{evidence_id}/` (else `bad_attachment`); it is stored relative to the artifact dir. `--attachment` without `--assisted` is a usage error. The recorder is still the human: the OS user, or `--recorder`. A record is a no-op only when the outcome, the assisted mark and the attachment list are all unchanged. The event and the revision's `manual_outcomes` carry `assisted: true` and `attachments`; unassisted records carry neither, as before.
+- **Before it resolves.** The result's `recorded` lists every outcome recorded so far for the report (with `recorder`, `note`, `assisted` and `attachments`). `status` shows them too (`.result.manual`: `pending` and `recorded`, null when the current report isn't pending), and `pr` shows each in the PR's report section as recorded, with the others still awaiting a human. So a run's checks can be worked through one at a time.
+- **Record every check of a run with the same runner version.** An older runner writes the final revision without the assisted fields.
 - **Resolution.** When every manual item is `pass`, or any is `fail`, the runner writes the next revision, `attempts/{n}/report.r{k}.json`: `revision`, `supersedes`, the new `outcome`, the manual evidence marked `passed` or `failed`, and `manual_outcomes`. Earlier revisions, `report.json` included, are never changed, and the attempt's outcome follows. A `fail` adds a blocking finding `manual:{evidence_id}` with the note and escalates the run.
-- `refresh_pr: true` in the result means the run's open PR shows the old report: run `pr` again.
+- `refresh_pr: true` in the result means the run's open PR shows an out-of-date report section: run `pr` again. Since #103 it is set after any new record, not only when the report resolves.
 
 ### archive
 

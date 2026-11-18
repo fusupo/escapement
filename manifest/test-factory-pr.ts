@@ -116,6 +116,52 @@ async function run() {
     "the report section lists every attempt with its outcome",
   );
 
+  const manualCriteria = [
+    { id: "AC-2", text: "Saves on reload", evidence: [{ id: "AC-2.e1", type: "manual" }] },
+    { id: "AC-3", text: "Docs", evidence: [{ id: "AC-3.e1", type: "manual" }] },
+  ];
+  const human = { note: "saved file shown after reload", recorder: "marc" };
+  const resolved = renderSection(
+    {
+      ...passed,
+      revision: 2,
+      evidence: [
+        { id: "AC-2.e1", executed: "passed", supports_criterion: null, procedure_adequate: "yes" },
+        { id: "AC-3.e1", executed: "passed", supports_criterion: null, procedure_adequate: "yes" },
+      ],
+      manual_outcomes: [
+        { evidence_id: "AC-2.e1", outcome: "pass", ...human, assisted: true, attachments: ["manual/AC-2.e1/observations.md", "manual/AC-2.e1/step-3.png"] },
+        { evidence_id: "AC-3.e1", outcome: "pass", note: "read", recorder: "marc" },
+      ],
+    },
+    manualCriteria,
+    "42-x",
+  );
+  assert(
+    resolved.includes("- `AC-2.e1`: pass, saved file shown after reload (marc, agent-assisted, 2 attachments: observations.md, step-3.png)") &&
+      resolved.includes("- `AC-3.e1`: pass, read (marc)") &&
+      !resolved.includes("manual/AC-2.e1/"),
+    "the PR report section marks an assisted manual check and names its attachments",
+  );
+  const partial = renderSection(
+    {
+      ...passed,
+      outcome: "pending_manual",
+      evidence: [
+        { id: "AC-2.e1", executed: "pending_manual", supports_criterion: null, procedure_adequate: "yes" },
+        { id: "AC-3.e1", executed: "pending_manual", supports_criterion: null, procedure_adequate: "yes" },
+      ],
+      manual_recorded: [{ evidence_id: "AC-2.e1", outcome: "pass", ...human, assisted: true, attachments: ["manual/AC-2.e1/step-3.png"] }],
+    },
+    manualCriteria,
+    "42-x",
+  );
+  assert(
+    partial.includes("- `AC-2.e1`: recorded pass, saved file shown after reload (marc, agent-assisted, 1 attachment: step-3.png); the report resolves once the other checks are recorded") &&
+      partial.includes("- `AC-3.e1`: awaiting a human"),
+    "the PR report section shows a recorded but unresolved assisted check while the other checks await a human",
+  );
+
   console.log("\nPreconditions\n");
   const db = await memDb();
   const stub = stubGh();

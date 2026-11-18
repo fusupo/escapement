@@ -9,6 +9,7 @@ import { listLocks, worktreeLock, BUILD_LOCK } from "./locks.ts";
 import type { Owner } from "./owner.ts";
 import { parseContract } from "./schemas.ts";
 import { readSettings } from "./settings.ts";
+import { manualProgress } from "./manual.ts";
 
 /** What an approval lets skills do without asking (§3.6). */
 export const AUTHORIZES = ["commit", "push_branch", "open_pr", "run_validation"] as const;
@@ -292,6 +293,8 @@ export function runStatus(db: Database, runId: string) {
     authorization: authorizations.find((a) => a.status === "active") ?? null,
     authorizations: authorizations.map((a) => ({ ...a, authorizes_json: undefined, authorizes: JSON.parse(a.authorizes_json) })),
     attempts: attempts.map((a) => ({ ...a, owner_json: undefined, owner: a.owner_json ? JSON.parse(a.owner_json) : null })),
+    /** While the current report is pending_manual: what is recorded so far and what still awaits a human (#103). */
+    manual: manualProgress(db, run),
     locks,
   };
 }

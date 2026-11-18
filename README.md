@@ -129,7 +129,7 @@ The factory lets one approved plan run to a validated PR with no further questio
 2. **Authorization.** At plan approval, **Approve + authorize run** checks out the branch, starts a run and approves the contract. The runner stores the contract and its digest, and issues an authorization. It covers committing, pushing the branch, opening the PR and running validation, never merging, force-pushing or changing the contract. The run gets a deadline (`run-budget`).
 3. **Implement.** `do-work` works through the tasks without asking. Builds and tests go through `factory exec`, one at a time across all worktrees, and `commit-changes` commits each task as the agent.
 4. **Validate.** `validate-work` runs `factory validate` (the project's `static` and `verify`, whose JUnit results resolve the contract's test evidence). Then the fresh-context `validation-reviewer` judges whether the evidence demonstrates each criterion and signs off sensitive or policy changes. `factory record-review` refuses an incomplete verdict.
-5. **PR.** `create-pr` runs `factory pr`, which pushes the branch and opens the PR as the agent, with the validation report in its description. `validate-work` records a manual check later and refreshes the PR's report.
+5. **PR.** `create-pr` runs `factory pr`, which pushes the branch and opens the PR as the agent, with the validation report in its description. `validate-work` records a manual check later and refreshes the PR's report. Since 4.3.0 it can also carry out a manual check's steps for you in a headless browser and show you what it saw ("run the manual check AC-2.e1"). You still decide the outcome, and the report marks the check agent-assisted. See [Browser for manual checks](#browser-for-manual-checks).
 6. **Merge and archive.** You merge. `archive-work` archives the work and closes the run.
 
 The run's states, from `factory.sh status`:
@@ -188,6 +188,20 @@ flowchart LR
 
 `setup-work` mirrors its readiness check into an issue's work item, so an issue with open questions leaves the frontier until they're answered. Design: [docs/MANIFEST_SYSTEM_DESIGN_V2.md](docs/MANIFEST_SYSTEM_DESIGN_V2.md).
 
+### Browser for manual checks
+
+The plugin bundles Microsoft's Playwright MCP server, so every session that loads Escapement has browser tools (#103). `validate-work` uses them to carry out a factory run's manual checks for you. Its config, in `.claude-plugin/plugin.json`:
+
+- **Pinned:** `@playwright/mcp@0.0.84`, through `npx`.
+- **Its own browser:** Playwright's Chromium (`--browser chromium`, the `chrome-for-testing` build), not your installed Chrome. Install it once:
+  ```bash
+  npx -y @playwright/mcp@0.0.84 install-browser chrome-for-testing
+  ```
+  Without it, the browser tools fail with an error that the browser is not installed, and `validate-work` stops the check and names this command.
+- **Headless.** Set `ESCAPEMENT_BROWSER_HEADLESS=false` before starting Claude Code to watch the browser in a window. Only `true`, `false`, `1` and `0` are understood.
+- **Local only.** Only `http://localhost:*` and `http://127.0.0.1:*` may be requested. This keeps manual checks on your dev server, but it is a guard rail, not a security boundary: Playwright's own docs say so, and it doesn't affect redirects.
+- **No files in your worktree.** Screenshots and page snapshots go to `$TMPDIR/escapement-playwright` (or `/tmp/escapement-playwright`), with an in-memory browser profile. `validate-work` copies the screenshots it keeps into the run's artifact dir.
+
 ### GitHub as the AI Agent
 
 Escapement keeps its automated work visibly separate from yours: on GitHub, it acts as an AI agent account.
@@ -229,7 +243,7 @@ Skills are invoked automatically by Claude Code when relevant, or explicitly wit
 | `create-pr`      | "create a PR", "open pull request"  | Context-aware PR creation as the AI agent (`factory push`, GitHub MCP tools); under an authorized run, through `factory pr` with the validation report |
 | `review-pr`      | "review PR #X", "check this PR"     | Roadmap-aware code review                      |
 | `do-work`        | "start working", "continue work"    | Execute tasks from scratchpad; under an authorized run, from approved plan to open PR with no questions |
-| `validate-work`  | "validate this work", "record the manual check" | Validate a factory run: checks, fresh-context reviewer, recorded verdict; manual outcomes |
+| `validate-work`  | "validate this work", "run the manual check AC-2.e1", "record the manual check" | Validate a factory run: checks, fresh-context reviewer, recorded verdict; carry out a manual check in a browser for you; manual outcomes |
 | `archive-work`   | "archive this work", "clean up"     | Move completed scratchpads to archive; archive and close a factory run |
 | `create-issue`   | "create an issue", "file a bug"     | Ad hoc GitHub issue creation from natural language |
 | `stash-artifact` | "stash this script", "save to context" | Save artifacts to context directory         |
@@ -340,7 +354,7 @@ See [docs/CUSTOMIZATION.md](docs/CUSTOMIZATION.md) for detailed examples and pat
 ```
 escapement/
 ├── .claude-plugin/
-│   └── plugin.json           # Plugin manifest
+│   └── plugin.json           # Plugin manifest, and the bundled Playwright MCP server
 ├── skills/                   # One directory per skill (see Skills)
 ├── hooks/
 │   ├── hooks.json            # Hook configuration
@@ -513,9 +527,15 @@ fusupo
 
 ## Version
 
-**Current:** 4.2.0
+**Current:** 4.3.0
 
 **Changelog:**
+- 4.3.0 (2026-11-17): Agent-assisted manual checks in a real browser (#103)
+  - **Bundled browser.** The plugin ships Microsoft's Playwright MCP server (`@playwright/mcp@0.0.84`, in `plugin.json`): Playwright's own Chromium, headless unless `ESCAPEMENT_BROWSER_HEADLESS=false`, an in-memory profile, output outside the worktree, and only `localhost` and `127.0.0.1` origins (a guard rail, not a security boundary). Install the browser once with `npx -y @playwright/mcp@0.0.84 install-browser chrome-for-testing`
+  - **`validate-work` carries out a manual check** on request ("run the manual check AC-2.e1"). It reads the instructions from the run's contract, does the setup they name, carries out each step in the browser or the shell, reports what it saw at each "Check:", and saves screenshots and observations under `{artifact_dir}/manual/{evidence_id}/`. It hands back steps it can't do, stops background processes, and asks you for the outcome. It never decides it. Manual checks no longer need a matched authorization, so they work past the run's deadline
+  - **`factory.sh record-manual --assisted --attachment <file>`** records your outcome as agent-assisted, with the agent's files. The report's `manual_outcomes` gain optional `assisted` and `attachments` (still version 1), and the PR's report section marks the check agent-assisted
+  - **One check at a time.** Outcomes recorded while other checks are still pending are listed by `record-manual` and `factory.sh status`, and shown in the PR's report section after `factory pr`
+  - **`archive-work`** copies the attachments into the run's archive
 - 4.2.0 (2026-11-17): Plan critique before approval, and a rejected manual procedure escalates at once (#99)
   - **Plan critique.** On the factory path, `setup-work` has the new `plan-critic` agent, with fresh context, critique the plan and its validation contract once before you approve it. Its checklist covers evidence for every clause of each criterion, manual procedures that would prove their criterion, new-behavior tests that would fail without the change, predicted files, a simpler approach, lore conflicts, coupling with other work, the tier and the issue's size. The planner answers each finding once; a blocking or major finding it rejects is shown to you with both positions before the approval question. A tier raise is applied
   - **Recorded.** The scratchpad's `## Plan Critique` lists every finding and what became of it: accepted with the plan change it caused, or rejected and why. On "Approve + authorize run", **`factory.sh record-critique`** writes it to the run as `critique.json` and one `critique_finding` event per finding

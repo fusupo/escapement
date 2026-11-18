@@ -12,7 +12,7 @@ import { resumeRun } from "./factory/resume.ts";
 import { validateRun } from "./factory/validate.ts";
 import { reviewInput, recordReview } from "./factory/review.ts";
 import { openPr } from "./factory/pr.ts";
-import { recordManual } from "./factory/manual.ts";
+import { recordManual, type RecordedView } from "./factory/manual.ts";
 import { archiveRun } from "./factory/archive.ts";
 import { syncGuard } from "./factory/guard.ts";
 import { currentOwner } from "./factory/owner.ts";
@@ -62,6 +62,7 @@ Commands:
                                 critique.json and one critique_finding event per
                                 finding
   record-manual <run_id> <evidence_id> pass|fail --note <text>
+                [--assisted [--attachment <file>]...]
                                 Record a human's outcome for manual evidence the
                                 report left pending; all pass (or any fail)
                                 writes the next report revision
@@ -135,6 +136,11 @@ Options:
                         the operator decided
   --note <text>         record-manual: what was checked and seen
   --recorder <name>     record-manual: who checked (default: the OS user)
+  --assisted            record-manual: the agent carried out the check's steps
+                        and the human decided from its observations
+  --attachment <file>   record-manual, with --assisted: one of the agent's
+                        observations or screenshots, under
+                        {artifact_dir}/manual/{evidence_id}/ (repeatable, max 20)
   --title <text>        pr: the PR title (needed to create it)
   --body-file <file>    pr: the host's PR description; the runner adds its
                         report section (on update, only the section changes)
@@ -168,12 +174,15 @@ const VALUE_FLAGS = new Set([
   "--recorder",
   "--path",
 ]);
-const BOOL_FLAGS = new Set(["--json", "--all", "--print", "--close", "--abandon", "--final", "--help", "-h"]);
+/** Value flags that may be given more than once; every value is kept, in order. */
+const LIST_FLAGS = new Set(["--attachment"]);
+const BOOL_FLAGS = new Set(["--json", "--all", "--print", "--close", "--abandon", "--final", "--assisted", "--help", "-h"]);
 
-type Parsed = { flags: Map<string, string | true>; positional: string[]; rest: string[] };
+type Parsed = { flags: Map<string, string | true>; lists: Map<string, string[]>; positional: string[]; rest: string[] };
 
 export function parseArgs(argv: string[]): Parsed {
   const flags = new Map<string, string | true>();
+  const lists = new Map<string, string[]>();
   const positional: string[] = [];
   let rest: string[] = [];
   for (let i = 0; i < argv.length; i++) {
@@ -184,10 +193,11 @@ export function parseArgs(argv: string[]): Parsed {
     }
     const eq = a.indexOf("=");
     const name = a.startsWith("--") && eq > 0 ? a.slice(0, eq) : a;
-    if (VALUE_FLAGS.has(name)) {
+    if (VALUE_FLAGS.has(name) || LIST_FLAGS.has(name)) {
       const value = eq > 0 && a.startsWith("--") ? a.slice(eq + 1) : argv[++i];
       if (value === undefined) throw new FactoryError("usage", `${name} needs a value`);
-      flags.set(name, value);
+      if (LIST_FLAGS.has(name)) lists.set(name, [...(lists.get(name) ?? []), value]);
+      else flags.set(name, value);
     } else if (BOOL_FLAGS.has(a)) {
       flags.set(a, true);
     } else if (a.startsWith("-") && a !== "-") {
@@ -196,7 +206,7 @@ export function parseArgs(argv: string[]): Parsed {
       positional.push(a);
     }
   }
-  return { flags, positional, rest };
+  return { flags, lists, positional, rest };
 }
 
 function str(p: Parsed, name: string): string | undefined {
@@ -234,6 +244,12 @@ function readInput(file: string, what: string): string {
   } catch (err) {
     throw new FactoryError("usage", `cannot read ${what} ${file}: ${(err as Error).message}`);
   }
+}
+
+/** One recorded manual outcome, for record-manual's and status's text. */
+function manualLine(m: RecordedView): string {
+  const assisted = m.assisted ? `, agent-assisted, ${m.attachments.length} attachment(s)${m.attachments.length ? `: ${m.attachments.join(", ")}` : ""}` : "";
+  return `${m.evidence_id} ${m.outcome} by ${m.recorder}${assisted}`;
 }
 
 function need(value: string | undefined, what: string): string {
@@ -527,15 +543,18 @@ async function dispatch(db: Database, command: string, p: Parsed, json: boolean)
       const r = await recordManual(db, runId, need(p.positional[1], "evidence_id"), need(p.positional[2], "pass or fail"), {
         note: need(str(p, "--note"), "--note <text>"),
         recorder: str(p, "--recorder"),
+        assisted: p.flags.has("--assisted"),
+        attachments: p.lists.get("--attachment") ?? [],
         owner,
         lockWaitMs: duration(db, p, "--lock-timeout", runId, (s) => s.lockTimeoutMs),
       });
       const state = r.resolved
         ? `resolved: ${r.resolved} (report revision ${r.report_revision})`
         : `${r.pending.length} manual check(s) still pending: ${r.pending.join(", ")}`;
+      const recorded = r.recorded.map((m) => `\n  recorded: ${manualLine(m)}`).join("");
       return {
         result: r,
-        text: `${runId} ${r.evidence_id}: ${r.outcome}${r.noop ? " (already recorded)" : ""}\n  ${state}\n  run:    ${r.run_state}\n  report: ${r.report_path}${r.refresh_pr ? `\n  PR #${r.pr_number} shows the old report: run factory pr '${runId}'` : ""}`,
+        text: `${runId} ${r.evidence_id}: ${r.outcome}${r.assisted ? " (agent-assisted)" : ""}${r.noop ? " (already recorded)" : ""}\n  ${state}${recorded}\n  run:    ${r.run_state}\n  report: ${r.report_path}${r.refresh_pr ? `\n  PR #${r.pr_number} shows the old report: run factory pr '${runId}'` : ""}`,
       };
     }
     case "archive": {
@@ -586,6 +605,12 @@ async function dispatch(db: Database, command: string, p: Parsed, json: boolean)
           `  deadline:  ${s.run.deadline_at ?? "-"}${s.deadline_passed ? " (passed)" : ""}`,
           `  authorization: ${s.authorization ? `active, ${s.authorization.contract_digest}` : "none active"}`,
           `  attempts:  ${s.attempts.length ? s.attempts.map((a) => `${a.attempt}:${a.status}${a.outcome ? `/${a.outcome}` : ""}`).join(" ") : "none"}`,
+          ...(s.manual
+            ? [
+                ...s.manual.recorded.map((m) => `  manual:    ${manualLine(m)}`),
+                ...s.manual.pending.map((id) => `  manual:    ${id} awaiting a human`),
+              ]
+            : []),
           ...s.locks.map((l) => `  lock ${l.name}: pid ${l.holder.pid} (${l.holder.command})${l.alive ? "" : " [dead]"}`),
         ];
         return { result: s, text: lines.join("\n") };

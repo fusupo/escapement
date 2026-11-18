@@ -38,7 +38,7 @@
       "minLength": 1
     },
     "manual_outcomes": {
-      "description": "Human outcomes for manual evidence, recorded with factory record-manual and bound to this report's head_sha and contract_digest.",
+      "description": "Human outcomes for manual evidence, recorded with factory record-manual and bound to this report's head_sha and contract_digest. assisted and attachments are optional (#103): the version stays 1.",
       "type": "array",
       "items": {
         "type": "object",
@@ -49,7 +49,17 @@
           "outcome": { "enum": ["pass", "fail"] },
           "note": { "type": "string", "minLength": 1 },
           "recorder": { "type": "string", "minLength": 1 },
-          "recorded_at": { "type": "string", "minLength": 1 }
+          "recorded_at": { "type": "string", "minLength": 1 },
+          "assisted": {
+            "description": "The agent carried out the check's steps and reported what it saw (validate-work); the outcome is still the recorder's. Absent means false.",
+            "type": "boolean"
+          },
+          "attachments": {
+            "description": "The agent's observations and screenshots for an assisted check, as paths relative to the run's artifact dir, under manual/{evidence_id}/.",
+            "type": "array",
+            "maxItems": 20,
+            "items": { "type": "string", "pattern": "^manual/[^/]+/.+" }
+          }
         }
       }
     },

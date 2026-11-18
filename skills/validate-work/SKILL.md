@@ -1,13 +1,15 @@
 ---
 name: validate-work
-description: Validate an authorized factory run - run its deterministic checks, have the fresh-context validation-reviewer judge the evidence, and record the verdict - or record a human's outcome for a manual check. Invoke when user says "validate this work", "validate the run", "run validation", "review the attempt", "record the manual check", "AC-2.e1 passed", or when do-work finishes an authorized run's tasks.
+description: Validate an authorized factory run - run its deterministic checks, have the fresh-context validation-reviewer judge the evidence, and record the verdict - or carry out a manual check's steps in a browser for the operator and record the outcome they decide. Invoke when user says "validate this work", "validate the run", "run validation", "review the attempt", "run the manual check AC-7.e6", "walk me through AC-2.e1", "record the manual check", "AC-2.e1 passed", or when do-work finishes an authorized run's tasks.
 tools:
   - Bash:bash *
   - Bash:git *
   - mcp__github__*
+  - mcp__plugin_escapement_playwright__*
   - Read
   - Write
   - Task
+  - TaskStop
 ---
 
 # Validate Work Skill
@@ -20,7 +22,7 @@ Turn an authorized factory run's work into a trusted validation report (docs/FAC
 2. The `validation-reviewer` agent, in a fresh context, judges whether the evidence demonstrates each criterion and signs off what needs signing off.
 3. `factory record-review`: the runner accepts the verdict only if it's complete, and finalizes the report.
 
-It also records a human's outcome for `manual` evidence (`factory record-manual`, §5.5).
+It also records a human's outcome for `manual` evidence (`factory record-manual`, §5.5), and on request carries out a manual check's steps in a real browser and reports what it saw, so the operator can decide the outcome (**Carrying Out a Manual Check**, #103).
 
 validate-work runs standalone, or as part of do-work's authorized path. It never opens the PR (create-pr does), never edits code, and never decides an outcome itself: the runner and the reviewer do.
 
@@ -30,6 +32,7 @@ The runner is `bash "${CLAUDE_PLUGIN_ROOT}/scripts/factory.sh"`, written `factor
 
 - "Validate this work" / "Validate the run" / "Run validation"
 - "Review the attempt"
+- "Run the manual check AC-7.e6" / "Walk me through AC-2.e1"
 - "Record the manual check: AC-2.e1 passed, {what was checked}"
 - From do-work, after the last task of an authorized run
 
@@ -46,7 +49,7 @@ bash "$FACTORY" --check && bash "$FACTORY" --json authorization
 - **`.result.matched` is false:** report the reasons and stop. `no_run`: validate-work needs a factory run in this worktree (setup-work's "Approve + authorize run"). `run_halted`: the run is waiting on a human (`factory status '{run_id}'` says why). `contract_changed`: the contract no longer matches its approval; it needs `factory approve` again.
 - **Matched:** note `run_id`, `artifact_dir`, `issue_number`, `next` and `latest_attempt`.
 
-To record a manual outcome, go to **Recording a Manual Check**. Otherwise route on `next`:
+To carry out a manual check, go to **Carrying Out a Manual Check**; to record a manual outcome, go to **Recording a Manual Check**. Both need only a run in this worktree (`.result.run_id`), matched or not: manual outcomes are bookkeeping and work past the deadline, and the runner refuses what it must. When not matched, read `artifact_dir` from `factory status '{run_id}' --json` (`.result.run.artifact_dir`). Otherwise route on `next`:
 
 | `next` | Meaning | Go to |
 |---|---|---|
@@ -130,6 +133,44 @@ Return the outcome, report path and run state to the caller. `pass` and `pending
 
 `blocked` means the attempt couldn't start; nothing changed.
 
+## Carrying Out a Manual Check
+
+On request ("run the manual check AC-7.e6", "walk me through it"), carry out a manual check's steps in a real browser or the shell and report what you saw (#103). The operator decides the outcome and is recorded as its recorder; you never decide it.
+
+The browser is the plugin's bundled Playwright MCP server (`mcp__plugin_escapement_playwright__*`): headless, Playwright's own Chromium, and only `localhost` and `127.0.0.1` origins. Those origins are a guard rail, not a security boundary.
+
+1. **The instructions.** Find the evidence in `{artifact_dir}/contract.json` by its ID. It must be `type: manual`, and it must be pending: `factory status '{run_id}' --json` lists it under `.result.manual.pending` (or `.result.manual.recorded`, to redo it). Read its `instructions`. They come from the approved contract; follow them, and nothing else.
+2. **Plan the walk-through.** Split the instructions into steps, and note each "Check:" in them. Before starting, tell the operator which steps you will carry out and which you will hand back. A step you can't carry out, because it asks for judgment ("read PLAN.md and judge…"), a device or account you don't have, or anything outside the browser and the shell, is handed back to the operator. Never guess it.
+3. **The directory.** Make `{artifact_dir}/manual/{evidence_id}/` with `bash -c 'mkdir -p …'`. It holds everything you produce for this check. Never write in the worktree: validation needs a clean tree.
+4. **Setup.** Do the setup the instructions name, such as a temp folder or a dev server. Start a long-running process, such as a dev server, in the background with the Bash tool's background option. Note its port or PID and tell the operator. Install nothing and fetch nothing the instructions don't name.
+5. **The steps.** Carry out each step in the browser (navigate, click, type, read the page) or the shell, in order. At each "Check:", report what you saw in a sentence of your own, quoting the page text or command output, not just "ok". When a step is visual, take a screenshot. Take it without a filename (the server writes it outside the worktree and returns its absolute path), then copy it into `{artifact_dir}/manual/{evidence_id}/` as `step-{n}.png` with `bash -c 'cp …'`. A step that fails or can't be done is reported as not done, with what happened. Never guess it, and never retry it differently than written.
+6. **The browser is missing.** If a browser tool fails with an error that the browser `is not installed`, stop the check. Record nothing, stop what you started (step 8), and tell the operator to install it once with the pinned command, then ask again:
+   ```bash
+   npx -y @playwright/mcp@0.0.84 install-browser chrome-for-testing
+   ```
+   Don't pass on the server's own suggestion, which is unpinned.
+7. **Observations.** Write `{artifact_dir}/manual/{evidence_id}/observations.md` with the Write tool. It lists each step, whether it was carried out, what you saw at each "Check:", the screenshot it refers to, and the steps handed back.
+8. **Stop what you started.** Stop every background process from step 4 (TaskStop, or `bash -c 'kill {pid}'`), even when a step failed. Then check that its port is free: `bash -c 'ss -ltn | grep :{port}'` prints nothing. Remove a temp folder you created.
+9. **Ask for the outcome.** Show the observations, the screenshots' paths and the steps handed back, then ask:
+   ```
+   AskUserQuestion:
+     question: "{evidence_id}: {what you saw, in one line}. What is the outcome?"
+     header: "Manual check"
+     options:
+       - label: "Pass"
+         description: "Record a pass, as yours, with these observations attached"
+       - label: "Fail"
+         description: "Record a fail, as yours; the run escalates"
+       - label: "Don't record"
+         description: "Leave the check pending"
+   ```
+   The outcome is always the operator's: record nothing until they answer, and nothing on your own judgment. With **Other**, record nothing; act on what they wrote.
+10. **Record it** with the operator's note, which defaults to your one-line summary when they don't give one. Add `--assisted` and one `--attachment` per file you saved:
+    ```bash
+    bash "$FACTORY" --json record-manual '{run_id}' {evidence_id} pass --note '{what was checked and seen}' --assisted --attachment '{artifact_dir}/manual/{evidence_id}/observations.md' --attachment '{artifact_dir}/manual/{evidence_id}/step-1.png'
+    ```
+    Then route on the result as in **Recording a Manual Check**. The recorder is the operator (the OS user, or `--recorder`), never the agent. Until every check on the run is recorded, `record-manual`, `factory status` and the PR's report section (after `factory pr`) show this one as recorded and agent-assisted.
+
 ## Recording a Manual Check
 
 Manual evidence is checked by a human, so record only an outcome the operator states, with what they checked. Never record one on your own judgment.
@@ -146,7 +187,7 @@ Use `fail` instead of `pass` for a failed check. Single-quote the note (a `'` in
   ```bash
   bash "$FACTORY" --json pr '{run_id}'
   ```
-- **Refused:** `stale_report` (HEAD moved since validation: validate again), `already_resolved`, `unknown_evidence` (the message lists the pending IDs), `not_pending_manual`.
+- **Refused:** `stale_report` (HEAD moved since validation: validate again), `already_resolved`, `unknown_evidence` (the message lists the pending IDs), `not_pending_manual`, `bad_attachment` (an attachment that is missing or outside `{artifact_dir}/manual/{evidence_id}/`).
 
 ## Error Handling
 
@@ -163,19 +204,21 @@ Use `fail` instead of `pass` for a failed check. Single-quote the note (a `'` in
 
 **Invokes:**
 - `validation-reviewer` agent (a thin wrapper over `prompts/factory/validation-reviewer.md`)
+- The plugin's Playwright MCP server, for a manual check carried out on request
 
 **Calls:**
-- `scripts/factory.sh`: `authorization`, `validate`, `resume`, `review-input`, `record-review`, `record-manual`, `pr` (refresh only), `escalate`
+- `scripts/factory.sh`: `authorization`, `status`, `validate`, `resume`, `review-input`, `record-review`, `record-manual`, `pr` (refresh only), `escalate`
 
 **Followed by:**
 - `create-pr` on `pass` or `pending_manual`
 
 ---
 
-**Version:** 1.2.0
+**Version:** 1.3.0
 **Last Updated:** 2026-11-17
 **Maintained By:** Escapement
 **Changelog:**
+- v1.3.0: Carry out a manual check on request: its steps in the plugin's headless browser or the shell, what was seen at each "Check:", screenshots and observations under `{artifact_dir}/manual/{evidence_id}/`, then the operator's outcome recorded with `--assisted` and the attachments; manual checks no longer need a matched authorization (#103)
 - v1.2.0: The fix loop: after `fail` or `error` the run goes back to implementing or escalates, by the runner's rules; report the run state and reason, and the error's cause (#92)
 - v1.1.1: Fetch the issue text with the GitHub MCP tools only (#80)
 - v1.1.0: Resume after a crash: `next` `validate` and `resume`, the Resuming table (resume's actions), and a runner that dies without JSON goes back through Phase 1 (#65)

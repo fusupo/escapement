@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import type { Database } from "better-sqlite3";
 import { validateRun } from "./factory/validate.ts";
@@ -6,6 +6,7 @@ import { reviewInput, recordReview, type Bundle } from "./factory/review.ts";
 import { recordManual } from "./factory/manual.ts";
 import { openPr } from "./factory/pr.ts";
 import { getRun, getAttempt } from "./factory/state.ts";
+import { runStatus } from "./factory/runs.ts";
 import { schemaErrors } from "./factory/schemas.ts";
 import { assert, sh, tempDir, cleanup, stubGh } from "./factory/testkit.ts";
 import { owner, TEST_EV, project } from "./factory/fixtures.ts";
@@ -113,6 +114,87 @@ async function run() {
     const refreshed = await openPr(db, id, { ...LOCK, env });
     const body = stub.state().prs[0].body;
     assert(refreshed.action === "updated" && refreshed.state === "escalated" && body.includes("❌ fail") && body.includes("iOS shows a blank page"), "factory pr refreshes the escalated run's PR to the failed revision");
+  }
+
+  console.log("\nrecord-manual: agent-assisted checks (#103)\n");
+  {
+    const { db, run } = await pendingManual();
+    const id = run.run_id;
+    const dir = join(run.artifact_dir, "manual", "AC-2.e1");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "observations.md"), "Step 3: the editor shows the saved file.\n");
+    writeFileSync(join(dir, "step-3.png"), "png");
+    const otherDir = join(run.artifact_dir, "manual", "AC-3.e1");
+    mkdirSync(otherDir, { recursive: true });
+    writeFileSync(join(otherDir, "notes.md"), "x");
+    writeFileSync(join(run.artifact_dir, "stray.png"), "x");
+
+    const tries: [Promise<unknown>, RegExp][] = [
+      [recordManual(db, id, "AC-2.e1", "pass", { ...LOCK, note: "x", attachments: [join(dir, "step-3.png")] }), /^usage .*--assisted/],
+      [recordManual(db, id, "AC-2.e1", "pass", { ...LOCK, note: "x", assisted: true, attachments: [join(otherDir, "notes.md")] }), /^bad_attachment .*outside/],
+      [recordManual(db, id, "AC-2.e1", "pass", { ...LOCK, note: "x", assisted: true, attachments: [join(run.artifact_dir, "stray.png")] }), /^bad_attachment .*outside/],
+      [recordManual(db, id, "AC-2.e1", "pass", { ...LOCK, note: "x", assisted: true, attachments: [join(dir, "missing.png")] }), /^bad_attachment .*doesn't exist/],
+    ];
+    const refused: boolean[] = [];
+    for (const [p, pattern] of tries) refused.push(pattern.test(await p.then(() => "accepted", (err) => `${(err as { code?: string }).code ?? ""} ${String(err)}`)));
+    assert(
+      refused.every(Boolean) && manualEvents(db, id) === 0,
+      "record-manual refuses an attachment outside the evidence's manual dir, a missing file, and --attachment without --assisted",
+    );
+
+    const stub = stubGh();
+    const env = { ...process.env, PATH: stub.path, ESCAPEMENT_AGENT_GH_TOKEN: "t0ken" };
+    const opened = await openPr(db, id, { ...LOCK, env, title: "feat: assisted" });
+    const files = [join(dir, "observations.md"), join(dir, "step-3.png")];
+    let r = await recordManual(db, id, "AC-2.e1", "pass", { ...LOCK, note: "saved file shown after reload", recorder: "marc", assisted: true, attachments: files });
+    const rec = r.recorded.find((m) => m.evidence_id === "AC-2.e1");
+    assert(
+      !r.noop &&
+        r.assisted &&
+        r.attachments.join() === "manual/AC-2.e1/observations.md,manual/AC-2.e1/step-3.png" &&
+        rec?.recorder === "marc" &&
+        rec.assisted &&
+        rec.attachments.length === 2,
+      "record-manual --assisted stores the assisted mark and the attachments, with the human as recorder",
+    );
+    const progress = runStatus(db, id).manual;
+    assert(
+      r.resolved === null &&
+        r.refresh_pr &&
+        r.pr_number === opened.pr_number &&
+        progress?.pending.join() === "AC-3.e1" &&
+        progress.recorded.length === 1 &&
+        progress.recorded[0].assisted &&
+        progress.recorded[0].attachments.length === 2,
+      "a recorded but unresolved assisted outcome is listed by record-manual and by factory status, and sets refresh_pr when a PR is open",
+    );
+    r = await recordManual(db, id, "AC-2.e1", "pass", { ...LOCK, note: "again", assisted: true, attachments: files });
+    assert(r.noop && !r.refresh_pr && manualEvents(db, id) === 1, "the same assisted outcome and attachments again is a no-op");
+    r = await recordManual(db, id, "AC-2.e1", "pass", { ...LOCK, note: "without the screenshot", recorder: "marc", assisted: true, attachments: [files[0]] });
+    assert(!r.noop && manualEvents(db, id) === 2 && r.attachments.length === 1, "a different attachment list replaces the record");
+
+    let pr = await openPr(db, id, { ...LOCK, env });
+    let body = stub.state().prs[0].body;
+    assert(
+      pr.action === "updated" && body.includes("agent-assisted") && body.includes("observations.md") && body.includes("awaiting a human"),
+      "factory pr refreshes an open PR's report with the assisted mark after record-manual",
+    );
+
+    // Past the deadline: recording is bookkeeping and still works.
+    db.prepare("UPDATE factory_runs SET deadline_at = ? WHERE run_id = ?").run(new Date(Date.now() - 1000).toISOString(), id);
+    const docs = join(run.artifact_dir, "manual", "AC-3.e1", "notes.md");
+    r = await recordManual(db, id, "AC-3.e1", "pass", { ...LOCK, note: "docs cover expiry", recorder: "marc", assisted: true, attachments: [docs] });
+    assert(r.resolved === "pass" && r.report_revision === 2, "an assisted record still works past the run deadline");
+    const r2 = readJson<{ manual_outcomes: { evidence_id: string; assisted?: boolean; attachments?: string[]; recorder: string }[] }>(r.report_path);
+    assert(
+      schemaErrors("report", r2).length === 0 &&
+        r2.manual_outcomes.every((m) => m.assisted === true && m.recorder === "marc") &&
+        r2.manual_outcomes.find((m) => m.evidence_id === "AC-3.e1")?.attachments?.join() === "manual/AC-3.e1/notes.md",
+      "the resolved revision keeps the assisted mark and attachments of every outcome",
+    );
+    pr = await openPr(db, id, { ...LOCK, env });
+    body = stub.state().prs[0].body;
+    assert(pr.report_revision === 2 && body.includes("notes.md") && !body.includes("awaiting a human"), "after it resolves, the PR shows the assisted outcomes from the revision");
   }
 
   console.log("\nrecord-manual: bound to the report's revision\n");
