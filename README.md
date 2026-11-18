@@ -202,6 +202,12 @@ The plugin bundles Microsoft's Playwright MCP server, so every session that load
 - **Local only.** Only `http://localhost:*` and `http://127.0.0.1:*` may be requested. This keeps manual checks on your dev server, but it is a guard rail, not a security boundary: Playwright's own docs say so, and it doesn't affect redirects.
 - **No files in your worktree.** Screenshots and page snapshots go to `$TMPDIR/escapement-playwright` (or `/tmp/escapement-playwright`), with an in-memory browser profile. `validate-work` copies the screenshots it keeps into the run's artifact dir.
 
+### Browser tests as evidence
+
+For a web app, a factory plan can check UI behavior with browser tests instead of manual checks. A browser test (Playwright Test) drives the page and checks what it shows and the files the app writes. It is ordinary `test` evidence: it runs on every attempt, the reviewer sees its result, and the fix loop can act on its failure. A manual check runs once, by a person, after the PR is open (#104).
+
+The runner needs nothing new: the project's `verify` runs the unit tests and then the browser tests, both write JUnit into `$FACTORY_RESULTS_DIR`, and `test-results` points at that folder. Pin Playwright Test, use one worker and no retries, start a dev server per run on temporary data, and put `playwright.config.ts` at the repository root with `testDir` set on its project, so that selectors such as `e2e/graph.spec.ts::Graph › adds a node` resolve. Then set `browser-tests: playwright`: `factory check` reports it, `setup-work`'s planner writes UI criteria as browser-test evidence, and the plan critic flags a manual check that could have been a browser test. The full setup: [Browser tests as evidence](docs/FACTORY_CLI.md#browser-tests-as-evidence). Its worked example is fusupo/hackensack-next, a Vite and React editor whose config and settings are quoted there unchanged: [Worked example: hackensack-next](docs/FACTORY_CLI.md#worked-example-hackensack-next).
+
 ### GitHub as the AI Agent
 
 Escapement keeps its automated work visibly separate from yours: on GitHub, it acts as an AI agent account.
@@ -281,7 +287,7 @@ The agent is a thin wrapper: the reviewer's instructions are `prompts/factory/va
 
 ### plan-critic
 
-A fresh-context critic for a factory plan, before you approve it. `setup-work` gives it a `brief.json`: the issue, the scratchpad, the draft validation contract, `factory.sh check`'s readiness, lore and related archives, and the repository. It never sees the planner's reasoning. It judges ten checklist items, among them whether evidence covers every clause of each criterion and whether each manual procedure would prove its criterion, and writes a critique with a verdict (`approve`, `revise` or `escalate`), severity-rated findings and an optional tier raise. `factory.sh check-critique` checks it against `schemas/factory/critique.schema.json`, and `factory.sh record-critique` records each finding's disposition on the run.
+A fresh-context critic for a factory plan, before you approve it. `setup-work` gives it a `brief.json`: the issue, the scratchpad, the draft validation contract, `factory.sh check`'s readiness, lore and related archives, and the repository. It never sees the planner's reasoning. It judges eleven checklist items, among them whether evidence covers every clause of each criterion, whether each manual procedure would prove its criterion, and, in a project with browser tests, whether a manual check could be a browser test, and writes a critique with a verdict (`approve`, `revise` or `escalate`), severity-rated findings and an optional tier raise. `factory.sh check-critique` checks it against `schemas/factory/critique.schema.json`, and `factory.sh record-critique` records each finding's disposition on the run.
 
 Like the reviewer, the agent is a thin wrapper over `prompts/factory/plan-critic.md` (`factory.sh prompt critic`).
 
@@ -314,6 +320,7 @@ A project configures Escapement in a `## Escapement Settings` section of its `CL
 | `command-timeout`, `lock-timeout`, `run-budget` | Per-command timeout, lock wait, and the run's deadline from approval | `15m`, `30m`, `2h` |
 | `exec-hook` | The exec guard during runs (`on`, `off`) | `on` |
 | `gate-mode` | How the gate acts on a report | `report-only` |
+| `browser-tests` | The project's browser test tool (`playwright`), so planning writes UI criteria as browser-test evidence. See [Browser tests as evidence](docs/FACTORY_CLI.md#browser-tests-as-evidence) | none |
 
 The factory keys are read by the runner, which applies the same section and fence rules. See [FACTORY_CLI.md Settings](docs/FACTORY_CLI.md#settings) for value formats and glob rules. Escapement's own settings, at the end of its [CLAUDE.md](CLAUDE.md), make it a factory project too.
 
@@ -527,9 +534,15 @@ fusupo
 
 ## Version
 
-**Current:** 4.3.0
+**Current:** 4.4.0
 
 **Changelog:**
+- 4.4.0 (2026-11-18): Browser tests as contract evidence (#104)
+  - **`browser-tests` setting.** A project whose `verify` runs browser tests says so with `browser-tests: playwright`. `factory.sh check` reports it as `browser_tests` (in the published readiness schema, and as a `browser tests:` line in its text); the runner does nothing else with it
+  - **Planning.** On the factory path, `setup-work` hands the setting to the `scratchpad-planner`, which writes UI criteria as browser-test evidence (`e2e/file.spec.ts::Describe › title`, repository-relative) and keeps `manual` for what a machine can't judge, such as a subjective visual or reading prose
+  - **Plan critic.** An eleventh checklist item, `manual_could_be_browser_test`, flags a manual check that could have been a browser test. It is a new required value in the published critique schema; without browser tests the critic judges it `ok`
+  - **Setup docs.** [Browser tests as evidence](docs/FACTORY_CLI.md#browser-tests-as-evidence): Playwright Test pinned, one worker, no retries (a retried pass is invisible in Playwright's JUnit), one project, a per-run dev server on temporary data, JUnit into `$FACTORY_RESULTS_DIR` with `outputDir` outside it, and the rootDir rule: put `playwright.config.ts` at the repository root and set `testDir` on its project, or selectors are `not_found`. fusupo/hackensack-next is the worked example, quoted unchanged
+  - **Pinned shapes.** `manifest/test-factory-junit.ts` resolves selectors against JUnit captured from a real Playwright Test 1.64.1 run
 - 4.3.0 (2026-11-17): Agent-assisted manual checks in a real browser (#103)
   - **Bundled browser.** The plugin ships Microsoft's Playwright MCP server (`@playwright/mcp@0.0.84`, in `plugin.json`): Playwright's own Chromium, headless unless `ESCAPEMENT_BROWSER_HEADLESS=false`, an in-memory profile, output outside the worktree, and only `localhost` and `127.0.0.1` origins (a guard rail, not a security boundary). Install the browser once with `npx -y @playwright/mcp@0.0.84 install-browser chrome-for-testing`
   - **`validate-work` carries out a manual check** on request ("run the manual check AC-2.e1"). It reads the instructions from the run's contract, does the setup they name, carries out each step in the browser or the shell, reports what it saw at each "Check:", and saves screenshots and observations under `{artifact_dir}/manual/{evidence_id}/`. It hands back steps it can't do, stops background processes, and asks you for the outcome. It never decides it. Manual checks no longer need a matched authorization, so they work past the run's deadline

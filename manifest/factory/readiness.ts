@@ -1,5 +1,5 @@
 import { schemaErrors, contractErrors, type Contract } from "./schemas.ts";
-import { readSettings, type CheckName } from "./settings.ts";
+import { readSettings, type BrowserTestTool, type CheckName } from "./settings.ts";
 import { assessTier, type TierAssessment } from "./tiers.ts";
 import { defaultTargetRef } from "./context.ts";
 
@@ -28,6 +28,8 @@ export type Readiness = {
   /** The branch `factory start` targets without --target-ref: base-branch, else develop when origin/develop exists, else main. */
   target_ref: string;
   settings_digest: string;
+  /** The project's `browser-tests` setting, for planning UI criteria as browser-test evidence (#104); null when it sets none. */
+  browser_tests: BrowserTestTool | null;
 };
 
 type CriterionLike = { id?: unknown };
@@ -133,10 +135,22 @@ export function checkReadiness(opts: { contractText?: string | null; source: str
     required_checks,
     target_ref: settings.baseBranch ?? defaultTargetRef(opts.projectDir),
     settings_digest: loaded.digest,
+    browser_tests: settings.browserTests,
   };
 
   // The output is a published document; keep it honest.
   const errors = schemaErrors("readiness", readiness);
   if (errors.length > 0) throw new Error(`internal: readiness output fails its schema: ${errors.join("; ")}`);
   return readiness;
+}
+
+/** The text `factory check` prints for a readiness result. */
+export function readinessText(r: Readiness): string {
+  return [
+    r.status,
+    ...r.questions.map((q) => `  - [${q.about}${q.ref ? ` ${q.ref}` : ""}] ${q.question}`),
+    ...(r.tier ? [`  tier: ${r.tier.tier}${r.tier.reasons.length ? ` (${r.tier.reasons.join("; ")})` : ""}`] : []),
+    `  required checks: ${r.required_checks.map((c) => `${c.name}=${c.command ?? "(not configured)"}`).join(", ") || "none"}`,
+    ...(r.browser_tests ? [`  browser tests: ${r.browser_tests}`] : []),
+  ].join("\n");
 }

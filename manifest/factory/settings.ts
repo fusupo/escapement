@@ -20,6 +20,9 @@ export type CheckName = (typeof CHECKS)[number];
 export const TEST_RESULT_FORMATS = ["junit"] as const;
 export const EXEC_HOOK_MODES = ["on", "off"] as const;
 export const GATE_MODES = ["report-only"] as const;
+/** Browser test tools a project can declare with `browser-tests` (#104). */
+export const BROWSER_TEST_TOOLS = ["playwright"] as const;
+export type BrowserTestTool = (typeof BROWSER_TEST_TOOLS)[number];
 
 export type FactorySettings = {
   baseBranch: string | null;
@@ -38,6 +41,12 @@ export type FactorySettings = {
   runBudgetMs: number;
   execHook: (typeof EXEC_HOOK_MODES)[number];
   gateMode: (typeof GATE_MODES)[number];
+  /**
+   * The project's browser test tool, or null. Only reported by `check`, for
+   * setup-work, its planner and the plan critic to plan UI criteria as test
+   * evidence (#104); the runner does nothing else with it.
+   */
+  browserTests: BrowserTestTool | null;
 };
 
 /** The keys the factory reads, in the order §8 lists them (test-files added by #61). Others (context-path) are ignored. */
@@ -57,6 +66,7 @@ export const FACTORY_KEYS = [
   "run-budget",
   "exec-hook",
   "gate-mode",
+  "browser-tests",
 ] as const;
 
 export const SETTING_DEFAULTS = {
@@ -137,6 +147,13 @@ export function parseFactorySettings(raw: Map<string, string>): { settings: Fact
     errors.push({ key: "max-attempts", message: `"${attempts}" is not a positive whole number` });
   }
 
+  const bt = get("browser-tests");
+  let browserTests: BrowserTestTool | null = null;
+  if (bt !== null) {
+    if ((BROWSER_TEST_TOOLS as readonly string[]).includes(bt)) browserTests = bt as BrowserTestTool;
+    else errors.push({ key: "browser-tests", message: `"${bt}" is not a supported browser test tool (use ${BROWSER_TEST_TOOLS.join(", ")})` });
+  }
+
   const settings: FactorySettings = {
     baseBranch: get("base-branch"),
     setup: get("setup"),
@@ -153,6 +170,7 @@ export function parseFactorySettings(raw: Map<string, string>): { settings: Fact
     runBudgetMs: duration("run-budget"),
     execHook: oneOf("exec-hook", withDefault("exec-hook"), EXEC_HOOK_MODES, errors, "on"),
     gateMode: oneOf("gate-mode", withDefault("gate-mode"), GATE_MODES, errors, "report-only"),
+    browserTests,
   };
   return { settings, errors };
 }

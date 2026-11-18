@@ -18,7 +18,7 @@ import { syncGuard } from "./factory/guard.ts";
 import { currentOwner } from "./factory/owner.ts";
 import { parseFaultSpec, FAULT_ENV } from "./factory/fault.ts";
 import { FactoryError, parseDuration } from "./factory/util.ts";
-import { checkReadiness } from "./factory/readiness.ts";
+import { checkReadiness, readinessText } from "./factory/readiness.ts";
 import { SCHEMA_NAMES, schemaPath, isSchemaName } from "./factory/schemas.ts";
 import { PROMPT_NAMES, promptPath, isPromptName } from "./factory/prompts.ts";
 import { checkCritique, recordCritique } from "./factory/critique.ts";
@@ -314,13 +314,7 @@ function dispatchNoDb(command: string, p: Parsed): Outcome {
       // Readiness needs the worktree, not a branch: a detached HEAD (a fresh
       // `git worktree add --detach`) is a valid place to check settings (#65).
       const r = checkReadiness({ contractText: text, source: file, projectDir: resolveWorktree(str(p, "--project-root")) });
-      const lines = [
-        r.status,
-        ...r.questions.map((q) => `  - [${q.about}${q.ref ? ` ${q.ref}` : ""}] ${q.question}`),
-        ...(r.tier ? [`  tier: ${r.tier.tier}${r.tier.reasons.length ? ` (${r.tier.reasons.join("; ")})` : ""}`] : []),
-        `  required checks: ${r.required_checks.map((c) => `${c.name}=${c.command ?? "(not configured)"}`).join(", ") || "none"}`,
-      ];
-      return { result: r, text: lines.join("\n") };
+      return { result: r, text: readinessText(r) };
     }
     case "check-critique": {
       const file = need(arg, "critique file (or - for stdin)");

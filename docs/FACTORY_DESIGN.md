@@ -194,6 +194,8 @@ Verdict `approve | revise | escalate` with severity-rated findings and optional 
 - **Recorded with dispositions.** The scratchpad's `## Plan Critique` lists every finding with its disposition. On "Approve + authorize run", `factory record-critique` checks the final record (every finding with its disposition) and writes `{artifact_dir}/critique.json` plus one `critique_finding` event per finding (§7.2; `tokens` stays null, since hosts don't report it). Plain "Approve" creates no run, so its critique lives only in the scratchpad.
 - **A backstop in the fix loop** for what critique misses (§6.2): a manual procedure the reviewer rejects escalates the run at once.
 
+*As built (#104):* an eleventh checklist item, `manual_could_be_browser_test`. When `factory check` reports `browser_tests` (the project's `browser-tests` setting), the critic asks of each manual item whether a browser test could carry out and check its steps; manual stays for subjective visuals, reading prose and real runs of other tools. Without browser tests it is judged `ok`. The planner, told the same setting, writes such criteria as browser-test evidence in the first place. Reference: [FACTORY_CLI.md](FACTORY_CLI.md#browser-tests-as-evidence).
+
 ### 3.6 Plan approval → run authorization
 
 Approval creates a run (§4.7) and an authorization recorded in the manifest DB:
@@ -758,6 +760,8 @@ All keys optional. Missing `static`/`verify` → `blocked` ("not configured"). `
 *As built (#60):* settings are read from the CLAUDE.md of the run's worktree whenever a command needs them, not copied per run. Each report records their digest in `policy_version`, and a branch that changes them, or weakens `required-checks`, is an execution-policy change (§4.6), so a weakened setting is flagged for review rather than silently used. `factory check` reports a required check with no command as a readiness question. Reference: [FACTORY_CLI.md](FACTORY_CLI.md#settings).
 
 *As built (#64):* `exec-hook` defaults to `on`; it governs the exec guard during runs (§4.1).
+
+*As built (#104):* `browser-tests` (`playwright`) says the project's `verify` runs browser tests. `factory check` reports it as `browser_tests` for setup-work, its planner and the plan critic, which then plan UI criteria as browser-test evidence; the runner does nothing else with it. Setting a project up, and the rootDir rule its selectors depend on: [FACTORY_CLI.md](FACTORY_CLI.md#browser-tests-as-evidence).
 
 *As built (#61):* `test-files` (glob list) names test files for classification (§4.6); its default covers common layouts (`*.test.*`, `*.spec.*`, `test/`, `tests/`, `__tests__/`, `test_*.py`, `*_test.py`, `*_test.go`). `base-branch` is the default target for `factory start`.
 

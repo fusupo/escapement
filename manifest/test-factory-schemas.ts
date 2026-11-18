@@ -189,6 +189,14 @@ function readiness() {
   assert(schemaErrors("readiness", needs).length === 0, "needs_human with a question");
   assert(schemaErrors("readiness", { ...needs, questions: [] }).length > 0, "needs_human must ask something");
   assert(schemaErrors("readiness", { ...needs, status: "ready" }).length > 0, "ready can't have open questions");
+  const ready = { version: 1, status: "ready", questions: [] };
+  assert(
+    schemaErrors("readiness", { ...ready, browser_tests: "playwright" }).length === 0 &&
+      schemaErrors("readiness", { ...ready, browser_tests: null }).length === 0 &&
+      schemaErrors("readiness", { ...ready, browser_tests: "cypress" }).length > 0 &&
+      schemaErrors("readiness", { ...ready, browser_tests: true }).length > 0,
+    "readiness accepts browser_tests as playwright or null and refuses other values",
+  );
 }
 
 function critiques() {

@@ -18,6 +18,7 @@ export const CHECKLIST_ITEMS = [
   "evidence_capability",
   "clause_coverage",
   "manual_procedure_adequacy",
+  "manual_could_be_browser_test",
   "new_behavior_fails_without_change",
   "predicted_files",
   "simpler_approach",

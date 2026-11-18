@@ -88,7 +88,7 @@ bash "$FACTORY" --check && bash "$FACTORY" --json check
 `check` without `--contract` checks only the project's `## Escapement Settings`.
 
 - **`--check` fails** (runner dependencies not installed), or **`.result.status` is `needs_human`**: `FACTORY=off`. Skip every **[factory]** step. If `.result.required_checks` has at least one non-null `command` but `check` still asked questions, the project is partly set up: say so in one line of the final output (`Factory run not offered: {questions}`), so the operator knows why. Otherwise stay silent: most projects aren't set up for the factory.
-- **`.result.status` is `ready`**: `FACTORY=on`. Keep `.result.required_checks` for the scratchpad, and `.result.target_ref`, the branch the run will target, as `{target_ref}` (Phase 4).
+- **`.result.status` is `ready`**: `FACTORY=on`. Keep `.result.required_checks` for the scratchpad, `.result.target_ref`, the branch the run will target, as `{target_ref}` (Phase 4), and `.result.browser_tests`, the project's browser test tool or null, as `{browser_tests}` (Phase 2 and Phase 3.2).
 
 Decide availability only from `check`, never by reading CLAUDE.md yourself: `check` applies the section and fence rules.
 
@@ -185,7 +185,8 @@ Decide availability only from `check`, never by reading CLAUDE.md yourself: `che
           with reasons, the predicted files, and evidence for every
           acceptance criterion (see the agent's Validation Contract
           section). Lore entries: {quoted entries}. Related archives:
-          {decisions and lessons}. Decisions so far: {answers}."
+          {decisions and lessons}. Decisions so far: {answers}.
+          Browser tests: {browser_tests} (null: the project has none)."
    ```
 
    The scratchpad-planner agent will:
@@ -378,6 +379,7 @@ Decide availability only from `check`, never by reading CLAUDE.md yourself: `che
 The contract (`schemas/factory/contract.schema.json`, design §5) says what the work must demonstrate, never how the project's checks run:
 - One criterion per acceptance criterion, IDs `AC-1`, `AC-2`, …; evidence IDs `AC-1.e1`, `AC-1.e2`, ….
 - **Evidence types:** `test` (`selector`: `path::test name`, or a bare path for every test in the file, read from the structured results of the project's `verify`), `command` (`run` plus `expect.exit_code`, optionally `stdout_matches` / `stdout_not_matches`), or `manual` (`instructions` a human can follow and check).
+- **Browser tests:** when `{browser_tests}` names a tool (`playwright`), UI behavior a browser test could drive and check (clicking, typing, what the page shows, files the app writes) is `test` evidence: a spec the plan adds, selected as `path::test title` with the path from the repository root (docs/FACTORY_CLI.md, Browser tests as evidence). Never `manual` for what a browser test could check; `manual` stays for what a machine can't judge, such as a subjective visual or reading prose. The plan critic checks this (`manual_could_be_browser_test`).
 - **Kind:** `new_behavior` when the evidence should fail without this change (the plan says so); `regression` when it is expected to pass already.
 - **Tier:** `sensitive` when the work touches the project's `sensitive-paths`, changes execution policy (test or lint config, CI, scripts, `validation-files`), or by judgment: migrations, auth, money, public API, architecture. Otherwise `standard`. In `risk_reasons`, give only judgment reasons (such as "changes which tokens are accepted"): `check` adds a reason for every predicted file matching `sensitive-paths` or `validation-files` itself.
 - Never add `setup`, `static` or `verify` commands: those come only from settings.
@@ -883,10 +885,11 @@ plan mode to design the implementation approach before we proceed?
 
 ---
 
-**Version:** 1.3.0
-**Last Updated:** 2026-11-17
+**Version:** 1.4.0
+**Last Updated:** 2026-11-18
 **Maintained By:** Escapement
 **Changelog:**
+- v1.4.0: Factory path: `browser_tests` from `factory check` goes to the planner, and in a project with browser tests UI criteria are planned as browser-test evidence, with `manual` kept for what a machine can't judge (#104)
 - v1.3.0: Factory path: Phase 3.55, one round of fresh-context plan critique (the `plan-critic` agent) before approval; unresolved findings shown with both positions at the approval question; dispositions in `## Plan Critique` and on the run with `factory record-critique` (#99)
 - v1.2.1: Fetch the issue with the GitHub MCP tools by name; access problems are checked through the MCP account (#80)
 - v1.2.0: Factory path (docs/FACTORY_DESIGN.md §3): readiness, light context, proposed tier and validation contract when the project is set up for the factory; "Approve + authorize run" starts and approves a factory run. Unchanged otherwise (#63)
