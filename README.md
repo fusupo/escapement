@@ -527,9 +527,15 @@ fusupo
 
 ## Version
 
-**Current:** 4.2.0
+**Current:** 4.3.0
 
 **Changelog:**
+- 4.3.0 (2026-11-17): Agent-assisted manual checks in a real browser (#103)
+  - **Bundled browser.** The plugin ships Microsoft's Playwright MCP server (`@playwright/mcp@0.0.84`, in `plugin.json`): Playwright's own Chromium, headless unless `ESCAPEMENT_BROWSER_HEADLESS=false`, an in-memory profile, output outside the worktree, and only `localhost` and `127.0.0.1` origins (a guard rail, not a security boundary). Install the browser once with `npx -y @playwright/mcp@0.0.84 install-browser chrome-for-testing`
+  - **`validate-work` carries out a manual check** on request ("run the manual check AC-2.e1"). It reads the instructions from the run's contract, does the setup they name, carries out each step in the browser or the shell, reports what it saw at each "Check:", and saves screenshots and observations under `{artifact_dir}/manual/{evidence_id}/`. It hands back steps it can't do, stops background processes, and asks you for the outcome. It never decides it. Manual checks no longer need a matched authorization, so they work past the run's deadline
+  - **`factory.sh record-manual --assisted --attachment <file>`** records your outcome as agent-assisted, with the agent's files. The report's `manual_outcomes` gain optional `assisted` and `attachments` (still version 1), and the PR's report section marks the check agent-assisted
+  - **One check at a time.** Outcomes recorded while other checks are still pending are listed by `record-manual` and `factory.sh status`, and shown in the PR's report section after `factory pr`
+  - **`archive-work`** copies the attachments into the run's archive
 - 4.2.0 (2026-11-17): Plan critique before approval, and a rejected manual procedure escalates at once (#99)
   - **Plan critique.** On the factory path, `setup-work` has the new `plan-critic` agent, with fresh context, critique the plan and its validation contract once before you approve it. Its checklist covers evidence for every clause of each criterion, manual procedures that would prove their criterion, new-behavior tests that would fail without the change, predicted files, a simpler approach, lore conflicts, coupling with other work, the tier and the issue's size. The planner answers each finding once; a blocking or major finding it rejects is shown to you with both positions before the approval question. A tier raise is applied
   - **Recorded.** The scratchpad's `## Plan Critique` lists every finding and what became of it: accepted with the plan change it caused, or rejected and why. On "Approve + authorize run", **`factory.sh record-critique`** writes it to the run as `critique.json` and one `critique_finding` event per finding
