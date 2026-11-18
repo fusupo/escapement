@@ -133,6 +133,7 @@ The runner reads the factory keys of `## Escapement Settings` (FACTORY_DESIGN.md
 | `command-timeout`, `lock-timeout`, `run-budget` | duration | `15m`, `30m`, `2h` |
 | `exec-hook` | `on`, `off`: the exec guard during runs | `on` |
 | `gate-mode` | `report-only` | `report-only` |
+| `browser-tests` | `playwright`: the project has browser tests, so setup-work, its planner and the plan critic plan UI criteria as browser-test evidence. `check` reports it; the runner does nothing else with it ([Browser tests as evidence](#browser-tests-as-evidence)) | none |
 
 - Settings are read when a command needs them, not copied per run. Their digest (factory keys only) is reported by `check` and goes into each report's `policy_version`. A branch that changes them is an execution-policy change (§4.6), so weakening them is visible to review.
 - A command reads settings only for a limit you didn't pass as a flag, so an invalid CLAUDE.md doesn't stop a command whose limits are all given. Otherwise invalid settings are a `bad_setting` error that names each key.

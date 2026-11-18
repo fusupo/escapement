@@ -314,6 +314,7 @@ A project configures Escapement in a `## Escapement Settings` section of its `CL
 | `command-timeout`, `lock-timeout`, `run-budget` | Per-command timeout, lock wait, and the run's deadline from approval | `15m`, `30m`, `2h` |
 | `exec-hook` | The exec guard during runs (`on`, `off`) | `on` |
 | `gate-mode` | How the gate acts on a report | `report-only` |
+| `browser-tests` | The project's browser test tool (`playwright`), so planning writes UI criteria as browser-test evidence. See [Browser tests as evidence](docs/FACTORY_CLI.md#browser-tests-as-evidence) | none |
 
 The factory keys are read by the runner, which applies the same section and fence rules. See [FACTORY_CLI.md Settings](docs/FACTORY_CLI.md#settings) for value formats and glob rules. Escapement's own settings, at the end of its [CLAUDE.md](CLAUDE.md), make it a factory project too.
 

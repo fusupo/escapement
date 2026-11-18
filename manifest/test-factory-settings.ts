@@ -78,6 +78,24 @@ function run() {
     assert(dup.settings.requiredChecks.join() === "verify", "repeated required checks count once");
   }
 
+  {
+    const pw = parse("## Escapement Settings\n- **browser-tests**: playwright\n");
+    const none = parse("## Escapement Settings\n- **verify**: npm test\n");
+    const empty = parse("## Escapement Settings\n- **browser-tests**:\n");
+    assert(
+      pw.errors.length === 0 && pw.settings.browserTests === "playwright" && none.settings.browserTests === null && empty.settings.browserTests === null,
+      "browser-tests: playwright parses to the playwright tool, and absent is null",
+    );
+    const bad = parse("## Escapement Settings\n- **browser-tests**: cypress\n");
+    assert(
+      bad.settings.browserTests === null &&
+        bad.errors.length === 1 &&
+        bad.errors[0].key === "browser-tests" &&
+        bad.errors[0].message.includes('"cypress" is not a supported browser test tool (use playwright)'),
+      "browser-tests rejects a value that is not a supported browser test tool",
+    );
+  }
+
   console.log("\nReal documents\n");
 
   {
