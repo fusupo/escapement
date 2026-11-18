@@ -58,6 +58,12 @@ function rules() {
     "critique rules beyond the schema: every checklist item once, unique finding IDs, approve carries no blocking finding, revise needs a finding",
   );
   assert(critiqueErrors({ ...empty, verdict: "approve" }).length === 0, "approve with no findings is valid");
+  const noBrowser = clone(critique());
+  noBrowser.checklist = noBrowser.checklist.filter((e) => e.item !== "manual_could_be_browser_test");
+  assert(
+    CHECKLIST_ITEMS.includes("manual_could_be_browser_test") && critiqueErrors(noBrowser).join() === "checklist manual_could_be_browser_test: not judged",
+    "a critique that leaves out the manual_could_be_browser_test item is rejected as not judged",
+  );
 
   const unbacked = clone(critique());
   unbacked.checklist = unbacked.checklist.map((e) => (e.item === "tier" ? { ...e, result: "concern" } : e));

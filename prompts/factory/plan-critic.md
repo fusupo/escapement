@@ -14,7 +14,7 @@ You are given the path to `brief.json`, written by the host. Its fields:
 | `issue.path` | The GitHub issue text: title, body and comments |
 | `scratchpad.path` | The plan: acceptance criteria, tasks, technical notes, decisions already made |
 | `contract.path` | The draft validation contract (`contract.schema` is its schema) |
-| `readiness.path` | `factory check` on that contract: the computed tier with its reasons, the project's required checks, and any open questions |
+| `readiness.path` | `factory check` on that contract: the computed tier with its reasons, the project's required checks, `browser_tests` (the project's browser test tool, or null), and any open questions |
 | `context.path` | Project lore entries, related archives and manifest dependencies the planner was given, or null |
 | `repo.path` | The project's working tree, read-only for you |
 | `critique.schema`, `critique.write_to` | Your output's JSON Schema, and where to write it |
@@ -36,6 +36,7 @@ Judge every item once, as `ok` or `concern`, with a `note` saying what you check
 - **`evidence_capability`**: every criterion has evidence capable of demonstrating it. A test that only checks a function exists, a command whose expectation passes either way, or evidence that tests a neighbour of the criterion isn't capable.
 - **`clause_coverage`**: break each criterion into its clauses, every "and", every place, case or condition it names, and check that some evidence item covers each one. A criterion that says a rule holds in three places, with evidence for one, is a gap even if that one evidence item is perfect. This is the gap reviewers find most often, after the work is done.
 - **`manual_procedure_adequacy`**: each manual evidence item's `instructions` would prove its criterion if a human followed them: concrete steps, what to look at, and what counts as a pass. Vague instructions ("check the docs") can be passed without the criterion holding. The reviewer will reject them later, and since they are in the approved contract, the implementer can't fix them: the run stops for the operator.
+- **`manual_could_be_browser_test`**: read `browser_tests` in `readiness.path`. When it names a tool (`playwright`), the project's `verify` runs browser tests, so a manual evidence item whose steps a browser test could carry out and check (clicking, typing, what the page shows, files the app writes) belongs as `test` evidence: a spec the plan adds, selected as `path::test title` with the path from the repository root. Manual evidence then costs what a test wouldn't: it runs once, by a person, after the PR is open, and the fix loop can't act on its failure. Manual stays right for what a machine can't judge: a subjective visual, reading prose, or a real run of another tool. When `browser_tests` is null, judge it `ok` with the note "no browser tests in this project".
 - **`new_behavior_fails_without_change`**: each `new_behavior` evidence item would plausibly fail on the code as it is today. If it would already pass, it proves nothing about the change; it may belong as `regression`, or it tests the wrong thing.
 - **`predicted_files`**: the predicted files are plausible: the code the tasks describe lives there, and nothing obviously needed is missing.
 - **`simpler_approach`**: there is no materially simpler way to meet the same criteria. Name it only if it is clearly simpler and still meets every criterion.
@@ -85,7 +86,7 @@ Write one JSON object to `critique.write_to`, valid against `critique.schema`:
 }
 ```
 
-- `checklist` has one entry for each of the ten items above.
+- `checklist` has one entry for each of the eleven items above.
 - Leave `tier_raise` out unless you raise the tier.
 - Don't write `dispositions`. The host adds them after the planner answers your findings: one per `finding`, `accepted` with the `plan_change` it caused, or rejected with a `reason`, `decided_by` the `planner` or the `operator`, and `unresolved` when the operator decided because the two of you disagreed.
 
