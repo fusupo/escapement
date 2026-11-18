@@ -6,6 +6,7 @@ import { tx, getRun, transitionRun, recordEvent, type RunRow, type RunState } fr
 import { faultPoint } from "./fault.ts";
 import { activeAuthorization, contractDigest, deadlinePassed, type AuthorizationRow } from "./runs.ts";
 import { currentReport } from "./attempts.ts";
+import { manualProgress } from "./manual.ts";
 import { identityHolds } from "./revision.ts";
 import { withLocks, worktreeLock } from "./locks.ts";
 import { agentToken, gh, ghJson, pushBranch, remoteOf } from "./github.ts";
@@ -130,7 +131,10 @@ export async function openPr(
     }
 
     const contract = readJson<{ criteria: CriterionView[] }>(join(run.artifact_dir, "contract.json"), "contract");
-    const section = renderSection(report, contract.criteria, run.branch, attemptHistory(db, run.run_id));
+    // Outcomes recorded so far, while the report still awaits other checks (#103).
+    const progress = report.outcome === "pending_manual" ? manualProgress(db, run) : null;
+    const view = progress?.recorded.length ? { ...report, manual_recorded: progress.recorded } : report;
+    const section = renderSection(view, contract.criteria, run.branch, attemptHistory(db, run.run_id));
     const base = opts.narrative ?? existing?.body ?? "";
     const body = withSection(base, section);
     const bodyPath = join(run.artifact_dir, "pr", "body.md");
