@@ -202,6 +202,12 @@ The plugin bundles Microsoft's Playwright MCP server, so every session that load
 - **Local only.** Only `http://localhost:*` and `http://127.0.0.1:*` may be requested. This keeps manual checks on your dev server, but it is a guard rail, not a security boundary: Playwright's own docs say so, and it doesn't affect redirects.
 - **No files in your worktree.** Screenshots and page snapshots go to `$TMPDIR/escapement-playwright` (or `/tmp/escapement-playwright`), with an in-memory browser profile. `validate-work` copies the screenshots it keeps into the run's artifact dir.
 
+### Browser tests as evidence
+
+For a web app, a factory plan can check UI behavior with browser tests instead of manual checks. A browser test (Playwright Test) drives the page and checks what it shows and the files the app writes. It is ordinary `test` evidence: it runs on every attempt, the reviewer sees its result, and the fix loop can act on its failure. A manual check runs once, by a person, after the PR is open (#104).
+
+The runner needs nothing new: the project's `verify` runs the unit tests and then the browser tests, both write JUnit into `$FACTORY_RESULTS_DIR`, and `test-results` points at that folder. Pin Playwright Test, use one worker and no retries, start a dev server per run on temporary data, and put `playwright.config.ts` at the repository root with `testDir` set on its project, so that selectors such as `e2e/graph.spec.ts::Graph › adds a node` resolve. Then set `browser-tests: playwright`: `factory check` reports it, `setup-work`'s planner writes UI criteria as browser-test evidence, and the plan critic flags a manual check that could have been a browser test. The full setup: [Browser tests as evidence](docs/FACTORY_CLI.md#browser-tests-as-evidence).
+
 ### GitHub as the AI Agent
 
 Escapement keeps its automated work visibly separate from yours: on GitHub, it acts as an AI agent account.
@@ -281,7 +287,7 @@ The agent is a thin wrapper: the reviewer's instructions are `prompts/factory/va
 
 ### plan-critic
 
-A fresh-context critic for a factory plan, before you approve it. `setup-work` gives it a `brief.json`: the issue, the scratchpad, the draft validation contract, `factory.sh check`'s readiness, lore and related archives, and the repository. It never sees the planner's reasoning. It judges ten checklist items, among them whether evidence covers every clause of each criterion and whether each manual procedure would prove its criterion, and writes a critique with a verdict (`approve`, `revise` or `escalate`), severity-rated findings and an optional tier raise. `factory.sh check-critique` checks it against `schemas/factory/critique.schema.json`, and `factory.sh record-critique` records each finding's disposition on the run.
+A fresh-context critic for a factory plan, before you approve it. `setup-work` gives it a `brief.json`: the issue, the scratchpad, the draft validation contract, `factory.sh check`'s readiness, lore and related archives, and the repository. It never sees the planner's reasoning. It judges eleven checklist items, among them whether evidence covers every clause of each criterion, whether each manual procedure would prove its criterion, and, in a project with browser tests, whether a manual check could be a browser test, and writes a critique with a verdict (`approve`, `revise` or `escalate`), severity-rated findings and an optional tier raise. `factory.sh check-critique` checks it against `schemas/factory/critique.schema.json`, and `factory.sh record-critique` records each finding's disposition on the run.
 
 Like the reviewer, the agent is a thin wrapper over `prompts/factory/plan-critic.md` (`factory.sh prompt critic`).
 
