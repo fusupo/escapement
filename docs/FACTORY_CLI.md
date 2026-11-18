@@ -522,6 +522,102 @@ Then a test in `e2e/graph.spec.ts` is written `classname="e2e/graph.spec.ts"`, a
 
 **Planning.** With `browser-tests: playwright`, `check` reports `browser_tests`, and setup-work's planner writes UI criteria as browser-test evidence: the spec file and test title the plan adds. `manual` stays for what a machine can't judge, such as a subjective visual or reading prose. The plan critic judges `manual_could_be_browser_test`: whether a manual item could have been a browser test.
 
+### Worked example: hackensack-next
+
+fusupo/hackensack-next, a Vite and React editor, set this up in hackensack-next#27 (PRs #28 and #30). The lines below are quoted unchanged from its `main` at `44a49a8`.
+
+`package.json` pins Playwright Test exactly, in `devDependencies`, and adds a script:
+
+```json
+    "@playwright/test": "1.64.1",
+```
+
+```json
+    "test:e2e": "playwright test",
+```
+
+`playwright.config.ts` sits at the repository root. Before the config, it makes a temporary folder for the run, removed when the Playwright process that made it exits, and asks the OS for a free port (`freePort()`, defined above it); the workers inherit both through environment variables:
+
+```ts
+if (!process.env.HACKENSACK_E2E_DIR) {
+  const made = mkdtempSync(join(tmpdir(), 'hackensack-e2e-'))
+  process.env.HACKENSACK_E2E_DIR = made
+  process.on('exit', () => rmSync(made, { recursive: true, force: true }))
+}
+const base = process.env.HACKENSACK_E2E_DIR
+// The dev server's projects folder. Each test seeds its own project in it
+// (e2e/fixtures.ts).
+const projectsDir = join(base, 'projects')
+mkdirSync(projectsDir, { recursive: true })
+
+// A port of its own for each run, so a developer's `npm run dev` (5173), or
+// another run's server, is never reused. The main process asks the OS for a
+// free one and the workers inherit it, as with HACKENSACK_E2E_DIR.
+// HACKENSACK_E2E_PORT set beforehand picks the port instead.
+process.env.HACKENSACK_E2E_PORT ??= String(await freePort())
+const port = process.env.HACKENSACK_E2E_PORT
+const baseURL = `http://127.0.0.1:${port}`
+const resultsDir = process.env.FACTORY_RESULTS_DIR
+```
+
+The config itself:
+
+```ts
+export default defineConfig({
+  // No top-level testDir: the project sets it. Playwright's JUnit names each
+  // file by its path from the config's rootDir, which is the top-level
+  // testDir when there is one and this file's folder otherwise. With none,
+  // files are named from the repo root (`e2e/x.spec.ts`), as contract
+  // selectors (`e2e/x.spec.ts::title`) name them.
+  //
+  // Never in parallel: parallel workers freeze this machine. No retries: a
+  // flaky wait should fail, not be hidden.
+  workers: 1,
+  fullyParallel: false,
+  retries: 0,
+  forbidOnly: true,
+  outputDir: join(base, 'artifacts'),
+  reporter: resultsDir
+    ? [['list'], ['junit', { outputFile: join(resultsDir, 'playwright.xml') }]]
+    : 'list',
+  use: {
+    baseURL,
+    trace: 'off',
+  },
+  // One project, so every test runs once and appears once in the JUnit.
+  projects: [
+    { name: 'chromium', testDir: 'e2e', use: { ...devices['Desktop Chrome'] } },
+  ],
+  webServer: {
+    command: `npx vite --host 127.0.0.1 --port ${port} --strictPort`,
+    url: baseURL,
+    env: { HACKENSACK_PROJECTS: projectsDir },
+    // Fail if something already answers on the port, rather than test it.
+    reuseExistingServer: false,
+    timeout: 60_000,
+  },
+})
+```
+
+`base` is that temporary folder, so Playwright's `outputDir` and the dev server's `HACKENSACK_PROJECTS` are both outside the worktree. `.gitignore` still lists `test-results/` and `playwright-report/`, in case of a stray run. Vitest is kept to the unit tests in `vite.config.ts`:
+
+```ts
+    include: ['src/**/*.test.ts', 'server/**/*.test.ts'],
+```
+
+Its Escapement Settings (the factory keys this setup touches):
+
+```markdown
+- **setup**: . ~/.nvm/nvm.sh && nvm use >/dev/null && npx playwright install chromium
+- **verify**: . ~/.nvm/nvm.sh && nvm use >/dev/null && { npx vitest run --reporter=default --reporter=junit --outputFile.junit="$FACTORY_RESULTS_DIR/junit.xml"; v=$?; npx playwright test; p=$?; [ "$v" -eq 0 ] && [ "$p" -eq 0 ]; }
+- **test-results**: junit:$FACTORY_RESULTS_DIR
+- **test-files**: src/**/*.test.ts, server/**/*.test.ts, e2e/**
+- **browser-tests**: playwright
+- **validation-files**: package.json, package-lock.json, vite.config.ts, playwright.config.ts, tsconfig.json, tsconfig.app.json, tsconfig.engine.json, tsconfig.node.json, tsconfig.test.json, tsconfig.e2e.json, .nvmrc, CLAUDE.md
+```
+
+`verify` runs Vitest and then Playwright even when Vitest failed, so one attempt reports both suites, and fails if either did. A contract then selects a browser test like any other, for example `e2e/harness.spec.ts::harness › uses one worker, no retries and a temporary projects folder`.
+
 ## Locks
 
 Locks are rows in `factory_locks`, not `flock`s. They only serialize factory commands; anything outside the factory ignores them.

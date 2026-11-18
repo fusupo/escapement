@@ -8,13 +8,14 @@ import { assert } from "./factory/testkit.ts";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (path: string) => readFileSync(join(root, path), "utf-8");
 
-/** The text of a heading's section, up to the next heading of the same depth. */
+/** The text of a heading's section, up to the next heading of the same or a higher level. */
 function section(text: string, heading: string): string {
   const start = text.indexOf(heading);
   if (start < 0) return "";
-  const depth = heading.match(/^#+ /)![0];
-  const next = text.indexOf(`\n${depth}`, start + heading.length);
-  return text.slice(start, next < 0 ? undefined : next);
+  const depth = heading.match(/^#+/)![0].length;
+  const rest = text.slice(start + heading.length);
+  const next = rest.search(new RegExp(`\\n#{1,${depth}} `));
+  return text.slice(start, next < 0 ? undefined : start + heading.length + next);
 }
 
 function planning() {
@@ -74,6 +75,33 @@ function docs() {
       setup.includes("`browser-tests: playwright`") &&
       cli.includes("| `browser-tests` | `playwright`"),
     "FACTORY_CLI documents the browser test setup: pinned Playwright Test, one worker, retries 0, a per-run dev server, JUnit into the results directory, outputDir outside the results directory, the rootDir rule and the browser-tests setting",
+  );
+
+  const example = section(cli, "### Worked example: hackensack-next");
+  assert(
+    setup.includes(example) &&
+      example.includes("fusupo/hackensack-next") &&
+      /quoted unchanged from its `main` at `[0-9a-f]{7,}`/.test(example) &&
+      example.includes('"@playwright/test": "1.64.1",') &&
+      example.includes("export default defineConfig({") &&
+      example.includes("{ name: 'chromium', testDir: 'e2e',") &&
+      example.includes("['junit', { outputFile: join(resultsDir, 'playwright.xml') }]") &&
+      example.includes("- **test-results**: junit:$FACTORY_RESULTS_DIR") &&
+      example.includes("- **browser-tests**: playwright") &&
+      /- \*\*verify\*\*: .*npx vitest run.*npx playwright test/.test(example),
+    "FACTORY_CLI quotes hackensack-next as the worked example",
+  );
+
+  const readme = read("README.md");
+  const intro = section(readme, "### Browser tests as evidence");
+  assert(
+    intro !== "" &&
+      /browser tests instead of manual checks/.test(intro) &&
+      intro.includes("ordinary `test` evidence") &&
+      intro.includes("](docs/FACTORY_CLI.md#browser-tests-as-evidence)") &&
+      intro.includes("Its worked example is fusupo/hackensack-next") &&
+      intro.includes("](docs/FACTORY_CLI.md#worked-example-hackensack-next)"),
+    "the README describes browser tests as evidence, links the FACTORY_CLI section and names hackensack-next as the worked example",
   );
 }
 
