@@ -48,6 +48,196 @@ const NODE_TEST = `<?xml version="1.0" encoding="utf-8"?>
 	<!-- tests 3 -->
 </testsuites>`;
 
+/**
+ * Playwright Test 1.64.1's junit reporter, captured from a real run (the scratch
+ * path replaced by /work/repo). playwright.config.ts at the repo root, with
+ * `testDir: 'e2e'` on its one project and `retries: 2`: suite name and
+ * classname are the file path from the config's rootDir, no file attribute,
+ * names are `Describe › title`. "settles after a retry" failed once, then passed.
+ */
+const PLAYWRIGHT = `<testsuites id="" name="" tests="5" failures="1" skipped="1" errors="0" time="1.20743">
+<testsuite name="e2e/graph.spec.ts" timestamp="2026-11-18T18:58:15.274Z" hostname="chromium" tests="5" failures="1" skipped="1" time="0.011" errors="0">
+<testcase name="Graph › adds a node" classname="e2e/graph.spec.ts" time="0.002">
+</testcase>
+<testcase name="Graph › rejects a bad edge" classname="e2e/graph.spec.ts" time="0.007">
+<system-out>
+<![CDATA[
+[[ATTACHMENT|out/root/graph-Graph-rejects-a-bad-edge-chromium/error-context.md]]
+
+[[ATTACHMENT|out/root/graph-Graph-rejects-a-bad-edge-chromium-retry1/error-context.md]]
+
+[[ATTACHMENT|out/root/graph-Graph-rejects-a-bad-edge-chromium-retry2/error-context.md]]
+]]>
+</system-out>
+<failure message="expect(received).toBe(expected) // Object.is equality" type="expect.toBe">
+<![CDATA[  [chromium] › e2e/graph.spec.ts:9:7 › Graph › rejects a bad edge ──────────────────────────────────
+
+    Error: expect(received).toBe(expected) // Object.is equality
+
+    Expected: 3
+    Received: 2
+
+       8 |   })
+       9 |   test('rejects a bad edge', () => {
+    > 10 |     expect(1 + 1).toBe(3)
+         |                   ^
+      11 |   })
+      12 |   test.skip('draws later', () => {})
+      13 | })
+        at /work/repo/e2e/graph.spec.ts:10:19
+
+    Error Context: ../out/root/graph-Graph-rejects-a-bad-edge-chromium/error-context.md
+
+    Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
+
+    Error: expect(received).toBe(expected) // Object.is equality
+
+    Expected: 3
+    Received: 2
+
+       8 |   })
+       9 |   test('rejects a bad edge', () => {
+    > 10 |     expect(1 + 1).toBe(3)
+         |                   ^
+      11 |   })
+      12 |   test.skip('draws later', () => {})
+      13 | })
+        at /work/repo/e2e/graph.spec.ts:10:19
+
+    Error Context: ../out/root/graph-Graph-rejects-a-bad-edge-chromium-retry1/error-context.md
+
+    Retry #2 ───────────────────────────────────────────────────────────────────────────────────────
+
+    Error: expect(received).toBe(expected) // Object.is equality
+
+    Expected: 3
+    Received: 2
+
+       8 |   })
+       9 |   test('rejects a bad edge', () => {
+    > 10 |     expect(1 + 1).toBe(3)
+         |                   ^
+      11 |   })
+      12 |   test.skip('draws later', () => {})
+      13 | })
+        at /work/repo/e2e/graph.spec.ts:10:19
+
+    Error Context: ../out/root/graph-Graph-rejects-a-bad-edge-chromium-retry2/error-context.md
+]]>
+</failure>
+</testcase>
+<testcase name="Graph › draws later" classname="e2e/graph.spec.ts">
+<properties>
+<property name="skip" value="">
+</property>
+</properties>
+<skipped>
+</skipped>
+</testcase>
+<testcase name="opens the editor" classname="e2e/graph.spec.ts" time="0.002">
+</testcase>
+<testcase name="settles after a retry" classname="e2e/graph.spec.ts" time="0">
+<system-out>
+<![CDATA[
+[[ATTACHMENT|out/root/graph-settles-after-a-retry-chromium/error-context.md]]
+]]>
+</system-out>
+</testcase>
+</testsuite>
+</testsuites>`;
+
+/** The same run with a top-level `testDir: 'e2e'`: rootDir is e2e/, so the classname drops the folder. */
+const PLAYWRIGHT_SUBDIR = `<testsuites id="" name="" tests="5" failures="1" skipped="1" errors="0" time="1.177016">
+<testsuite name="graph.spec.ts" timestamp="2026-11-18T18:58:16.789Z" hostname="chromium" tests="5" failures="1" skipped="1" time="0.012" errors="0">
+<testcase name="Graph › adds a node" classname="graph.spec.ts" time="0.002">
+</testcase>
+<testcase name="Graph › rejects a bad edge" classname="graph.spec.ts" time="0.007">
+<system-out>
+<![CDATA[
+[[ATTACHMENT|out/sub/graph-Graph-rejects-a-bad-edge-chromium/error-context.md]]
+
+[[ATTACHMENT|out/sub/graph-Graph-rejects-a-bad-edge-chromium-retry1/error-context.md]]
+
+[[ATTACHMENT|out/sub/graph-Graph-rejects-a-bad-edge-chromium-retry2/error-context.md]]
+]]>
+</system-out>
+<failure message="expect(received).toBe(expected) // Object.is equality" type="expect.toBe">
+<![CDATA[  [chromium] › graph.spec.ts:9:7 › Graph › rejects a bad edge ──────────────────────────────────────
+
+    Error: expect(received).toBe(expected) // Object.is equality
+
+    Expected: 3
+    Received: 2
+
+       8 |   })
+       9 |   test('rejects a bad edge', () => {
+    > 10 |     expect(1 + 1).toBe(3)
+         |                   ^
+      11 |   })
+      12 |   test.skip('draws later', () => {})
+      13 | })
+        at /work/repo/e2e/graph.spec.ts:10:19
+
+    Error Context: ../../out/sub/graph-Graph-rejects-a-bad-edge-chromium/error-context.md
+
+    Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
+
+    Error: expect(received).toBe(expected) // Object.is equality
+
+    Expected: 3
+    Received: 2
+
+       8 |   })
+       9 |   test('rejects a bad edge', () => {
+    > 10 |     expect(1 + 1).toBe(3)
+         |                   ^
+      11 |   })
+      12 |   test.skip('draws later', () => {})
+      13 | })
+        at /work/repo/e2e/graph.spec.ts:10:19
+
+    Error Context: ../../out/sub/graph-Graph-rejects-a-bad-edge-chromium-retry1/error-context.md
+
+    Retry #2 ───────────────────────────────────────────────────────────────────────────────────────
+
+    Error: expect(received).toBe(expected) // Object.is equality
+
+    Expected: 3
+    Received: 2
+
+       8 |   })
+       9 |   test('rejects a bad edge', () => {
+    > 10 |     expect(1 + 1).toBe(3)
+         |                   ^
+      11 |   })
+      12 |   test.skip('draws later', () => {})
+      13 | })
+        at /work/repo/e2e/graph.spec.ts:10:19
+
+    Error Context: ../../out/sub/graph-Graph-rejects-a-bad-edge-chromium-retry2/error-context.md
+]]>
+</failure>
+</testcase>
+<testcase name="Graph › draws later" classname="graph.spec.ts">
+<properties>
+<property name="skip" value="">
+</property>
+</properties>
+<skipped>
+</skipped>
+</testcase>
+<testcase name="opens the editor" classname="graph.spec.ts" time="0.002">
+</testcase>
+<testcase name="settles after a retry" classname="graph.spec.ts" time="0.001">
+<system-out>
+<![CDATA[
+[[ATTACHMENT|out/sub/graph-settles-after-a-retry-chromium/error-context.md]]
+]]>
+</system-out>
+</testcase>
+</testsuite>
+</testsuites>`;
+
 function run() {
   console.log("Parsing\n");
 
@@ -92,6 +282,35 @@ function run() {
   assert(r("src/math.test.ts::adds numbers", vi) === "passed", "vitest: a test name matches the end of 'add > adds numbers'");
   assert(r("src/math.test.ts::add > adds numbers", vi) === "passed", "vitest: classname is the path");
   assert(executedCount(jest) === 3, "skipped cases don't count as executed");
+
+  console.log("\nPlaywright\n");
+
+  const pw = parseJUnit(PLAYWRIGHT, "playwright.xml");
+  const pwSub = parseJUnit(PLAYWRIGHT_SUBDIR, "playwright.xml");
+  const one = resolveSelector("e2e/graph.spec.ts::Graph › adds a node", pw);
+  assert(
+    one.executed === "passed" && one.cases.length === 1 && r("e2e/graph.spec.ts::adds a node", pw) === "passed",
+    "playwright: a selector with the file path relative to the config's rootDir resolves to a single test by its describe › title name",
+  );
+  const failing = resolveSelector("e2e/graph.spec.ts::Graph › rejects a bad edge", pw);
+  assert(
+    failing.executed === "failed" &&
+      failing.message === "expect(received).toBe(expected) // Object.is equality" &&
+      r("e2e/graph.spec.ts::draws later", pw) === "skipped" &&
+      r("e2e/graph.spec.ts::opens the editor", pw) === "passed",
+    "playwright: a failing test fails its selector, a skipped one is skipped, and a test outside any describe matches by its title",
+  );
+  assert(
+    pwSub[0].classname === "graph.spec.ts" &&
+      r("e2e/graph.spec.ts::Graph › adds a node", pwSub) === "not_found" &&
+      resolveSelector("e2e/graph.spec.ts::Graph › adds a node", pwSub, { nameOnly: true }).executed === "not_found",
+    "playwright: a testDir below the config's rootDir writes a classname without the folder, so a repo-relative selector is not_found",
+  );
+  const retried = pw.find((c) => c.name === "settles after a retry");
+  assert(
+    retried !== undefined && retried.status === "passed" && retried.message === null && r("e2e/graph.spec.ts::settles after a retry", pw) === "passed",
+    "playwright: a test that passed on retry is a plain pass in the XML, so the setup must keep retries at 0",
+  );
 
   console.log("\nResults without file paths\n");
 
