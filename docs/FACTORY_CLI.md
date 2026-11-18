@@ -320,7 +320,7 @@ The commands in `verdict.record` and `runner.exec` carry `--data-dir` naming the
 
 Whether the criteria capture the intent, and whether scope and dependencies are clear, is the planner's judgment; it adds those questions in the same shape. `check` exits 0 for both `ready` and `needs_human`; read `status`.
 
-Without `--contract`, `check` reports only the settings: a required check with no command, or an invalid setting. There are no contract questions and no `tier`. A host can run it before planning to see whether the project is set up for the factory at all; `setup-work` offers a run only when it is `ready`, and branches from its `target_ref`.
+Without `--contract`, `check` reports only the settings: a required check with no command, or an invalid setting. There are no contract questions and no `tier`. Either way it reports `browser_tests`, the project's `browser-tests` setting (a `browser tests:` line in its text when set), for planning ([Browser tests as evidence](#browser-tests-as-evidence)). A host can run it before planning to see whether the project is set up for the factory at all; `setup-work` offers a run only when it is `ready`, and branches from its `target_ref`.
 
 The manifest mirrors a readiness document into a work item with `manifest.sh readiness <owner/repo> <issue> <file|->`: `needs_human` sets `meta.needs_human` and `meta.readiness_questions`, so the item leaves the frontier, and `ready` clears them. It does nothing when the issue has no work item.
 
@@ -489,6 +489,39 @@ While a run is implemented, builds and tests should go through `exec`, so they q
 - **Opting out.** `exec-hook: off` in the project's Escapement Settings: the runner then writes no marker.
 - It guards against forgetting, not against an adversary (§11): `npx jest` instead of `npm test` gets through.
 
+## Browser tests as evidence
+
+A web app's UI behavior can be ordinary `test` evidence instead of `manual`: a browser test (Playwright Test) drives the page and checks what it shows and the files the app writes. It runs on every attempt, the reviewer sees its result, and the fix loop can act on its failure, none of which a manual check gets (#104).
+
+The runner is command-agnostic, so nothing in it is specific to Playwright. The project's `verify` runs the browser tests next to its unit tests, both write JUnit into `$FACTORY_RESULTS_DIR`, and contract selectors pick single browser tests from those results. Set the project up like this:
+
+- **Playwright Test, pinned.** `@playwright/test` as a dev dependency at an exact version released at least two weeks earlier, and its browser installed by the project's `setup` (for example `npx playwright install chromium`), so every attempt has the browser that version expects.
+- **One worker, never parallel:** `workers: 1` and no `fullyParallel`.
+- **No retries:** `retries: 0` and `forbidOnly: true`. A test that fails and then passes on a retry is a plain pass in Playwright's JUnit, with no marker, so a retry hides a flaky wait from the factory instead of failing it.
+- **One browser project.** Two projects run every test twice, as duplicate testcases, and a selector then takes the worse result.
+- **A per-run dev server** started by Playwright's `webServer` on a port of its own (`reuseExistingServer: false`), with a temporary data folder, never the project's real data. A run that writes into the worktree leaves it dirty, and validation needs a clean tree.
+- **JUnit into the results directory:** the `junit` reporter's `outputFile` inside `$FACTORY_RESULTS_DIR` (for example `$FACTORY_RESULTS_DIR/playwright.xml`), next to the unit tests' file.
+- **Playwright's `outputDir` outside the results directory,** and outside the worktree or gitignored. Playwright wipes its `outputDir`, and its default `test-results/` inside the worktree would dirty the tree.
+- **The unit tests skip the browser tests.** A unit runner's default pattern may pick up `*.spec.ts`; limit it to the unit test folders.
+- **Settings:** `verify` runs the unit tests and then the browser tests, and fails if either fails. `test-results: junit:$FACTORY_RESULTS_DIR`, the folder, since the runner reads every `.xml` in it. `test-files` gains the browser test folder, `validation-files` gains `playwright.config.ts`, and `browser-tests: playwright` tells planning the project has them.
+
+**The rootDir rule.** Playwright names each JUnit testcase's file (suite `name` and `classname`, with no `file` attribute) by its path from the config's `rootDir`: the top-level `testDir` when the config sets one, else the config's own folder. A contract selector names a file by its path from the repository root. So put `playwright.config.ts` at the repository root and set `testDir` on the project, not at the top level:
+
+```ts
+export default defineConfig({
+  workers: 1,
+  retries: 0,
+  forbidOnly: true,
+  projects: [{ name: 'chromium', testDir: 'e2e', use: { ...devices['Desktop Chrome'] } }],
+})
+```
+
+Then a test in `e2e/graph.spec.ts` is written `classname="e2e/graph.spec.ts"`, and `e2e/graph.spec.ts::Graph › adds a node` selects it. With a top-level `testDir: 'e2e'` the classname is `graph.spec.ts`, and the same selector is `not_found`. Since the classname looks like a path, the runner doesn't fall back to matching by name alone.
+
+**Selectors.** Playwright's testcase name is the test's title path below the file, joined with ` › `: `Graph › adds a node` for a test inside `test.describe('Graph', …)`, or just `adds a node` outside any. A selector may give the full name or its end (`e2e/graph.spec.ts::adds a node`), and `*` is a wildcard. A failing test fails its selector, and a skipped one is a failure too, as for any `test` evidence (§5.1). The shapes above were read from Playwright Test 1.64.1's output; `manifest/test-factory-junit.ts` pins them.
+
+**Planning.** With `browser-tests: playwright`, `check` reports `browser_tests`, and setup-work's planner writes UI criteria as browser-test evidence: the spec file and test title the plan adds. `manual` stays for what a machine can't judge, such as a subjective visual or reading prose. The plan critic judges `manual_could_be_browser_test`: whether a manual item could have been a browser test.
+
 ## Locks
 
 Locks are rows in `factory_locks`, not `flock`s. They only serialize factory commands; anything outside the factory ignores them.
@@ -558,7 +591,7 @@ With `--json`, every command prints exactly one JSON object on stdout.
 - **exclude:** `{path, added, present}`: the exclude file, the patterns appended, and those already there
 - **check-critique:** `{valid, final, verdict, findings: {blocking, major, minor}, concerns, tier_raise, dispositions, unresolved}`; `concerns` lists the checklist items judged `concern`, `dispositions` counts them, and `unresolved` lists the findings the operator decided
 - **record-critique:** `{run_id, path, digest, verdict, findings, accepted, rejected, unresolved, noop}`
-- **check:** a readiness document (`schemas/factory/readiness.schema.json`): `{version, status, questions: [{about, question, ref?}], tier?: {tier, reasons}, required_checks: [{name, command}], target_ref, settings_digest}`. `target_ref` is the branch `start` targets without `--target-ref`; hosts create the feature branch from it
+- **check:** a readiness document (`schemas/factory/readiness.schema.json`): `{version, status, questions: [{about, question, ref?}], tier?: {tier, reasons}, required_checks: [{name, command}], target_ref, settings_digest, browser_tests}`. `target_ref` is the branch `start` targets without `--target-ref`; hosts create the feature branch from it. `browser_tests` is the project's `browser-tests` setting, or null
 - **schema:** `{schemas: [{name, path}]}`, or `{name, path}`, plus `schema` with `--print`
 - **prompt:** `{prompts: [{name, path}]}`, or `{name, path}`, plus `content` with `--print`
 

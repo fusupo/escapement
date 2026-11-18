@@ -56,8 +56,30 @@ function planning() {
   );
 }
 
+function docs() {
+  console.log("\nThe setup, documented\n");
+  const cli = read("docs/FACTORY_CLI.md");
+  const setup = section(cli, "## Browser tests as evidence");
+  assert(
+    setup !== "" &&
+      /`@playwright\/test` as a dev dependency at an exact version released at least two weeks earlier/.test(setup) &&
+      setup.includes("`workers: 1`") &&
+      setup.includes("`retries: 0`") &&
+      /webServer[^\n]*port of its own[^\n]*temporary data folder/.test(setup) &&
+      /`outputFile` inside `\$FACTORY_RESULTS_DIR`/.test(setup) &&
+      /`outputDir` outside the results directory/.test(setup) &&
+      setup.includes("`test-results: junit:$FACTORY_RESULTS_DIR`") &&
+      /\*\*The rootDir rule\.\*\*/.test(setup) &&
+      setup.includes("set `testDir` on the project, not at the top level") &&
+      setup.includes("`browser-tests: playwright`") &&
+      cli.includes("| `browser-tests` | `playwright`"),
+    "FACTORY_CLI documents the browser test setup: pinned Playwright Test, one worker, retries 0, a per-run dev server, JUnit into the results directory, outputDir outside the results directory, the rootDir rule and the browser-tests setting",
+  );
+}
+
 try {
   planning();
+  docs();
   console.log("\nAll browser test checks passed.");
 } catch (err) {
   console.error(err);
