@@ -577,6 +577,8 @@ Contracts name no commands in the first release: every check comes from project 
 
 *As built (#64):* a revision is `attempts/{n}/report.r{k}.json`, with `revision`, `supersedes` and `manual_outcomes` (optional report fields). Any single `fail` resolves the report at once, even with other manual items unrecorded; it adds a blocking finding `manual:{id}` and escalates the run. Recording the same outcome again is a no-op; a different one replaces it until the report resolves. The result says when the open PR needs `factory pr` to refresh its report section. Reference: [FACTORY_CLI.md](FACTORY_CLI.md#record-manual).
 
+*As built (#103):* the agent can carry out a manual check's steps, and the human still decides it. The plugin bundles Playwright's MCP server (`@playwright/mcp@0.0.84`, declared in `.claude-plugin/plugin.json`): Playwright's own Chromium, an isolated profile, headless unless `ESCAPEMENT_BROWSER_HEADLESS=false`, output outside the worktree, and only `localhost` and `127.0.0.1` origins. That origin list is a guard rail, not a security boundary, and doesn't affect redirects. On request, `validate-work` reads the evidence's `instructions`, does the setup they name, carries out each step in the browser or the shell, and reports what it saw at each "Check:". It saves screenshots and `observations.md` under `{artifact_dir}/manual/{evidence_id}/`, hands back steps it can't do, and asks the operator for the outcome. `record-manual --assisted --attachment …` records it as the operator's, with the files, and the PR section marks it agent-assisted. Outcomes recorded before the report resolves are shown by `record-manual`, `status` and the PR section, so checks can be worked through one at a time; the report itself still resolves only as above. `archive-work` copies the attachments. Browser tests as real `test` evidence are #104.
+
 ---
 
 ## 6. The Authorized Path, Fix Loop, and Gate
@@ -801,8 +803,9 @@ Status as of 2026-11-17; tracked in #66.
 **Host-agnostic interface (added 2026-11-15 to #59–#62).** The factory must be usable by hosts other than the Escapement skills, for example Escapement Studio calling it as a subprocess. Requirements: `--json` output on every command; external work-item IDs (no required manifest `work_items` row; `manifest_id` optional in the contract); storage passed explicitly (`--project-root`, optional artifact-dir override); invocation through a plugin-root wrapper (`scripts/factory.sh`) with no skill calls from the runner; contract, report and verdict schemas published as standalone JSON Schema; the `.git/info/exclude` obligation for hosts documented and tested; the reviewer defined as a prompt plus verdict schema, with the Claude Code agent as a thin wrapper.
 10. **#92 Bounded fix loop.** **Done.** The runner loops a `fail` or an implementer-fixable `error` back to implementing within `max-attempts`, with stuck detection on deterministic findings, regression flags and error causes (migration 3); `factory continue` is the operator's way back from `escalated`; the PR shows the attempt history; crash tests at each boundary (§6.2). Re-entry after the PR is open is #97.
 11. **#99 Plan critique**, one round. **Done.** The `plan-critic` agent (a prompt plus `critique.schema.json`) critiques the plan and contract in `setup-work` before approval; unresolved findings reach the operator with both positions; dispositions are recorded in the scratchpad and, with `record-critique`, on the run as `critique_finding` events. In the fix loop, a rejected manual procedure now escalates at once (§3.5, §6.2).
-12. **Gate, report-only.**
-13. **Later:** merge-result validation, enforcing gate, async escalation, hidden scenarios, test-first, outer loop.
+12. **#103 Agent-assisted manual checks.** **Done.** The plugin bundles the Playwright MCP server; `validate-work` carries out a manual check's steps on request and the operator decides; `record-manual --assisted --attachment`; recorded outcomes are visible before the report resolves (§5.5).
+13. **Gate, report-only.**
+14. **Later:** merge-result validation, enforcing gate, async escalation, hidden scenarios, test-first, outer loop.
 
 ---
 
