@@ -50,7 +50,11 @@
       "type": "string",
       "minLength": 1
     },
-    "settings_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+    "settings_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "browser_tests": {
+      "description": "The project's browser-tests setting: the browser test tool its verify runs, so planning writes UI criteria as browser-test evidence (#104). Null when the project sets none.",
+      "enum": ["playwright", null]
+    }
   },
   "if": { "properties": { "status": { "const": "ready" } } },
   "then": { "properties": { "questions": { "type": "array", "maxItems": 0 } } },

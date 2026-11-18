@@ -1,6 +1,6 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { checkReadiness } from "./factory/readiness.ts";
+import { checkReadiness, readinessText } from "./factory/readiness.ts";
 import { schemaErrors } from "./factory/schemas.ts";
 import { assert, tempDir, cleanup, contractJson } from "./factory/testkit.ts";
 
@@ -101,6 +101,26 @@ function run() {
     assert(settings === "max-attempts", "invalid settings are questions, by key");
     const tr = check(contractJson("#1-r1"), project(CONFIGURED.replace("junit:", "tap:")));
     assert(tr.questions.map((q) => q.ref).join() === "test-results", "an unsupported test-results format is asked about once");
+  }
+
+  console.log("\nBrowser tests\n");
+
+  {
+    const pw = check(contractJson("#1-r1"), project(CONFIGURED + "- **browser-tests**: playwright\n"));
+    const none = check(contractJson("#1-r1"), project(CONFIGURED));
+    const bare = check(undefined, project(null));
+    assert(
+      pw.status === "ready" && pw.browser_tests === "playwright" && none.browser_tests === null && bare.browser_tests === null,
+      "check reports the browser-tests setting, null when the project sets none",
+    );
+    const bad = check(undefined, project(CONFIGURED + "- **browser-tests**: cypress\n"));
+    assert(bad.status === "needs_human" && bad.questions.map((q) => q.ref).join() === "browser-tests" && bad.browser_tests === null, "an unsupported browser-tests value is a settings question");
+    const withLine = readinessText(pw).split("\n");
+    const without = readinessText(none);
+    assert(
+      withLine.includes("  browser tests: playwright") && withLine[0] === "ready" && !/browser tests/.test(without) && without.split("\n").length === withLine.length - 1,
+      "the check text lists browser tests when the project sets them and has no such line when it doesn't",
+    );
   }
 
   console.log("\nAll factory readiness tests passed.");
