@@ -331,7 +331,7 @@ Throughout the session:
      ```
      📤 You have {N} unpushed commits. Push to remote?
      ```
-   - Push as the agent, the way create-pr's Phase 6 step 1 does: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/factory.sh" --json push`. Only on `no_agent_token` or `not_github` (origin isn't on github.com) fall back to `git push -u origin {branch}`, saying in one line that the push is the operator's and why. On any other error, report it; never retry as the operator.
+   - Push as the agent, the way create-pr's Phase 6 step 1 does: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/factory.sh" --check && bash "${CLAUDE_PLUGIN_ROOT}/scripts/factory.sh" --json push`. Only when `--check` fails (the factory runner isn't installed), on `no_agent_token`, or on `not_github` fall back to `git push -u origin {branch}`, saying in one line that the push is the operator's and why, with create-pr's wording: for `not_github`, `.error.detail.cause` `origin_host` means origin isn't on github.com, and `push_url` means git rewrites the push URL to `.error.detail.resolved_url`, which the line names (never say then that origin isn't on github.com). On any other error, report it; never retry as the operator.
 
 2. **Progress Persistence:**
    - Keep scratchpad updated with running notes
@@ -538,10 +538,11 @@ Under an authorized run, `factory authorization` has already matched the branch,
 
 ---
 
-**Version:** 1.6.0
+**Version:** 1.7.0
 **Last Updated:** 2026-11-19
 **Maintained By:** Escapement
 **Changelog:**
+- v1.7.0: The push reminder runs `factory.sh --check` first and falls back to the operator's push when the runner isn't installed; a `not_github` fallback names its cause from `.error.detail.cause` (`origin_host` or `push_url` with the resolved URL) (#87)
 - v1.6.0: A run with a PR can now continue (#97): an escalated run with a PR (a failed manual check, a failed attempt after a re-entry) offers "fix it and continue", and **Back to an open PR** takes a `pr_open` run back for a review finding or an operator request (`--trigger`), matched or past its deadline; the fix lands on the same PR, which is validated and refreshed again
 - v1.5.0: The notification for an opened or refreshed PR carries the gate's recommendation (`Gate: auto_merge | ping` and its reasons, from `.result.gate`), whatever it is; the gate is report-only and do-work never merges (#110)
 - v1.4.1: A run escalated for a rejected manual procedure offers only abandon and start over: its instructions are in the approved contract, so no fix can help (#99)

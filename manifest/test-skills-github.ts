@@ -185,21 +185,60 @@ function run() {
   const sync = section(doWork, "Phase 4: Continuous Sync");
   assert(/scripts\/factory\.sh" --json push/.test(sync), "do-work's push reminder pushes with factory push");
 
-  // The operator's git push is a fallback for exactly two refusals: no agent
-  // identity, and an origin off github.com. Anything else is reported.
+  // The operator's git push is a fallback for exactly these: the runner
+  // isn't installed, no agent identity, an origin off github.com, and a push
+  // URL git rewrites away from github.com (#87). Anything else is reported.
   const bullets = phase6.split(/\n(?=\s*- \*\*)/);
   const fallback = bullets.filter((b) => b.includes("git push"));
   const doWorkPush = sync.split("\n").filter((l) => l.includes("git push"));
   assert(
     fallback.length === 1 &&
+      fallback[0].includes("`--check` fails") &&
       fallback[0].includes("`no_agent_token`") &&
       fallback[0].includes("`not_github`") &&
+      fallback[0].includes("`push_url`") &&
       /Never retry as the operator/.test(phase6) &&
       doWorkPush.length === 1 &&
+      doWorkPush[0].includes("`--check` fails") &&
       doWorkPush[0].includes("`no_agent_token`") &&
       doWorkPush[0].includes("`not_github`") &&
+      doWorkPush[0].includes("`push_url`") &&
       /never retry as the operator/.test(doWorkPush[0]),
-    "create-pr and do-work fall back to the operator's push only without an agent token or off github.com",
+    "create-pr and do-work fall back to the operator's push only without the runner, without an agent token, off github.com, or on a rewritten push URL",
+  );
+
+  // #87: a missing runner is a fallback with its cause, not a confusing error.
+  const checkThenPush = /scripts\/factory\.sh" --check && bash "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/factory\.sh" --json push/;
+  assert(
+    checkThenPush.test(phase6) &&
+      fallback[0].includes("Pushing as the operator: the factory runner isn't installed") &&
+      fallback[0].includes("npm ci --prefix") &&
+      checkThenPush.test(doWorkPush[0]) &&
+      /`--check` fails \(the factory runner isn't installed\)/.test(doWorkPush[0]),
+    "create-pr and do-work run factory.sh --check before pushing and fall back to the operator's push with a notice naming the cause when it fails",
+  );
+
+  // #87: not_github has two causes, and the notice names the right one.
+  const rewriteNotice = fallback[0].split("\n").find((l) => l.includes("Pushing as the operator: git rewrites")) ?? "";
+  const originNotice = fallback[0].split("\n").find((l) => l.includes("Pushing as the operator: origin isn't on github.com")) ?? "";
+  assert(
+    fallback[0].includes(".error.detail.cause") &&
+      fallback[0].includes("`origin_host`") &&
+      fallback[0].includes("`push_url`") &&
+      rewriteNotice.includes("{.error.detail.resolved_url}") &&
+      !rewriteNotice.includes("origin isn't on github.com") &&
+      originNotice !== "" &&
+      /never say that origin isn't on github\.com, and never show a token/.test(fallback[0]) &&
+      doWorkPush[0].includes(".error.detail.cause") &&
+      doWorkPush[0].includes("`origin_host`") &&
+      doWorkPush[0].includes(".error.detail.resolved_url") &&
+      /never say then that origin isn't on github\.com/.test(doWorkPush[0]),
+    "create-pr and do-work tell a rewritten push URL from an origin off github.com by error.detail.cause, and the rewrite notice shows the resolved URL",
+  );
+  const archiveClose = section(read("skills/archive-work/SKILL.md"), "Phase 6.5");
+  assert(
+    /\*\*Refused `not_github`:\*\*[^\n]*Record the path without `--close`/.test(archiveClose),
+    "archive-work records the path without --close when archive --close is refused as not_github",
   );
   assert(
     /mcp__github__list_pull_requests/.test(read("skills/manifest-sync/SKILL.md")) &&

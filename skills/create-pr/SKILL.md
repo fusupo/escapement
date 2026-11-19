@@ -195,15 +195,18 @@ Everything this phase does on GitHub acts as the AI agent's account, never the o
 
 1. **Push the branch as the agent:**
    ```bash
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/factory.sh" --json push
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/factory.sh" --check && bash "${CLAUDE_PLUGIN_ROOT}/scripts/factory.sh" --json push
    ```
-   It pushes the current branch, never forced, with `ESCAPEMENT_AGENT_GH_TOKEN` (environment or `~/.config/escapement/agent.env`). Never read or print that file. Route on `.error.code`:
+   `--check` first, as commit-changes does: when it fails, the factory runner isn't installed, it prints how to install it, and `push` doesn't run. Otherwise `push` pushes the current branch, never forced, with `ESCAPEMENT_AGENT_GH_TOKEN` (environment or `~/.config/escapement/agent.env`). Never read or print that file. Route on `.error.code`:
    - **`.ok`:** the branch is on GitHub at `.result.sha`.
-   - **`no_agent_token`** or **`not_github`:** the agent can't push here: no agent identity is configured, or origin isn't on github.com (the agent token is only ever sent to github.com). Fall back to the operator's push and say so in one line, with the reason:
+   - **`--check` fails, `no_agent_token` or `not_github`:** the agent can't push here: the runner isn't installed, no agent identity is configured, or the token would leave github.com (it is only ever sent to https://github.com). For `not_github`, `.error.detail.cause` says why: `origin_host` when origin itself isn't on github.com, `push_url` when origin is on github.com but git rewrites the push URL elsewhere (insteadOf, pushInsteadOf, pushurl or ssh), to `.error.detail.resolved_url`. A `not_github` without `detail` is `origin_host`. Fall back to the operator's push and say so in one line, naming the cause:
      ```
+     Pushing as the operator: the factory runner isn't installed, so the agent can't push (run: npm ci --prefix {plugin root}/manifest)
      Pushing as the operator: no agent identity configured (put ESCAPEMENT_AGENT_GH_TOKEN in ~/.config/escapement/agent.env, chmod 600, or export it)
      Pushing as the operator: origin isn't on github.com, and the agent token is only sent to github.com
+     Pushing as the operator: git rewrites this repository's push URL to {.error.detail.resolved_url} (insteadOf, pushInsteadOf, pushurl or ssh), which isn't https://github.com, so the agent token isn't used
      ```
+     For `push_url`, use the last line: never say that origin isn't on github.com, and never show a token. The operator's push goes wherever their own git config sends it.
      ```bash
      git push -u origin {branch-name}
      ```
@@ -338,11 +341,12 @@ Update it with `mcp__github__update_pull_request`.
 
 ---
 
-**Version:** 1.5.0
+**Version:** 1.6.0
 **Last Updated:** 2026-11-19
 **Maintained By:** Escapement
 **Converted From:** commands/open-pr.md
 **Changelog:**
+- v1.6.0: The plain push runs `factory.sh --check` first and falls back to the operator's `git push` when the runner isn't installed, naming the cause; a `not_github` push names its cause from `.error.detail.cause`: origin off github.com (`origin_host`), or a push URL git rewrites away from it (`push_url`, with the resolved URL) (#87)
 - v1.5.0: Under authorization, a refresh after a re-entry (`.result.reentry` set, #97) rewrites the PR narrative and passes it with `--body-file`, so the PR no longer describes the first take
 - v1.4.0: Under authorization, report the gate's recommendation from `factory pr`'s `.result.gate` (`auto_merge` or `ping`, with its reasons); report-only, never merged (#110)
 - v1.3.0: Plain path acts on GitHub as the agent: `factory push` pushes the branch (operator push only when no agent identity is configured or origin isn't on github.com, with a notice), and the PR and labels go through the GitHub MCP tools, never the GitHub CLI (#80)
