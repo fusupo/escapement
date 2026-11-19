@@ -31,6 +31,10 @@ const HALT: RunState[] = ["blocked", "escalated", "closed"];
  *   the implementer can fix (fixloop.ts `decideAfterAttempt`);
  * - escalated → implementing: the operator's `factory continue`.
  *
+ * Re-entry after the PR is open (#97) adds a third, also the operator's
+ * `factory continue`: pr_open → implementing, for a fix that belongs on the
+ * open PR. A validated run still has no way back: its PR is refreshed first.
+ *
  * A blocked run can only be closed.
  */
 export const RUN_TRANSITIONS: Record<RunState, readonly RunState[]> = {
@@ -39,7 +43,7 @@ export const RUN_TRANSITIONS: Record<RunState, readonly RunState[]> = {
   implementing: ["validating", ...HALT],
   validating: ["validated", "implementing", ...HALT],
   validated: ["pr_open", ...HALT],
-  pr_open: ["closed", "blocked", "escalated"],
+  pr_open: ["implementing", "closed", "blocked", "escalated"],
   blocked: ["closed"],
   escalated: ["implementing", "closed"],
   closed: [],
