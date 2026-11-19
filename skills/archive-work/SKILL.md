@@ -441,7 +441,7 @@ Context directory changes:
 **With a factory run (Phase 2, step 5), also show:**
 ```
 Factory run {run_id} ({state}, PR #{pr_number}):
-   - contract, reports, verdicts and PR body copied to {archive}/runs/{run_id}/
+   - contract, reports, verdicts, PR body, plan critique and manual-check attachments copied to {archive}/runs/{run_id}/
    - the run is closed: merged if its PR merged, otherwise abandoned
 ```
 
@@ -522,13 +522,13 @@ Factory run {run_id} ({state}, PR #{pr_number}):
 
 ### Phase 6.5: Archive the Factory Run
 
-Only when Phase 2 found a run. Its artifacts stay where they are (the factory database records their paths); the archive keeps a copy of what explains the outcome. Logs, test results and review snapshots are left out: they are large, and they stay in the artifact dir. The attachments of agent-assisted manual checks (`manual/{evidence_id}/`: observations and screenshots, #103) are copied: a report's `manual_outcomes` names them as evidence for a human's outcome.
+Only when Phase 2 found a run. Its artifacts stay where they are (the factory database records their paths); the archive keeps a copy of what explains the outcome. Logs, test results and review snapshots are left out: they are large, and they stay in the artifact dir. The attachments of agent-assisted manual checks (`manual/{evidence_id}/`: observations and screenshots, #103) are copied: a report's `manual_outcomes` names them as evidence for a human's outcome. So is the plan critique (`critique.json`, written by `factory record-critique`, #99) when the run has one: it records what the critic found before approval and what became of each finding.
 
-1. **Copy** the contract, every report revision, the verdicts, the PR body and the manual-check attachments into `{ARCHIVE_DIR}/runs/{run_id}/`, keeping their layout:
+1. **Copy** the contract, every report revision, the verdicts, the PR body, the plan critique and the manual-check attachments into `{ARCHIVE_DIR}/runs/{run_id}/`, keeping their layout:
    ```bash
    ART='{artifact_dir}'
    DEST="$ARCHIVE_DIR/runs/{run_id}"
-   (cd "$ART" && find . -type f \( -name contract.json -o -name review.json -o -name report.json -o -name 'report.r[0-9]*.json' -o -path ./pr/body.md -o -path './manual/*' \)) |
+   (cd "$ART" && find . -type f \( -name contract.json -o -name review.json -o -name report.json -o -name 'report.r[0-9]*.json' -o -path ./pr/body.md -o -path ./critique.json -o -path './manual/*' \)) |
      while IFS= read -r f; do mkdir -p "$DEST/$(dirname "$f")" && cp "$ART/$f" "$DEST/$f"; done
    ```
    In in-repo mode, also `git add "$DEST"` so the copy is committed with the archive.
@@ -737,10 +737,11 @@ No PR found for this work.
 
 ---
 
-**Version:** 2.5.1
-**Last Updated:** 2026-11-17
+**Version:** 2.5.2
+**Last Updated:** 2026-11-18
 **Maintained By:** Escapement
 **Changelog:**
+- v2.5.2: Phase 6.5 also copies the run's plan critique (`critique.json`) when it has one (#101)
 - v2.5.1: Phase 6.5 also copies the attachments of agent-assisted manual checks (`manual/{evidence_id}/`) (#103)
 - v2.5.0: Phase 6.5 archives a factory run: copies its contract, reports, verdicts and PR body, records archive_path and closes the run (merged or abandoned, from its PR) (#64)
 - v2.4.1: Read context-path with scripts/get-context-path.sh, which ignores examples in fenced blocks and outside `## Escapement Settings` (#57)
