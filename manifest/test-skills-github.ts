@@ -203,7 +203,14 @@ function run() {
       doWorkPush[0].includes("`no_agent_token`") &&
       doWorkPush[0].includes("`not_github`") &&
       doWorkPush[0].includes("`push_url`") &&
-      /never retry as the operator/.test(doWorkPush[0]),
+      /never retry as the operator/.test(doWorkPush[0]) &&
+      // Only on the plain path: under an authorized run nothing here pushes.
+      // create-pr's Phase 0 replaces Phase 6 and forbids both pushes, and
+      // do-work's push reminders are off (factory pr pushes, and never as
+      // the operator).
+      /\*\*Phase 6 is replaced\.\*\* Never push[^\n]*\(no `git push`, no `factory push`/.test(createPr) &&
+      /^Under an authorized run, Phase 0 replaces this phase/m.test(phase6) &&
+      /\*\*Push Reminders\*\* \(not under an authorized run: `factory pr` pushes\)/.test(sync),
     "create-pr and do-work fall back to the operator's push only without the runner, without an agent token, off github.com, or on a rewritten push URL",
   );
 
@@ -282,15 +289,29 @@ function run() {
     "docs state the MCP rule, factory push and agent commit authorship",
   );
   {
-    // #87: what keeps the agent token on github.com, in both docs.
+    // #87: what keeps the agent token on github.com, in both docs, and the
+    // releases that carry it: each changed skill's version with a changelog
+    // line for #87, and the plugin's.
     const asBuilt = design.slice(design.indexOf("*As built (#87)"));
+    const bumped = (file: string, version: string) => {
+      const text = read(file);
+      return text.includes(`**Version:** ${version}`) && new RegExp(`^- v${version.replace(/\./g, "\\.")}: .*\\(#87\\)$`, "m").test(text);
+    };
+    const readme = read("README.md");
+    const released =
+      bumped("skills/create-pr/SKILL.md", "1.6.0") &&
+      bumped("skills/do-work/SKILL.md", "1.7.0") &&
+      bumped("skills/archive-work/SKILL.md", "2.6.1") &&
+      JSON.parse(read(".claude-plugin/plugin.json")).version === "4.6.1" &&
+      readme.includes("**Current:** 4.6.1") &&
+      /^- 4\.6\.1 \(\d{4}-\d{2}-\d{2}\): .*\(#87\)$/m.test(readme);
     const pushDoc = section(cli, "push");
     assert(
       design.includes("*As built (#87)") &&
         /\*\*Host before gh\.\*\*/.test(asBuilt) &&
         asBuilt.includes("`GH_HOST=github.com`") &&
         asBuilt.includes("`https://github.com` only") &&
-        asBuilt.includes("`git remote get-url --push origin`") &&
+        asBuilt.includes("`git remote get-url --push --all origin`") &&
         asBuilt.includes("`origin_host`") &&
         asBuilt.includes("`push_url`") &&
         asBuilt.includes("`factory.sh --check`") &&
@@ -300,7 +321,8 @@ function run() {
         cli.includes('"detail": {"cause": "push_url"') &&
         /from pr, push and archive `not_github`/.test(cli) &&
         pushDoc.includes("`factory.sh --check`") &&
-        pushDoc.includes("`push_url`"),
+        pushDoc.includes("`push_url`") &&
+        released,
       "docs state the host check before gh, the scoped credential helper, the resolved push URL, the not_github cause and the check fallback",
     );
   }
