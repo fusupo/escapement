@@ -281,6 +281,29 @@ function run() {
       ![claude, design].some((t) => /converted in #80|converting the remaining `gh` calls/.test(t)),
     "docs state the MCP rule, factory push and agent commit authorship",
   );
+  {
+    // #87: what keeps the agent token on github.com, in both docs.
+    const asBuilt = design.slice(design.indexOf("*As built (#87)"));
+    const pushDoc = section(cli, "push");
+    assert(
+      design.includes("*As built (#87)") &&
+        /\*\*Host before gh\.\*\*/.test(asBuilt) &&
+        asBuilt.includes("`GH_HOST=github.com`") &&
+        asBuilt.includes("`https://github.com` only") &&
+        asBuilt.includes("`git remote get-url --push origin`") &&
+        asBuilt.includes("`origin_host`") &&
+        asBuilt.includes("`push_url`") &&
+        asBuilt.includes("`factory.sh --check`") &&
+        cli.includes("**The host is checked before any gh call.**") &&
+        cli.includes("`credential.https://github.com.helper`") &&
+        cli.includes("**The push URL is resolved as git will**") &&
+        cli.includes('"detail": {"cause": "push_url"') &&
+        /from pr, push and archive `not_github`/.test(cli) &&
+        pushDoc.includes("`factory.sh --check`") &&
+        pushDoc.includes("`push_url`"),
+      "docs state the host check before gh, the scoped credential helper, the resolved push URL, the not_github cause and the check fallback",
+    );
+  }
 
   console.log("\nAll skills-on-GitHub checks passed.");
 }
