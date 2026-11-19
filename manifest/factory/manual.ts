@@ -108,12 +108,35 @@ function recordsFor(db: Database, runId: string, attempt: number, headSha: strin
   return records;
 }
 
+/** A check to do again (#97): pending on the current head, last recorded on an earlier one. */
+export type RedoView = { evidence_id: string; outcome: ManualOutcome; head_sha: string; attempt: number; recorder: string };
+
+/** For each of `ids`, its latest outcome recorded for another attempt or head than `attempt` at `headSha`. */
+function earlierRecords(db: Database, runId: string, ids: readonly string[], attempt: number, headSha: string): RedoView[] {
+  const latest = new Map<string, RedoView>();
+  const rows = db
+    .prepare("SELECT detail_json FROM factory_events WHERE run_id = ? AND kind = 'manual_outcome' ORDER BY id")
+    .all(runId) as { detail_json: string }[];
+  for (const { detail_json } of rows) {
+    const d = JSON.parse(detail_json) as Recorded;
+    if (!ids.includes(d.evidence_id) || (d.attempt === attempt && d.head_sha === headSha)) continue;
+    latest.set(d.evidence_id, { evidence_id: d.evidence_id, outcome: d.outcome, head_sha: d.head_sha, attempt: d.attempt, recorder: d.recorder });
+  }
+  return ids.filter((id) => latest.has(id)).map((id) => latest.get(id)!);
+}
+
 /**
  * The manual checks of the run's current report while it is still
- * `pending_manual`: which await a human and what has been recorded so far.
- * Null when the current report isn't pending (none, or already resolved).
+ * `pending_manual`: which await a human, what has been recorded so far,
+ * and (`redo`) which of those awaiting a human were recorded on an earlier
+ * head: outcomes are bound to the head (§5.5), so after a re-entry (#97)
+ * they are pending again. Null when the current report isn't pending
+ * (none, or already resolved).
  */
-export function manualProgress(db: Database, run: RunRow): { attempt: number; pending: string[]; recorded: RecordedView[] } | null {
+export function manualProgress(
+  db: Database,
+  run: RunRow,
+): { attempt: number; pending: string[]; recorded: RecordedView[]; redo: RedoView[] } | null {
   let current;
   try {
     current = currentReport(db, run);
@@ -124,10 +147,12 @@ export function manualProgress(db: Database, run: RunRow): { attempt: number; pe
   const { report, attempt } = current;
   const pendingIds = report.evidence.filter((e) => e.executed === "pending_manual").map((e) => e.id);
   const records = recordsFor(db, run.run_id, attempt, report.head_sha, report.contract_digest);
+  const pending = pendingIds.filter((id) => !records.has(id));
   return {
     attempt,
-    pending: pendingIds.filter((id) => !records.has(id)),
+    pending,
     recorded: pendingIds.filter((id) => records.has(id)).map((id) => view(records.get(id)!)),
+    redo: earlierRecords(db, run.run_id, pending, attempt, report.head_sha),
   };
 }
 

@@ -3,7 +3,8 @@ import { join, dirname } from "node:path";
 import type { Database } from "better-sqlite3";
 import { validateRun } from "./factory/validate.ts";
 import { reviewInput, recordReview, type Bundle } from "./factory/review.ts";
-import { recordManual } from "./factory/manual.ts";
+import { recordManual, manualProgress } from "./factory/manual.ts";
+import { continueRun } from "./factory/fixloop.ts";
 import { openPr } from "./factory/pr.ts";
 import { getRun, getAttempt } from "./factory/state.ts";
 import { runStatus } from "./factory/runs.ts";
@@ -207,6 +208,38 @@ async function run() {
     db.prepare("UPDATE factory_runs SET contract_digest = 'sha256:other' WHERE run_id = ?").run(id);
     await rejects(recordManual(db, id, "AC-2.e1", "pass", { ...LOCK, note: "x" }), /stale_contract/, "a report for another contract is stale");
     assert(manualEvents(db, id) === 0 && !existsSync(join(run.artifact_dir, "attempts", "1", "report.r2.json")), "refused records leave nothing behind");
+  }
+
+  console.log("\nrecord-manual: pending again after a re-entry (#97)\n");
+  {
+    const { db, root, run } = await pendingManual();
+    const id = run.run_id;
+    const h1 = getAttempt(db, id, 1).head_sha;
+    await recordManual(db, id, "AC-2.e1", "pass", { ...LOCK, note: "logged in", recorder: "marc" });
+    db.prepare("UPDATE factory_runs SET pr_number = 5 WHERE run_id = ?").run(id);
+    await recordManual(db, id, "AC-3.e1", "fail", { ...LOCK, note: "no Refresh section", recorder: "marc" });
+    continueRun(db, id, { reason: "add the Refresh section", owner });
+    writeFileSync(join(root, "docs.md"), "## Refresh\n");
+    sh("git", ["add", "-A"], root);
+    sh("git", ["commit", "-q", "-m", "docs: refresh"], root);
+    const v = await validateRun(db, id, { ...LOCK, echo: false });
+    const b = readJson<Bundle>((await reviewInput(db, id, v.attempt, LOCK)).bundle_path);
+    const verdict = {
+      version: 1,
+      source_digest: b.source.digest,
+      evidence: b.required.evidence.map((e) => ({ id: e.id, [e.judgment]: "yes", rationale: "adequate" })),
+      sensitive_paths: b.required.sensitive_paths.map((x) => ({ path: x.path, signoff: "approve", rationale: "ok" })),
+      modified_assertions: b.required.modified_assertions.map((m) => ({ location: m.location, justified: true, rationale: "ok" })),
+      findings: [],
+    };
+    const rec = await recordReview(db, id, v.attempt, JSON.stringify(verdict), LOCK);
+    const progress = manualProgress(db, getRun(db, id));
+    assert(
+      rec.outcome === "pending_manual" && v.attempt === 2 && progress !== null && progress.attempt === 2 &&
+        progress.pending.join() === "AC-2.e1,AC-3.e1" && progress.recorded.length === 0 &&
+        progress.redo.map((r) => `${r.evidence_id}:${r.outcome}:${r.attempt}:${r.head_sha === h1}`).join() === "AC-2.e1:pass:1:true,AC-3.e1:fail:1:true",
+      "after re-entry a manual outcome recorded on the old head is pending again and listed as to redo",
+    );
   }
 
   cleanup();
