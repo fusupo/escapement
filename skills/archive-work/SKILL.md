@@ -537,7 +537,7 @@ Only when Phase 2 found a run. Its artifacts stay where they are (the factory da
    ```bash
    bash "$FACTORY" --json archive '{run_id}' --path "$DEST" --close
    ```
-   - **`.ok`:** the run is `closed`, as `.result.closed` (`merged` when its PR merged, `abandoned` when it had none or it was closed unmerged). `.result.operator_action` records what the operator did with the PR, for judging the gate later (#110): `merged_as_is` (merged at the validated head with no changes requested), `changes_requested` (merged after a change request or with commits pushed after validation), `rejected` (closed unmerged after a change request) or `abandoned`. Report it in Phase 7; `.result.closed` is unchanged, so route on that as before.
+   - **`.ok`:** the run is `closed`, as `.result.closed` (`merged` when its PR merged, `abandoned` when it had none or it was closed unmerged). `.result.operator_action` records what the operator did with the PR, for judging the gate later (#110): `merged_as_is` (merged at the validated head with no changes requested), `changes_requested` (merged after a change request or with commits pushed after validation), `rejected` (closed unmerged after a change request) or `abandoned`. Report it in Phase 7; `.result.closed` is unchanged, so route on that as before. `.result.merge_sha` is the PR's merge commit, recorded on the run (#117): report it in Phase 7. It is null when the run was abandoned, or when GitHub reported no merge commit.
    - **Refused `pr_open`:** the PR is still open. Ask:
      ```
      AskUserQuestion:
@@ -552,6 +552,14 @@ Only when Phase 2 found a run. Its artifacts stay where they are (the factory da
      **Leave open:** `factory archive '{run_id}' --path "$DEST"`. **Close:** add `--abandon`.
    - **Refused `no_agent_token`:** reading the PR's state needs the agent's GitHub token. Record the path without `--close`, and tell the operator to close the run later with `factory archive '{run_id}' --path "$DEST" --close`.
    - **Refused `not_github`:** reading the PR's state needs the agent's token, which is only ever sent to github.com, and origin is now on another host (the message names it). Record the path without `--close`, and tell the operator why: the run can be closed with `--close` once origin is back on github.com, or with `--abandon`.
+
+3. **Sweep for reverts** of this repository's merged runs (#117), after a close that succeeded (`.result.closed` set). It runs every time, with no question to the operator:
+   ```bash
+   bash "$FACTORY" --json reverts
+   ```
+   It reads local git only: `origin/{target}`, else the local target branch. It never fetches and never asks GitHub. Each newly found revert of a run's merged work (a commit saying `This reverts commit <sha>` for the run's merge SHA or one of its PR's own commits) is recorded once, as a `revert` event on that run.
+   - **`.ok`:** in Phase 7, report each of `.result.recorded` (run, revert commit, the commit it reverts), and each `.result.scanned` ref with the tip it read, so a stale branch shows.
+   - **Any failure or refusal:** one line in Phase 7, `reverts not checked: {message}`. It never undoes or blocks closing the run, which is already done, and it isn't retried. The next archive sweeps again.
 
 ### Phase 7: Report Result
 
@@ -568,7 +576,8 @@ Files archived (to context directory):
    - README.md (summary generated)
 
 Factory run (if any):
-   - {run_id}: closed ({merged|abandoned}; operator action: {operator_action}), or left open
+   - {run_id}: closed ({merged|abandoned}; operator action: {operator_action}; merge: {merge_sha}), or left open
+   - Reverts: {N} recorded ({run_id}: {revert_sha} reverts {reverted_sha}), scanned {ref} at {tip}; or "reverts not checked: {message}"
    - Artifacts copied to {context-path}/{branch}/archive/runs/{run_id}/
 
 INDEX.md updated:
@@ -708,7 +717,7 @@ No PR found for this work.
 - `commit-changes` skill - To commit archive
 
 **Calls:**
-- `scripts/factory.sh` `status` and `archive` for a factory run (Phase 6.5)
+- `scripts/factory.sh` `status`, `archive` and `reverts` for a factory run (Phase 6.5)
 
 **Reads from:**
 - Scratchpad - Content to archive
@@ -738,10 +747,11 @@ No PR found for this work.
 
 ---
 
-**Version:** 2.6.1
+**Version:** 2.7.0
 **Last Updated:** 2026-11-19
 **Maintained By:** Escapement
 **Changelog:**
+- v2.7.0: Phase 6.5 reports the run's merge SHA, which `factory archive --close` now records, and then sweeps the repository for reverts of merged runs with `factory reverts`; a failed sweep is reported in one line and never blocks the close (#117)
 - v2.6.1: Phase 6.5 handles `not_github` from `archive --close` (origin off github.com) like `no_agent_token`: record the path without `--close` and say why (#87)
 - v2.6.0: Phase 6.5 reports the run's `operator_action` (`merged_as_is`, `changes_requested`, `rejected` or `abandoned`), which `factory archive --close` now records; `.result.closed` is unchanged (#110)
 - v2.5.2: Phase 6.5 also copies the run's plan critique (`critique.json`) when it has one (#101)

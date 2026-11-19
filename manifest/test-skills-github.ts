@@ -290,20 +290,23 @@ function run() {
   );
   {
     // #87: what keeps the agent token on github.com, in both docs, and the
-    // releases that carry it: each changed skill's version with a changelog
-    // line for #87, and the plugin's.
+    // releases that carry it: each changed skill's changelog line for #87,
+    // and the plugin's. Later releases move the current versions on (#117),
+    // so this checks the #87 lines are there and the plugin is at least 4.6.1.
     const asBuilt = design.slice(design.indexOf("*As built (#87)"));
-    const bumped = (file: string, version: string) => {
-      const text = read(file);
-      return text.includes(`**Version:** ${version}`) && new RegExp(`^- v${version.replace(/\./g, "\\.")}: .*\\(#87\\)$`, "m").test(text);
+    const bumped = (file: string, version: string) =>
+      new RegExp(`^- v${version.replace(/\./g, "\\.")}: .*\\(#87\\)$`, "m").test(read(file));
+    const atLeast = (v: string, min: string) => {
+      const [a, b] = [v, min].map((x) => x.split(".").map(Number));
+      for (let i = 0; i < 3; i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0);
+      return true;
     };
     const readme = read("README.md");
     const released =
       bumped("skills/create-pr/SKILL.md", "1.6.0") &&
       bumped("skills/do-work/SKILL.md", "1.7.0") &&
       bumped("skills/archive-work/SKILL.md", "2.6.1") &&
-      JSON.parse(read(".claude-plugin/plugin.json")).version === "4.6.1" &&
-      readme.includes("**Current:** 4.6.1") &&
+      atLeast(JSON.parse(read(".claude-plugin/plugin.json")).version, "4.6.1") &&
       /^- 4\.6\.1 \(\d{4}-\d{2}-\d{2}\): .*\(#87\)$/m.test(readme);
     const pushDoc = section(cli, "push");
     assert(
