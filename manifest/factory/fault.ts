@@ -39,6 +39,8 @@ export const FAULT_POINTS = [
   "record-review.committed",
   /** continue: the run is back in implementing, before the result is printed. */
   "continue.committed",
+  /** pr: the gate's recommendation is recorded on the run, before the PR is pushed, created or updated (#110). */
+  "pr.gate_recorded",
   /** pr: `gh pr create` succeeded, the PR number is not yet recorded. */
   "pr.created",
   /** pr: the PR number is recorded, before the result is printed. */

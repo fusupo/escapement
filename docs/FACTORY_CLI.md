@@ -736,6 +736,7 @@ Crash tests (`scripts/test-factory.sh`, and the first-release acceptance run, #6
 | `record-review.report_written` | the final `report.json` written, attempt still `finalizing` | the same | the same |
 | `record-review.committed` | the attempt complete and the run moved on (validated, back to implementing, or escalated), before output | the host saw no result | `next` follows the run state; `record-review` again is a no-op |
 | `continue.committed` | the run back in `implementing`, before output | the host saw no result | `next` is `implement`, with `fix`; `continue` again changes nothing |
+| `pr.gate_recorded` | the gate's recommendation recorded on the run, before anything is pushed or the PR is created or updated (#110) | `gate_recommendation` set, one `gate` event, no PR yet | `pr` again: the same result adds no event, then the PR shows it |
 | `pr.created` | `gh pr create` succeeded, number not recorded | an open PR, run `validated` without `pr_number` | `pr` again → `recovered` |
 | `pr.recorded` | the number recorded, before output | run `pr_open` | `pr` again → `updated` |
 

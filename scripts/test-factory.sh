@@ -380,6 +380,13 @@ if [[ $status -eq 0 && "$(jq -r '.ok and .result.action == "created" and .result
 if [[ "$(git -C "$vproject.origin.git" rev-parse refs/heads/9-validate 2>/dev/null)" == "$(git -C "$vproject" rev-parse HEAD)" ]]; then ok; else bad "pr-pushed"; fi
 if [[ "$(jq -r '.[0] | .baseRefName == "main" and (.body | startswith("## Summary\nMakes it work.") and contains("<!-- escapement:factory-report:begin -->"))' "$tmp/prs.json")" == true ]]; then ok; else bad "pr-body" "$(cat "$tmp/prs.json")"; fi
 if [[ "$(cut -f1 "$tmp/prs.json.log" | sort -u)" == agent-token ]]; then ok; else bad "pr-as-agent" "$(cat "$tmp/prs.json.log")"; fi
+# the gate (#110): recorded on the run and shown in the PR, never merged
+gate="$(jq -r '.result.gate.recommendation' <<<"$out")"
+st="$(CWD="$vproject" f --json status '#9-r1')"
+if [[ ( "$gate" == auto_merge || "$gate" == ping ) && "$(jq -r '.result.gate.mode' <<<"$out")" == report-only &&
+      "$(jq -r '.result.run.gate_recommendation' <<<"$st")" == "$gate" &&
+      "$(jq -r '.[0].body | contains("**Gate (report-only):**")' "$tmp/prs.json")" == true &&
+      "$(jq -r '[.[] | select(.mergedAt != null)] | length' "$tmp/prs.json")" == 0 ]]; then ok; else bad "pr-gate-recorded" "$out $st"; fi
 
 # again: the same PR is found and updated, not duplicated
 out="$(ghf --json pr '#9-r1')"
@@ -475,15 +482,28 @@ if [[ "$(jq -r '[.result.actions[] | select(.attempt == 2) | .action] == ["refin
 out="$(cf --json record-review '#12-r1' 2 "$vfile")"
 if [[ "$(jq -r '.ok and .result.refinalized and .result.outcome == "pass" and .result.run_state == "validated"' <<<"$out")" == true && ! -e "$cguard" ]]; then ok; else bad "crash-refinalized" "$out"; fi
 
-# between PR creation and recording: running pr again records that PR, no second one
 echo '[]' > "$tmp/cprs.json"
 cgh() { PATH="$tmp/ghbin:$PATH" GH_STUB_STATE="$tmp/cprs.json" ESCAPEMENT_AGENT_GH_TOKEN=agent-token "$@"; }
+
+# between recording the gate and the PR (#110): the gate is on the run, nothing
+# is pushed or created, and the rerun below records the same gate once
+out="$(cgh crash 'pr.gate_recorded' --json pr '#12-r1' --title 'feat: crash test (#12)' --body-file "$tmp/narrative.md")"
+status=$?
+st="$(cf --json status '#12-r1')"
+if [[ $status -eq 137 && "$(jq length "$tmp/cprs.json")" == 0 && -z "$(git -C "$cproject.origin.git" for-each-ref refs/heads 2>/dev/null)" &&
+      "$(jq -r '.result.run.gate_recommendation == "ping" and .result.run.pr_number == null and .result.run.state == "validated"' <<<"$st")" == true &&
+      "$(jq -r '.result.run.gate_reasons_json | fromjson | any(test("2 attempts, over gate-max-attempts"))' <<<"$st")" == true &&
+      "$(cnext)" == pr ]]; then ok; else bad "crash-gate-recorded" "status=$status $st $(cat "$tmp/crash.err")"; fi
+
+# between PR creation and recording: running pr again records that PR, no second one
 out="$(cgh crash 'pr.created' --json pr '#12-r1' --title 'feat: crash test (#12)' --body-file "$tmp/narrative.md")"
 status=$?
 st="$(cf --json status '#12-r1')"
 if [[ $status -eq 137 && "$(jq length "$tmp/cprs.json")" == 1 && "$(jq -r '.result.run.pr_number == null and .result.run.state == "validated"' <<<"$st")" == true && "$(cnext)" == pr ]]; then ok; else bad "crash-pr-created" "status=$status $st"; fi
 out="$(cgh cf --json pr '#12-r1' --title 'feat: crash test (#12)' --body-file "$tmp/narrative.md")"
 if [[ "$(jq -r '.ok and .result.action == "recovered" and .result.pr_number == 1 and .result.state == "pr_open"' <<<"$out")" == true && "$(jq length "$tmp/cprs.json")" == 1 ]]; then ok; else bad "crash-pr-recovered" "$out"; fi
+if [[ "$(jq -r '.result.gate.recommendation == "ping" and .result.gate.changed == false' <<<"$out")" == true &&
+      "$(jq -r '.[0].body | contains("recommends a human look (ping)")' "$tmp/cprs.json")" == true ]]; then ok; else bad "crash-gate-once" "$out"; fi
 
 # the run used two attempts (the interrupted one counts) and lost nothing
 st="$(cf --json status '#12-r1')"

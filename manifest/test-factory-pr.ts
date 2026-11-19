@@ -5,6 +5,8 @@ import { projectContext } from "./factory/context.ts";
 import { startRun, approveRun } from "./factory/runs.ts";
 import { getRun, transitionRun } from "./factory/state.ts";
 import { openPr } from "./factory/pr.ts";
+import { recordManual } from "./factory/manual.ts";
+import { setFaultKill, FAULT_ENV } from "./factory/fault.ts";
 import { currentOwner } from "./factory/owner.ts";
 import { matchAuthorization } from "./factory/authorization.ts";
 import { renderSection, withSection, cell, SECTION_BEGIN, SECTION_END } from "./factory/report-section.ts";
@@ -28,6 +30,26 @@ async function rejects(p: Promise<unknown>, pattern: RegExp, msg: string): Promi
 function count(haystack: string, needle: string): number {
   return haystack.split(needle).length - 1;
 }
+
+/** The run's gate events, oldest first (#110). */
+function gateEvents(db: Database, runId: string): { recommendation: string; reasons: string[]; report_revision: number; outcome: string }[] {
+  return (db.prepare("SELECT detail_json FROM factory_events WHERE run_id = ? AND kind = 'gate' ORDER BY id").all(runId) as { detail_json: string }[]).map(
+    (e) => JSON.parse(e.detail_json),
+  );
+}
+
+/** The fields a report needs to be schema-valid, so record-manual can write its next revision. */
+function fullReport(head: string): Record<string, unknown> {
+  return {
+    merge_base_sha: head,
+    policy_version: "p",
+    tree_clean_after: true,
+    changes: { new_evidence: 0, modified_assertions: 0, execution_policy: 0 },
+    phases: [],
+  };
+}
+
+const mergeCalls = (calls: { args: string[] }[]) => calls.filter((c) => c.args.includes("merge") || c.args.some((a) => /\/merge\b/.test(a)));
 
 /** A repo with a local bare origin, a started and approved run, and an artifact dir. */
 function setup(db: Database, item: string, branch: string) {
@@ -233,6 +255,33 @@ async function run() {
   assert(calls.every((c) => c.token === TOKEN) && calls.every((c) => !c.args.join(" ").includes(TOKEN)), "every gh call ran as the agent, token never in argv");
   assert(calls.slice(-2).map((c) => c.args[1]).join(",") === "list,create", "looked up first, then created");
 
+  // The gate (#110): a first-attempt pass on a standard tier with a small diff.
+  {
+    const row = getRun(db, a.run.run_id);
+    const events = gateEvents(db, a.run.run_id);
+    assert(
+      r.gate.recommendation === "auto_merge" &&
+        row.gate_recommendation === "auto_merge" &&
+        row.gate_reasons_json === "[]" &&
+        events.length === 1 &&
+        events[0].recommendation === "auto_merge" &&
+        events[0].reasons.length === 0,
+      "a passing standard run records auto_merge on the run and as one gate event",
+    );
+    assert(
+      r.gate.mode === "report-only" && r.gate.recommendation === "auto_merge" && Array.isArray(r.gate.reasons) && r.gate.checks.length === 10 && r.gate.changed === true,
+      "the pr result carries the gate (mode, recommendation, reasons, checks)",
+    );
+    assert(
+      pr.body.includes("**Gate (report-only):** recommends auto-merge") && pr.body.includes("nothing is merged by the factory"),
+      "factory pr writes the gate into the PR body",
+    );
+    assert(
+      r.gate.recommendation === "auto_merge" && mergeCalls(stub.calls()).length === 0 && stub.state().prs.every((p) => p.state === "OPEN" && !p.mergedAt),
+      "a clean standard run recommends auto_merge and factory pr never calls a merge command",
+    );
+  }
+
   const here = { worktreePath: a.root, repo: getRun(db, a.run.run_id).repo, branch: "42-x" };
   let m = matchAuthorization(db, here);
   assert(m.matched && m.next === "await_merge", "the PR shows the current report: next is await_merge");
@@ -254,6 +303,14 @@ async function run() {
   assert(r.action === "updated" && now[0].body.startsWith("## Summary\nRewritten.") && count(now[0].body, SECTION_END) === 1, "without --body-file the PR's own narrative is kept");
   m = matchAuthorization(db, here);
   assert(r.report_revision === 2 && m.matched && m.next === "await_merge", "refreshed from revision 2: await_merge again");
+  {
+    // Revision 2 added one gate event; refreshing it again changes nothing.
+    const events = gateEvents(db, a.run.run_id);
+    assert(
+      r.gate.changed === false && events.length === 2 && events[1].report_revision === 2 && getRun(db, a.run.run_id).gate_recommendation === "auto_merge",
+      "a refresh with an unchanged result adds no gate event",
+    );
+  }
 
   console.log("\nNo PR while the fix loop is going (#92)\n");
   {
@@ -299,6 +356,113 @@ async function run() {
   const ys = stub.state().prs.filter((p) => p.headRefName === "43-y");
   assert(r.action === "recovered" && ys.length === 1 && r.pr_number === ys[0].number, "the rerun finds that PR and records it (recovered): no duplicate");
   assert(getRun(db, b.run.run_id).state === "pr_open" && ys[0].body.includes("awaiting a human"), "pending manual checks open the PR and show as awaiting");
+  {
+    const events = gateEvents(db, b.run.run_id);
+    const row = getRun(db, b.run.run_id);
+    assert(
+      r.gate.recommendation === "ping" &&
+        row.gate_recommendation === "ping" &&
+        JSON.parse(row.gate_reasons_json!).length === 1 &&
+        r.gate.reasons[0].includes("pending_manual: awaiting manual checks AC-1.e1") &&
+        events.length === 1 &&
+        ys[0].body.includes("recommends a human look (ping)"),
+      "a pending_manual run records ping with the awaiting manual checks as its reason",
+    );
+    assert(r.gate.recommendation === "ping" && mergeCalls(stub.calls()).length === 0, "a ping run never calls a merge command either");
+  }
+
+  console.log("\nThe gate after manual checks resolve (#110)\n");
+  {
+    const mm = setup(db, "acme/w#47", "47-m");
+    const head = sh("git", ["rev-parse", "HEAD"], mm.root);
+    validated(db, mm.run.run_id, "pending_manual", {
+      ...fullReport(head),
+      evidence: [{ id: "AC-1.e1", executed: "pending_manual", supports_criterion: null, procedure_adequate: "yes" }],
+    });
+    const first = await openPr(db, mm.run.run_id, { ...o, title: "feat: m (#47)" });
+    await recordManual(db, mm.run.run_id, "AC-1.e1", "pass", { note: "looked at it", recorder: "marc", owner, lockWaitMs: 2000 });
+    const again = await openPr(db, mm.run.run_id, o);
+    const body = stub.state().prs.find((p) => p.number === again.pr_number)!.body;
+    assert(
+      first.gate.recommendation === "ping" &&
+        again.outcome === "pass" &&
+        again.report_revision === 2 &&
+        again.gate.recommendation === "auto_merge" &&
+        again.gate.reasons.length === 0 &&
+        body.includes("recommends auto-merge"),
+      "a refresh after the manual checks resolve to pass re-applies the rules and may recommend auto_merge",
+    );
+    const events = gateEvents(db, mm.run.run_id);
+    const row = getRun(db, mm.run.run_id);
+    assert(
+      events.map((e) => e.recommendation).join() === "ping,auto_merge" &&
+        events[0].outcome === "pending_manual" &&
+        row.gate_recommendation === "auto_merge" &&
+        row.gate_reasons_json === "[]",
+      "the earlier ping stays in the gate events and factory_runs holds the latest result",
+    );
+  }
+  {
+    const mf = setup(db, "acme/w#49", "49-f");
+    const head = sh("git", ["rev-parse", "HEAD"], mf.root);
+    validated(db, mf.run.run_id, "pending_manual", {
+      ...fullReport(head),
+      evidence: [{ id: "AC-1.e1", executed: "pending_manual", supports_criterion: null, procedure_adequate: "yes" }],
+    });
+    await openPr(db, mf.run.run_id, { ...o, title: "feat: f (#49)" });
+    // A failed check resolves the report as fail and escalates the run, which keeps its PR.
+    await recordManual(db, mf.run.run_id, "AC-1.e1", "fail", { note: "it doesn't save", recorder: "marc", owner, lockWaitMs: 2000 });
+    assert(getRun(db, mf.run.run_id).state === "escalated", "a failed manual check escalates the run with its PR");
+    const refreshed = await openPr(db, mf.run.run_id, o);
+    const body = stub.state().prs.find((p) => p.number === refreshed.pr_number)!.body;
+    assert(
+      refreshed.outcome === "fail" &&
+        refreshed.gate.recommendation === "ping" &&
+        refreshed.gate.reasons.some((x) => x.includes("outcome is fail")) &&
+        getRun(db, mf.run.run_id).gate_recommendation === "ping" &&
+        gateEvents(db, mf.run.run_id).length === 2 &&
+        body.includes("recommends a human look (ping)") &&
+        body.includes("outcome is fail"),
+      "a failed manual check refreshes the PR with a ping for the outcome",
+    );
+  }
+
+  console.log("\nCrash between recording the gate and the PR (#110)\n");
+  {
+    const g = setup(db, "acme/w#48", "48-g");
+    validated(db, g.run.run_id, "pass");
+    process.env[FAULT_ENV] = "pr.gate_recorded";
+    setFaultKill((point) => {
+      throw new Error(`killed at ${point}`);
+    });
+    try {
+      await rejects(openPr(db, g.run.run_id, { ...o, title: "feat: g (#48)" }), /killed at pr\.gate_recorded/, "the runner dies right after recording the gate");
+    } finally {
+      delete process.env[FAULT_ENV];
+      setFaultKill(null);
+    }
+    const row = getRun(db, g.run.run_id);
+    assert(
+      row.gate_recommendation === "auto_merge" &&
+        gateEvents(db, g.run.run_id).length === 1 &&
+        row.pr_number === null &&
+        row.state === "validated" &&
+        stub.state().prs.filter((p) => p.headRefName === "48-g").length === 0 &&
+        sh("git", ["for-each-ref", "refs/heads/48-g"], g.bare) === "",
+      "a crash at pr.gate_recorded leaves the gate recorded once, with no PR created and nothing pushed to the PR",
+    );
+    const rerun = await openPr(db, g.run.run_id, { ...o, title: "feat: g (#48)" });
+    const gs = stub.state().prs.filter((p) => p.headRefName === "48-g");
+    assert(
+      rerun.action === "created" &&
+        rerun.gate.changed === false &&
+        gs.length === 1 &&
+        gs[0].body.includes("**Gate (report-only):** recommends auto-merge") &&
+        gateEvents(db, g.run.run_id).length === 1 &&
+        getRun(db, g.run.run_id).pr_number === gs[0].number,
+      "rerunning factory pr after that crash creates exactly one PR that shows the recommendation, and the gate events are still one",
+    );
+  }
 
   console.log("\nConflicts\n");
   db.prepare("UPDATE factory_runs SET pr_number = 999 WHERE run_id = ?").run(b.run.run_id);
