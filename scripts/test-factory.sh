@@ -604,6 +604,64 @@ st="$(lf --json status '#14-r1')"
 if [[ "$(jq -r '.result.outcome == "pass" and .result.run_state == "validated"' <<<"$out")" == true &&
       "$(jq -r --arg d "$ldeadline" '[.result.attempts[] | "\(.status)/\(.outcome)"] == ["complete/fail", "interrupted/null", "complete/fail", "complete/pass"] and .result.run.deadline_at == $d' <<<"$st")" == true ]]; then ok; else bad "loop-passes-on-attempt-4" "$out $st"; fi
 
+# Re-entry after the PR opened (#97) survives a crash at each new boundary:
+# continue dies after taking a pr_open run back, and after taking back an
+# escalated run with a PR; pr dies after patching the PR. Running each again
+# changes nothing more, and the run keeps one PR.
+rproject="$tmp/rproject"
+make_vproject "$rproject" 0
+(cd "$rproject" && printf -- '- **max-attempts**: 5\n' >> CLAUDE.md && git -c user.name=t -c user.email=t@example.invalid commit -qam 'five attempts')
+sed 's/#5-r1/#15-r1/' "$project/../contract.json" > "$tmp/rcontract.json"
+CWD="$rproject" f --json start '#15' --target-ref main >/dev/null
+CWD="$rproject" f --json approve '#15-r1' --contract "$tmp/rcontract.json" >/dev/null
+rf() { CWD="$rproject" f "$@"; }
+rcrash() { local spec="$1"; shift; ESCAPEMENT_FACTORY_FAULT="$spec" CWD="$rproject" f "$@" 2>"$tmp/rcrash.err"; }
+echo '[]' > "$tmp/rprs.json"
+rgh() { PATH="$tmp/ghbin:$PATH" GH_STUB_STATE="$tmp/rprs.json" ESCAPEMENT_AGENT_GH_TOKEN=agent-token "$@"; }
+rcommit() { (cd "$rproject" && echo "$1" > ci/verify-exit && echo "$2" >> change.txt && git -c user.name=t -c user.email=t@example.invalid commit -qam "$2"); }
+rauth() { rf --json authorization | jq -c '.result'; }
+rpass() {
+  local n="$1"
+  rf --json validate '#15-r1' >/dev/null
+  lverdict '[]' "$(rf --json review-input '#15-r1' "$n" | jq -r .result.bundle_path)" > "$tmp/rverdict$n.json"
+  rf --json record-review '#15-r1' "$n" "$tmp/rverdict$n.json"
+}
+out="$(rpass 1)"
+out="$(rgh rf --json pr '#15-r1' --title 'feat: re-entry (#15)' --body-file "$tmp/narrative.md")"
+if [[ "$(jq -r '.ok and .result.action == "created" and .result.state == "pr_open"' <<<"$out")" == true ]]; then ok; else bad "reentry-pr-opened" "$out"; fi
+
+# continue dies right after taking the pr_open run back, for a review finding
+out="$(rcrash 'continue.committed' --json continue '#15-r1' --reason 'review: rename the flag' --trigger review_finding)"
+status=$?
+auth="$(rauth)"
+if [[ $status -eq 137 && "$(jq -r '.state == "implementing" and .next == "implement" and .fix.trigger == "review_finding" and .reentry.count == 1' <<<"$auth")" == true ]]; then ok; else bad "crash-continue-pr-open" "status=$status $auth"; fi
+out="$(rf --json continue '#15-r1' --reason 'review: rename the flag' --trigger review_finding)"
+if [[ "$(jq -r '.ok and (.result.changed | not) and .result.reentry.trigger == "review_finding"' <<<"$out")" == true && "$(rauth | jq -r .reentry.count)" == 1 ]]; then ok; else bad "crash-continue-pr-open-again" "$out"; fi
+
+# attempt 2 fails and the operator escalates; continue dies after taking the run, PR and all, back
+rcommit 1 fix-1
+out="$(rf --json validate '#15-r1')"
+rf --json escalate '#15-r1' --reason 'operator wants to look' >/dev/null
+out="$(rcrash 'continue.committed' --json continue '#15-r1' --reason 'looked: fix it')"
+status=$?
+auth="$(rauth)"
+if [[ $status -eq 137 && "$(jq -r '.state == "implementing" and .fix.attempt == 2 and .fix.trigger == "attempt_failed" and .reentry.count == 2 and .pr_number == 1' <<<"$auth")" == true ]]; then ok; else bad "crash-continue-escalated-pr" "status=$status $auth"; fi
+out="$(rf --json continue '#15-r1' --reason 'again')"
+if [[ "$(jq -r '.ok and (.result.changed | not)' <<<"$out")" == true && "$(rauth | jq -r .reentry.count)" == 2 ]]; then ok; else bad "crash-continue-escalated-pr-again" "$out"; fi
+
+# attempt 3 passes; pr dies right after patching the PR, before recording the update
+rcommit 0 fix-2
+out="$(rpass 3)"
+rhead="$(git -C "$rproject" rev-parse HEAD)"
+out="$(rgh rcrash 'pr.updated' --json pr '#15-r1' --body-file "$tmp/narrative.md")"
+status=$?
+st="$(rf --json status '#15-r1')"
+if [[ $status -eq 137 && "$(jq -r --arg h "${rhead:0:7}" 'length == 1 and (.[0].body | contains($h))' "$tmp/rprs.json")" == true &&
+      "$(jq -r '.result.run.state == "validated" and .result.run.pr_number == 1' <<<"$st")" == true ]]; then ok; else bad "crash-pr-updated" "status=$status $st $(cat "$tmp/rcrash.err")"; fi
+out="$(rgh rf --json pr '#15-r1' --body-file "$tmp/narrative.md")"
+if [[ "$(jq -r '.ok and .result.action == "updated" and .result.pr_number == 1 and .result.state == "pr_open" and .result.attempt == 3' <<<"$out")" == true &&
+      "$(jq length "$tmp/rprs.json")" == 1 && "$(jq -r '.result.gate.reasons | any(test("re-entered after its PR opened: 2 times"))' <<<"$out")" == true ]]; then ok; else bad "crash-pr-updated-recovered" "$out"; fi
+
 # prompt: the reviewer prompt ships as data, found through the runner
 out="$(f prompt reviewer)"
 if [[ "$out" == */prompts/factory/validation-reviewer.md && -f "$out" ]]; then ok; else bad "prompt-path" "$out"; fi

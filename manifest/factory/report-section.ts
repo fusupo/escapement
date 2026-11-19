@@ -29,6 +29,11 @@ export type ReportView = {
    * check as it is recorded.
    */
   manual_recorded?: ManualView[];
+  /**
+   * Checks awaiting a human again (#97): recorded on an earlier head before
+   * a re-entry, passed by `factory pr` so the PR says which to redo.
+   */
+  manual_redo?: { evidence_id: string; outcome: string; head_sha: string; attempt: number }[];
 };
 
 /** A human's outcome for a manual check, and whether the agent assisted it (#103). */
@@ -161,6 +166,7 @@ export function renderSection(
     lines.push("", "**Manual checks**", "");
     const done = new Map(recorded.map((m) => [m.evidence_id, m]));
     const sofar = new Map((report.manual_recorded ?? []).map((m) => [m.evidence_id, m]));
+    const redo = new Map((report.manual_redo ?? []).map((m) => [m.evidence_id, m]));
     const ids = [...new Set([...manual.map((e) => e.id), ...recorded.map((m) => m.evidence_id)])];
     for (const id of ids) {
       const m = done.get(id);
@@ -169,6 +175,11 @@ export function renderSection(
         lines.push(`- \`${cell(id)}\`: ${cell(m.outcome)}, ${cell(m.note, 200)} (${cell(m.recorder, 60)}${assistedText(m)})`);
       } else if (p) {
         lines.push(`- \`${cell(id)}\`: recorded ${cell(p.outcome)}, ${cell(p.note, 200)} (${cell(p.recorder, 60)}${assistedText(p)}); the report resolves once the other checks are recorded`);
+      } else if (redo.has(id)) {
+        const r = redo.get(id)!;
+        lines.push(
+          `- \`${cell(id)}\`: awaiting a human again: ${cell(r.outcome)} at \`${cell(r.head_sha.slice(0, 7))}\` (attempt ${r.attempt}), the head moved (\`factory record-manual\`)`,
+        );
       } else {
         lines.push(`- \`${cell(id)}\`: awaiting a human (\`factory record-manual\`)`);
       }

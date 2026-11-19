@@ -80,11 +80,12 @@ Commands:
   escalate <run_id> --reason <text>
                                 Stop the run to wait on a human (no-op when it
                                 is already blocked or escalated)
-  continue <run_id> --reason <text>
+  continue <run_id> --reason <text> [--trigger <t>] [--run-budget <dur>]
                                 Take an escalated run whose latest attempt failed
-                                or errored back to implementing, under the same
-                                contract and authorization (deadline and attempt
-                                budget are not reset)
+                                or errored, or a run whose PR is open, back to
+                                implementing, under the same contract and
+                                authorization (the attempt budget is not reset;
+                                a run with a PR gets a new deadline)
   check [--contract <file>]     Readiness: is the contract valid and runnable in
                                 this project? Prints ready or needs_human with
                                 questions (no run needed). Without --contract,
@@ -124,7 +125,11 @@ Options:
   --work-type <type>    start: e.g. feature, bug
   --contract <file>     approve, check: the contract (check: optional)
   --run-budget <dur>    approve: run deadline after first approval
-                        (default: run-budget setting, else ${SETTING_DEFAULTS["run-budget"]})
+                        (default: run-budget setting, else ${SETTING_DEFAULTS["run-budget"]});
+                        continue, for a run with a PR: the new deadline's
+                        budget (default: the one fixed at approval)
+  --trigger <t>         continue, for a pr_open run only: review_finding or
+                        operator_request (default); other runs' is derived
   --timeout <dur>       exec, validate: timeout per command
                         (default: command-timeout setting, else ${SETTING_DEFAULTS["command-timeout"]})
   --issue-file <file>   review-input: the issue text to put in the bundle
@@ -168,6 +173,7 @@ const VALUE_FLAGS = new Set([
   "--lock-timeout",
   "--issue-file",
   "--reason",
+  "--trigger",
   "--title",
   "--body-file",
   "--note",
@@ -413,10 +419,12 @@ function describeMatch(r: AuthorizationMatch): string {
     ...(r.fix
       ? [
           `  fix:       attempt ${r.fix.attempt} ${r.fix.outcome}${r.fix.error ? ` (${r.fix.error.cause}: ${r.fix.error.reason})` : ""}`,
+          ...(r.fix.trigger ? [`    re-entry: ${r.fix.trigger}: ${r.fix.reason}`] : []),
           ...r.fix.blocking_findings.map((f) => `    - ${f.id}: ${f.detail}`),
           ...(r.fix.report_path ? [`    report: ${r.fix.report_path}`] : []),
         ]
       : []),
+    ...(r.reentry ? [`  re-entered: ${r.reentry.count}x, latest ${r.reentry.trigger} after attempt ${r.reentry.attempt}`] : []),
   ].join("\n");
 }
 
@@ -645,11 +653,18 @@ async function dispatch(db: Database, command: string, p: Parsed, json: boolean)
     }
     case "continue": {
       const runId = need(arg, "run_id");
-      const r = continueRun(db, runId, { reason: need(str(p, "--reason"), "--reason <text>"), owner });
+      const budget = str(p, "--run-budget");
+      const r = continueRun(db, runId, {
+        reason: need(str(p, "--reason"), "--reason <text>"),
+        owner,
+        trigger: str(p, "--trigger"),
+        budgetMs: budget === undefined ? undefined : parseDuration(budget),
+      });
       const err = r.error ? `, ${r.error.cause}: ${r.error.reason}` : "";
+      const back = r.reentry ? `\n  re-entry: ${r.reentry.trigger}, PR #${r.reentry.pr_number} (deadline was ${r.reentry.previous_deadline ?? "-"})` : "";
       return {
         result: r,
-        text: `${runId}: ${r.changed ? "back to implementing" : "already implementing"} after attempt ${r.attempt} (${r.outcome}${err})\n  attempts: ${r.attempts_used} of ${r.max_attempts} used\n  deadline: ${r.run.deadline_at ?? "-"}`,
+        text: `${runId}: ${r.changed ? "back to implementing" : "already implementing"} after attempt ${r.attempt} (${r.outcome}${err})${back}\n  attempts: ${r.attempts_used} of ${r.max_attempts} used\n  deadline: ${r.run.deadline_at ?? "-"}`,
       };
     }
     case "revoke": {

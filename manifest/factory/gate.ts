@@ -5,6 +5,7 @@ import { diffStat, identityHolds } from "./revision.ts";
 import type { FactorySettings } from "./settings.ts";
 import type { ReportView } from "./report-section.ts";
 import type { Owner } from "./owner.ts";
+import { reentries, type ReentryTrigger } from "./reentry.ts";
 
 /**
  * The gate in report-only mode (docs/FACTORY_DESIGN.md §6.3, #110). For the
@@ -29,6 +30,7 @@ export const GATE_RULES = [
   "diff_lines",
   "diff_files",
   "attempts",
+  "reentry",
 ] as const;
 export type GateRule = (typeof GATE_RULES)[number];
 
@@ -39,7 +41,11 @@ export type GateResult = {
   recommendation: GateRecommendation;
   /** One per failed rule, in rule order; empty for auto_merge. */
   reasons: string[];
-  /** Every rule with its result, for the event and for tests. */
+  /**
+   * Every rule that applies, with its result, for the event and for tests.
+   * `reentry` applies only to a run re-entered after its PR opened (#97),
+   * so a run never re-entered has the other ten.
+   */
   checks: GateCheck[];
 };
 
@@ -59,6 +65,8 @@ export type GateFacts = {
   /** The diff's size, or null with why it couldn't be measured. */
   diff: { files: number; lines: number } | { unknown: string };
   attempts: number;
+  /** Re-entries after the PR opened (#97), oldest first; absent or empty for a run never re-entered. */
+  reentries?: { trigger: ReentryTrigger; attempt: number }[];
 };
 
 export function gateLimits(s: Pick<FactorySettings, "gateMaxDiffLines" | "gateMaxDiffFiles" | "gateMaxAdvisories" | "gateMaxAttempts">): GateLimits {
@@ -149,6 +157,18 @@ export function evaluateGate(f: GateFacts, limits: GateLimits): GateResult {
     }`,
   );
 
+  // A re-entered run went back to implementation after its PR opened (#97):
+  // the PR as first recommended wasn't merged as is, so it always pings.
+  const back = f.reentries ?? [];
+  if (back.length) {
+    const last = back[back.length - 1];
+    check(
+      "reentry",
+      false,
+      `the run was re-entered after its PR opened: ${back.length} time${back.length === 1 ? "" : "s"}, latest ${last.trigger} after attempt ${last.attempt}`,
+    );
+  }
+
   const reasons = checks.filter((c) => !c.ok).map((c) => c.detail);
   return { mode: "report-only", recommendation: reasons.length === 0 ? "auto_merge" : "ping", reasons, checks };
 }
@@ -185,6 +205,7 @@ export function gatherFacts(db: Database, run: RunRow, report: GateReport, autho
     advisories: findings.filter((f) => f.severity === "advisory" && !f.id.startsWith("assertion:") && !f.id.startsWith("policy:")).map((f) => f.id),
     diff: measureDiff(run.worktree_path, report),
     attempts,
+    reentries: reentries(db, run.run_id).map((r) => ({ trigger: r.trigger, attempt: r.attempt })),
   };
 }
 

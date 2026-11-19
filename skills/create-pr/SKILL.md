@@ -52,6 +52,7 @@ bash "$FACTORY" --check && bash "$FACTORY" --json authorization
   bash "$FACTORY" --json pr '{run_id}' --title '{title}' --body-file '{artifact_dir}/pr/narrative.md'
   ```
   Single-quote the run ID and title (a `'` in the title is written `'\''`). For `refresh_pr` the title is optional; the PR keeps its own unless you pass one.
+  - **Refresh after a re-entry** (#97): when `factory authorization` has a non-null `.result.reentry` and `next` is `pr` or `refresh_pr`, the run went back to implementation after its PR opened and passed again, and `factory pr` updates the same PR. The narrative written when the PR was created is stale now, so rewrite it for the PR as it is: what changed since (each re-entry's trigger and reason), and the manual checks awaiting a human again on the new head. Always pass the rewritten narrative with `--body-file`: without it, `factory pr` keeps the old narrative and replaces only its report section. Expect `Gate: ping`: a re-entered run never gets `auto_merge`.
   - **`.ok`:** report `.result.url`, `.result.pr_number` and `.result.action`: `created`, `updated`, or `recovered` (an earlier, interrupted call had created it). Running it again is safe: it finds the PR an earlier call created.
     Also report the gate (#110, docs/FACTORY_DESIGN.md §6.3): `.result.gate.recommendation`, `auto_merge` or `ping`, with each of `.result.gate.reasons`, as `Gate: {recommendation}: {reasons}`. The PR's report section shows the same. The gate is report-only: never merge, whatever it recommends; the operator merges.
   - **No JSON, or exit status 128 or more:** the runner died, possibly after GitHub created the PR. Run the same command again: the lookup finds that PR and records it (`action: recovered`), never a second one.
@@ -337,11 +338,12 @@ Update it with `mcp__github__update_pull_request`.
 
 ---
 
-**Version:** 1.4.0
-**Last Updated:** 2026-11-18
+**Version:** 1.5.0
+**Last Updated:** 2026-11-19
 **Maintained By:** Escapement
 **Converted From:** commands/open-pr.md
 **Changelog:**
+- v1.5.0: Under authorization, a refresh after a re-entry (`.result.reentry` set, #97) rewrites the PR narrative and passes it with `--body-file`, so the PR no longer describes the first take
 - v1.4.0: Under authorization, report the gate's recommendation from `factory pr`'s `.result.gate` (`auto_merge` or `ping`, with its reasons); report-only, never merged (#110)
 - v1.3.0: Plain path acts on GitHub as the agent: `factory push` pushes the branch (operator push only when no agent identity is configured or origin isn't on github.com, with a notice), and the PR and labels go through the GitHub MCP tools, never the GitHub CLI (#80)
 - v1.2.0: Under authorization, a `factory pr` that dies without JSON is run again; the lookup records the PR it created (#65)

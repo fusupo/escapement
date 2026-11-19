@@ -2,6 +2,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { evaluateGate, gatherFacts, recordGate, latestGate, gateLimits, type GateFacts, type GateLimits, type GateReport } from "./factory/gate.ts";
 import { getRun } from "./factory/state.ts";
+import { recordReentry } from "./factory/reentry.ts";
 import { parseFactorySettings } from "./factory/settings.ts";
 import { currentOwner } from "./factory/owner.ts";
 import { assert, makeRepo, memDb, seedRun, sh, cleanup } from "./factory/testkit.ts";
@@ -156,6 +157,27 @@ async function run() {
   );
 
   {
+    const back = facts({ reentries: [{ trigger: "review_finding", attempt: 1 }] });
+    const r = evaluateGate(back, { ...LIMITS, maxAttempts: 9 });
+    assert(
+      r.recommendation === "ping" && r.reasons.length === 1 && r.checks.filter((c) => !c.ok).map((c) => c.rule).join() === "reentry" &&
+        r.reasons[0].includes("re-entered after its PR opened") && r.reasons[0].includes("review_finding after attempt 1"),
+      "a re-entered run gives ping with a reason naming the re-entry, even when every other rule holds",
+    );
+    const both = evaluateGate(facts({ attempts: 2, reentries: [{ trigger: "manual_check_failed", attempt: 1 }] }), LIMITS);
+    assert(
+      both.recommendation === "ping" && both.checks.filter((c) => !c.ok).map((c) => c.rule).join() === "attempts,reentry" &&
+        both.reasons.some((x) => x.includes("over gate-max-attempts (1)")) && both.reasons.some((x) => x.includes("manual_check_failed")),
+      "with gate-max-attempts 1 a re-entered run shows both the attempts reason and the re-entry reason",
+    );
+    const never = evaluateGate(facts({ reentries: [] }), LIMITS);
+    assert(
+      never.checks.length === 10 && !never.checks.some((c) => c.rule === "reentry") && r.checks.length === 11 && r.checks.some((c) => c.rule === "reentry"),
+      "the reentry check is emitted only when the run was re-entered",
+    );
+  }
+
+  {
     const manyFacts = facts({ tier: { actual: "sensitive", reasons: [] }, outcome: "pending_manual", advisories: ["review:1"], attempts: 2 });
     const many = evaluateGate(manyFacts, LIMITS);
     const unknown = facts({ diff: { unknown: "bad revision 'deadbeef'" } });
@@ -196,6 +218,18 @@ async function run() {
     );
     assert(f.diff && !("unknown" in f.diff) && f.diff.files === 1 && f.diff.lines === 3, "the diff is measured from the report's merge base to its head");
     assert(f.attempts === 2 && f.pendingManual.join() === "AC-2.e1" && f.head.ok, "attempts count interrupted ones; pending manual checks are named");
+    {
+      recordReentry(db, "r1", {
+        trigger: "operator_request", reason: "x", pr_number: 7, from_state: "pr_open", attempt: 2, head_sha: head, outcome: "pass",
+        gate_recommendation: "auto_merge", gate_reasons: [], previous_deadline: null, deadline: null, run_budget_ms: null,
+      });
+      const g = gatherFacts(db, getRun(db, "r1"), report, "sha256:aa");
+      assert(
+        f.reentries?.length === 0 && g.reentries?.length === 1 && g.reentries[0].trigger === "operator_request" && g.reentries[0].attempt === 2,
+        "the gate reads a run's re-entries from its events",
+      );
+      db.prepare("DELETE FROM factory_events WHERE run_id = 'r1' AND json_extract(detail_json, '$.entity') = 'reentry'").run();
+    }
     const noBase = gatherFacts(db, getRun(db, "r1"), { ...report, merge_base_sha: undefined }, "sha256:aa");
     const bad = gatherFacts(db, getRun(db, "r1"), { ...report, merge_base_sha: "0".repeat(40) }, "sha256:aa");
     assert(

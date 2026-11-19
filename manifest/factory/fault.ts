@@ -43,6 +43,8 @@ export const FAULT_POINTS = [
   "pr.gate_recorded",
   /** pr: `gh pr create` succeeded, the PR number is not yet recorded. */
   "pr.created",
+  /** pr: an existing PR's body was patched (a refresh, after a re-entry for example, #97); the update is not yet recorded and a validated run is not yet pr_open. */
+  "pr.updated",
   /** pr: the PR number is recorded, before the result is printed. */
   "pr.recorded",
 ] as const;

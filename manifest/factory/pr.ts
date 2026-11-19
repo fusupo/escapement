@@ -154,8 +154,13 @@ export async function openPr(
 
     const contract = readJson<{ criteria: CriterionView[] }>(join(run.artifact_dir, "contract.json"), "contract");
     // Outcomes recorded so far, while the report still awaits other checks (#103).
+    // And checks to do again: recorded on an earlier head, before a re-entry (#97).
     const progress = report.outcome === "pending_manual" ? manualProgress(db, run) : null;
-    const view = progress?.recorded.length ? { ...report, manual_recorded: progress.recorded } : report;
+    const view = {
+      ...report,
+      ...(progress?.recorded.length ? { manual_recorded: progress.recorded } : {}),
+      ...(progress?.redo.length ? { manual_redo: progress.redo } : {}),
+    };
     const section = renderSection(view, contract.criteria, run.branch, attemptHistory(db, run.run_id), gate);
     const base = opts.narrative ?? existing?.body ?? "";
     const body = withSection(base, section);
@@ -174,6 +179,7 @@ export async function openPr(
       gh(args, { token, env });
       number = existing.number;
       url = existing.url;
+      faultPoint("pr.updated");
     } else {
       const base = run.target_ref.replace(/^origin\//, "");
       url = gh(

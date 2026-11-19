@@ -64,9 +64,10 @@ async function run() {
     assert(RUN_TRANSITIONS.escalated.join() === "implementing,closed", "and otherwise only be closed");
     seedRun(db, "fl2", { state: "blocked" });
     throws(() => transitionRun(db, "fl2", "implementing"), /illegal_transition/, "a blocked run can only be closed");
-    for (const from of ["validated", "pr_open"] as const) {
-      assert(!RUN_TRANSITIONS[from].includes("implementing"), `${from} has no way back to implementing (#97)`);
-    }
+    assert(
+      RUN_TRANSITIONS.pr_open.includes("implementing") && !RUN_TRANSITIONS.validated.includes("implementing"),
+      "pr_open can go back to implementing, but validated still cannot",
+    );
   }
 
   {

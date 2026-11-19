@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { activeAuthorization, contractDigest, deadlinePassed } from "./runs.ts";
 import { currentReport } from "./attempts.ts";
 import type { AttemptRow, RunRow, RunState } from "./state.ts";
+import { reentries, reentrySummary, type ReentrySummary, type ReentryTrigger } from "./reentry.ts";
 
 /**
  * Does the current worktree have a factory run whose active authorization
@@ -47,10 +48,22 @@ export type LatestAttempt = { attempt: number; status: string; outcome: string |
  * attempt's blocking findings and, for an error, its cause. Set while the
  * run is implementing after a failed or errored attempt, through the fix
  * loop or `factory continue`; null otherwise.
+ *
+ * After a re-entry (#97, `factory continue` on a run with a PR), it is set
+ * too, with the re-entry's `trigger` and the operator's `reason`:
+ * - `review_finding`, `operator_request`: no blocking findings (the
+ *   attempt passed); the reason is the work;
+ * - `manual_check_failed`: the `manual:{id}` blocking findings of the
+ *   attempt's current report revision, which record-manual writes;
+ * - `attempt_failed`: the attempt's blocking findings, as in the fix loop.
+ * A plain fix-loop handoff has `trigger` and `reason` null.
  */
 export type FixHandoff = {
   attempt: number;
-  outcome: "fail" | "error";
+  /** The attempt's outcome: fail or error, or (re-entry from an open PR) pass or pending_manual. */
+  outcome: string;
+  trigger: ReentryTrigger | null;
+  reason: string | null;
   error: { cause: string; reason: string } | null;
   blocking_findings: { id: string; detail: string; location?: string }[];
   /** The attempt's current report, with every finding and the logs. */
@@ -79,6 +92,8 @@ export type AuthorizationMatch =
       latest_attempt: LatestAttempt | null;
       next: NextStep;
       fix: FixHandoff | null;
+      /** Re-entries after the PR opened (#97): how many, and the latest's trigger, attempt and reason; null if never re-entered. */
+      reentry: ReentrySummary | null;
     };
 
 const MATCHABLE: readonly RunState[] = ["approved", "implementing", "validating", "validated", "pr_open"];
@@ -125,27 +140,49 @@ function prShowsCurrentReport(db: Database, run: RunRow): boolean {
   return current !== null && written.attempt === current.attempt && written.report_revision === current.revision;
 }
 
-/** The fix handoff for a run back in implementing after a failed or errored attempt (see FixHandoff). */
+type Finding = { id: string; severity: string; detail: string; location?: string };
+
+const blockingOf = (findings: Finding[]) =>
+  findings.filter((f) => f.severity === "blocking").map((f) => ({ id: f.id, detail: f.detail, ...(f.location ? { location: f.location } : {}) }));
+
+/** The fix handoff for a run back in implementing after a failed or errored attempt, or a re-entry (see FixHandoff). */
 export function fixHandoff(db: Database, run: RunRow): FixHandoff | null {
   if (run.state !== "implementing") return null;
   const a = db
     .prepare("SELECT * FROM factory_attempts WHERE run_id = ? ORDER BY attempt DESC LIMIT 1")
     .get(run.run_id) as AttemptRow | undefined;
-  if (!a || a.status !== "complete" || (a.outcome !== "fail" && a.outcome !== "error")) return null;
-  let findings: { id: string; severity: string; detail: string; location?: string }[] = [];
+  if (!a || a.status !== "complete") return null;
+  const back = reentries(db, run.run_id).filter((r) => r.attempt === a.attempt).pop() ?? null;
+  if (!back && a.outcome !== "fail" && a.outcome !== "error") return null;
+  let findings: Finding[] = [];
   try {
     findings = a.findings_json ? JSON.parse(a.findings_json) : [];
   } catch {
     findings = [];
   }
+  let blocking = blockingOf(findings);
+  let reportPath = a.report_path ?? null;
+  if (back?.trigger === "review_finding" || back?.trigger === "operator_request") blocking = [];
+  if (back?.trigger === "manual_check_failed") {
+    // record-manual writes the manual:{id} findings into the report's new revision only.
+    try {
+      const current = currentReport(db, run);
+      if (current && current.attempt === a.attempt) {
+        blocking = blockingOf((current.report.findings ?? []) as Finding[]);
+        reportPath = current.path;
+      }
+    } catch {
+      // An unreadable report leaves the attempt's own findings.
+    }
+  }
   return {
     attempt: a.attempt,
-    outcome: a.outcome,
+    outcome: a.outcome ?? "",
+    trigger: back?.trigger ?? null,
+    reason: back?.reason ?? null,
     error: a.error_cause ? { cause: a.error_cause, reason: a.error_reason ?? "" } : null,
-    blocking_findings: findings
-      .filter((f) => f.severity === "blocking")
-      .map((f) => ({ id: f.id, detail: f.detail, ...(f.location ? { location: f.location } : {}) })),
-    report_path: a.report_path ?? null,
+    blocking_findings: blocking,
+    report_path: reportPath,
   };
 }
 
@@ -203,5 +240,6 @@ export function matchAuthorization(
     latest_attempt: latest,
     next: nextStep(run.state, latest, run.state === "pr_open" && prShowsCurrentReport(db, run)),
     fix: fixHandoff(db, run),
+    reentry: reentrySummary(db, run.run_id),
   };
 }

@@ -6,6 +6,7 @@ import { startRun, approveRun } from "./factory/runs.ts";
 import { getRun, transitionRun } from "./factory/state.ts";
 import { openPr } from "./factory/pr.ts";
 import { recordManual } from "./factory/manual.ts";
+import { continueRun } from "./factory/fixloop.ts";
 import { setFaultKill, FAULT_ENV } from "./factory/fault.ts";
 import { currentOwner } from "./factory/owner.ts";
 import { matchAuthorization } from "./factory/authorization.ts";
@@ -472,6 +473,108 @@ async function run() {
   st.prs.find((p) => p.number === ys[0].number)!.state = "CLOSED";
   stub.setState({ prs: st.prs });
   await rejects(openPr(db, b.run.run_id, o), /pr_not_open/, "the recorded PR was closed: pr_not_open");
+
+  console.log("\nRe-entry after the PR opened (#97)\n");
+  {
+    /** After continue: commit a change, then a new complete attempt at the new head, and the run validated again. */
+    const revalidated = (runId: string, outcome: string, extra: Record<string, unknown> = {}) => {
+      const run = getRun(db, runId);
+      writeFileSync(join(run.worktree_path, "fix.txt"), `fixed ${Date.now()}\n`);
+      sh("git", ["add", "-A"], run.worktree_path);
+      sh("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "fix"], run.worktree_path);
+      const head = sh("git", ["rev-parse", "HEAD"], run.worktree_path);
+      transitionRun(db, runId, "validating");
+      const n = (db.prepare("SELECT COUNT(*) AS n FROM factory_attempts WHERE run_id = ?").get(runId) as { n: number }).n + 1;
+      db.prepare(
+        `INSERT INTO factory_attempts (run_id, attempt, status, outcome, head_sha, contract_digest, policy_version, started_at)
+         VALUES (?, ?, 'complete', ?, ?, ?, 'p', ?)`,
+      ).run(runId, n, outcome, head, run.contract_digest, new Date().toISOString());
+      const dir = join(run.artifact_dir, "attempts", String(n));
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, "report.json"),
+        JSON.stringify({
+          version: 1, run_id: runId, attempt: n, status: "complete", outcome, validation_scope: "branch", head_sha: head,
+          target_ref: run.target_ref, target_sha: head, contract_digest: run.contract_digest,
+          tier: { proposed: "standard", actual: "standard", reasons: [] },
+          evidence: [{ id: "AC-1.e1", executed: "passed", supports_criterion: "yes" }], findings: [], flags: [], ...extra,
+        }),
+      );
+      transitionRun(db, runId, "validated");
+      return head;
+    };
+    const branchPrs = (branch: string) => stub.state().prs.filter((p) => p.headRefName === branch);
+
+    const re = setup(db, "acme/w#60", "60-re");
+    validated(db, re.run.run_id, "pass");
+    const opened = await openPr(db, re.run.run_id, { ...o, title: "feat: re (#60)", narrative: "## Summary\nFirst take.\n" });
+    continueRun(db, re.run.run_id, { reason: "review: rename the flag", trigger: "review_finding", owner });
+    const head2 = revalidated(re.run.run_id, "pass");
+    const refreshed = await openPr(db, re.run.run_id, o);
+    let body = branchPrs("60-re")[0].body;
+    assert(
+      refreshed.action === "updated" && refreshed.pr_number === opened.pr_number && branchPrs("60-re").length === 1 &&
+        refreshed.state === "pr_open" && getRun(db, re.run.run_id).state === "pr_open" && refreshed.attempt === 2 &&
+        refreshed.head_sha === head2 && body.includes(head2.slice(0, 7)) && refreshed.gate.recommendation === "ping",
+      "after re-entry, pr updates the same PR with the new attempt's report and the run is pr_open again",
+    );
+    continueRun(db, re.run.run_id, { reason: "operator: one more pass over the docs", owner });
+    revalidated(re.run.run_id, "pass");
+    const rewritten = await openPr(db, re.run.run_id, { ...o, narrative: "## Summary\nSecond take, after the review.\n" });
+    body = branchPrs("60-re")[0].body;
+    assert(
+      rewritten.action === "updated" && body.startsWith("## Summary\nSecond take") && !body.includes("First take") && count(body, SECTION_BEGIN) === 1,
+      "after re-entry, pr with a new narrative replaces the stale narrative and keeps one report section",
+    );
+
+    // Two manual checks: AC-1.e1 recorded pass, then AC-2.e1 fail, which escalates the run with its PR.
+    const mr = setup(db, "acme/w#61", "61-mr");
+    const h1 = sh("git", ["rev-parse", "HEAD"], mr.root);
+    const manualEvidence = [
+      { id: "AC-1.e1", executed: "pending_manual", supports_criterion: null, procedure_adequate: "yes" },
+      { id: "AC-2.e1", executed: "pending_manual", supports_criterion: null, procedure_adequate: "yes" },
+    ];
+    validated(db, mr.run.run_id, "pending_manual", { ...fullReport(h1), evidence: manualEvidence });
+    await openPr(db, mr.run.run_id, { ...o, title: "feat: mr (#61)" });
+    await recordManual(db, mr.run.run_id, "AC-1.e1", "pass", { note: "saves", recorder: "marc", owner, lockWaitMs: 2000 });
+    await recordManual(db, mr.run.run_id, "AC-2.e1", "fail", { note: "button missing", recorder: "marc", owner, lockWaitMs: 2000 });
+    continueRun(db, mr.run.run_id, { reason: "put the button back", owner });
+    const h2 = revalidated(mr.run.run_id, "pending_manual", { ...fullReport(h1), evidence: manualEvidence });
+    await openPr(db, mr.run.run_id, o);
+    body = branchPrs("61-mr")[0].body;
+    assert(
+      h2 !== h1 && body.includes(`\`AC-1.e1\`: awaiting a human again: pass at \`${h1.slice(0, 7)}\` (attempt 1), the head moved`) &&
+        body.includes(`\`AC-2.e1\`: awaiting a human again: fail at \`${h1.slice(0, 7)}\` (attempt 1)`),
+      "the refreshed section shows which manual checks need doing again",
+    );
+
+    // A crash after the PR is patched, before the update is recorded.
+    const cu = setup(db, "acme/w#62", "62-cu");
+    validated(db, cu.run.run_id, "pass");
+    const cuOpened = await openPr(db, cu.run.run_id, { ...o, title: "feat: cu (#62)" });
+    continueRun(db, cu.run.run_id, { reason: "review: one more case", trigger: "review_finding", owner });
+    const cuHead = revalidated(cu.run.run_id, "pass");
+    const updatesBefore = (db.prepare("SELECT COUNT(*) AS n FROM factory_events WHERE run_id = ? AND json_extract(detail_json, '$.entity') = 'pr'").get(cu.run.run_id) as { n: number }).n;
+    process.env[FAULT_ENV] = "pr.updated";
+    setFaultKill((point) => {
+      throw new Error(`killed at ${point}`);
+    });
+    try {
+      await rejects(openPr(db, cu.run.run_id, o), /killed at pr\.updated/, "the runner dies right after patching the PR");
+    } finally {
+      delete process.env[FAULT_ENV];
+      setFaultKill(null);
+    }
+    const patched = branchPrs("62-cu")[0].body.includes(cuHead.slice(0, 7));
+    const crashed = getRun(db, cu.run.run_id).state;
+    const recovered = await openPr(db, cu.run.run_id, o);
+    const updatesAfter = (db.prepare("SELECT COUNT(*) AS n FROM factory_events WHERE run_id = ? AND json_extract(detail_json, '$.entity') = 'pr'").get(cu.run.run_id) as { n: number }).n;
+    assert(
+      patched && crashed === "validated" && recovered.action === "updated" && recovered.pr_number === cuOpened.pr_number &&
+        recovered.state === "pr_open" && branchPrs("62-cu").length === 1 && updatesAfter === updatesBefore + 1,
+      "a crash after the PR is patched (pr.updated) leaves the run validated, and pr again records updated and pr_open with one PR",
+    );
+  }
 
   const c = setup(db, "acme/w#44", "44-z");
   validated(db, c.run.run_id, "pass");

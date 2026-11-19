@@ -5,6 +5,7 @@ import { projectContext } from "./factory/context.ts";
 import { startRun, approveRun } from "./factory/runs.ts";
 import { getRun, transitionRun } from "./factory/state.ts";
 import { archiveRun } from "./factory/archive.ts";
+import { continueRun } from "./factory/fixloop.ts";
 import { currentOwner } from "./factory/owner.ts";
 import { assert, cleanup, makeRepo, memDb, tempDir, sh, stubGh, contractFor } from "./factory/testkit.ts";
 
@@ -178,6 +179,49 @@ async function run() {
     assert(
       res.operator_action === "rejected" && res.closed === "abandoned" && getRun(db, g).operator_action === "rejected",
       "a PR closed unmerged after a changes-requested review is recorded as rejected",
+    );
+  }
+
+  {
+    // Re-entry after the PR opened (#97), through continue: a second attempt
+    // at the PR's final head, so the head is the validated one.
+    const FIXED = "c".repeat(40);
+    const reenter = (runId: string) => {
+      continueRun(db, runId, { reason: "review: rename the flag", trigger: "review_finding", owner });
+      transitionRun(db, runId, "validating");
+      db.prepare(
+        "INSERT INTO factory_attempts (run_id, attempt, status, outcome, head_sha, contract_digest, policy_version, started_at) VALUES (?, 2, 'complete', 'pass', ?, 'd', 'p', 'now')",
+      ).run(runId, FIXED);
+      transitionRun(db, runId, "validated");
+      transitionRun(db, runId, "pr_open");
+    };
+    const m = newRun("acme/w#42");
+    withPr(m, "MERGED", { headRefOid: FIXED });
+    reenter(m);
+    const res = await archiveRun(db, m, { ...o, path: where, close: true });
+    const ev = actionEvents(m)[0] as ActionEvent & { reentries?: { trigger: string; gate_recommendation: string | null; attempt: number; head_sha: string }[] };
+    assert(
+      res.operator_action === "changes_requested" && res.closed === "merged" && ev.validated_head === FIXED && ev.final_head === FIXED &&
+        ev.changes_requested_by.length === 0,
+      "a merged run that re-entered after its PR opened is recorded as changes_requested even when the head is the validated head",
+    );
+    assert(
+      ev.reentries?.length === 1 && ev.reentries[0].trigger === "review_finding" && ev.reentries[0].gate_recommendation === "auto_merge" &&
+        ev.reentries[0].attempt === 1 && ev.reentries[0].head_sha === VALIDATED,
+      "the operator_action event lists the re-entries with trigger, gate recommendation, head and attempt",
+    );
+
+    const rj = newRun("acme/w#42");
+    withPr(rj, "CLOSED", { headRefOid: FIXED, reviews: changesRequested });
+    reenter(rj);
+    const rjRes = await archiveRun(db, rj, { ...o, path: where, close: true });
+    const ab = newRun("acme/w#42");
+    withPr(ab, "CLOSED", { headRefOid: FIXED });
+    reenter(ab);
+    const abRes = await archiveRun(db, ab, { ...o, path: where, close: true });
+    assert(
+      rjRes.operator_action === "rejected" && abRes.operator_action === "abandoned" && rjRes.closed === "abandoned" && abRes.closed === "abandoned",
+      "a re-entered run closed unmerged is rejected after a changes-requested review and abandoned without one",
     );
   }
 
