@@ -1,8 +1,11 @@
 // Agent-assisted manual checks (#103): the validate-work text that carries
 // out a manual check and leaves the outcome to the operator, and the
-// archive-work copy list that keeps the attachments.
-import { readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
+// archive-work copy list that keeps the attachments and, since #101, the
+// plan critique.
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assert } from "./factory/testkit.ts";
 
@@ -97,17 +100,104 @@ function validateWork() {
   );
 }
 
+/** Every file under `dir`, as sorted paths relative to it. */
+function files(dir: string): string[] {
+  const out: string[] = [];
+  const walk = (d: string) => {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      const p = join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else out.push(relative(dir, p));
+    }
+  };
+  walk(dir);
+  return out.sort();
+}
+
+/**
+ * Runs Phase 6.5 step 1's copy block, as the skill writes it, on an artifact
+ * dir holding `fixture`. Returns the exit status and what landed in DEST.
+ */
+function runCopy(block: string, fixture: string[]): { status: number | null; copied: string[] } {
+  const tmp = mkdtempSync(join(tmpdir(), "archive-copy-"));
+  try {
+    const art = join(tmp, "artifacts");
+    for (const f of fixture) {
+      mkdirSync(dirname(join(art, f)), { recursive: true });
+      writeFileSync(join(art, f), f);
+    }
+    const archive = join(tmp, "archive");
+    const runId = "owner-repo#42-r1";
+    const script = block.replaceAll("{artifact_dir}", art).replaceAll("{run_id}", runId);
+    const r = spawnSync("bash", ["-c", script], { env: { ...process.env, ARCHIVE_DIR: archive }, encoding: "utf-8" });
+    const dest = join(archive, "runs", runId);
+    let copied: string[] = [];
+    try {
+      copied = files(dest);
+    } catch {
+      copied = [];
+    }
+    return { status: r.status, copied };
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 function archiveWork() {
-  console.log("\narchive-work: the manual-check attachments\n");
+  console.log("\narchive-work: the run's copied artifacts\n");
   const skill = read("skills/archive-work/SKILL.md");
   const phase = section(skill, "### Phase 6.5: Archive the Factory Run");
   const find = phase.match(/find \. -type f \\\((.*?)\\\)\)/)?.[1] ?? "";
+  assert(find.includes("-path ./critique.json"), "archive-work's Phase 6.5 copy list includes critique.json");
+
+  // Step 1's copy block only: step 2's block runs the factory runner.
+  const s1 = phase.slice(phase.indexOf("1. **Copy**"), phase.indexOf("2. **Record it"));
+  const block = s1.match(/```bash\n([\s\S]*?)```/)?.[1] ?? "";
+  const kept = [
+    "contract.json",
+    "review.json",
+    "report.json",
+    "report.r2.json",
+    "pr/body.md",
+    "manual/AC-1.e1/observations.md",
+  ];
+  const withCritique = runCopy(block, [...kept, "critique.json", "logs/x.log"]);
+  const without = runCopy(block, [...kept, "logs/x.log"]);
+  assert(
+    block.includes("find .") &&
+      !block.includes("factory") &&
+      withCritique.status === 0 &&
+      withCritique.copied.includes("critique.json") &&
+      without.status === 0 &&
+      without.copied.length > 0 &&
+      !without.copied.includes("critique.json"),
+    "archive-work's Phase 6.5 copy command copies critique.json when present and succeeds without it",
+  );
+  assert(
+    JSON.stringify(withCritique.copied) === JSON.stringify([...kept, "critique.json"].sort()) &&
+      JSON.stringify(without.copied) === JSON.stringify([...kept].sort()),
+    "archive-work's Phase 6.5 copy command keeps the other run artifacts and leaves out logs",
+  );
+
   assert(
     find.includes("-path './manual/*'") &&
       find.includes("-name contract.json") &&
       find.includes("-path ./pr/body.md") &&
       !find.includes("logs"),
     "archive-work's Phase 6.5 copy list includes the manual attachments",
+  );
+
+  // The prose, not the find list in the fenced block, has to name it.
+  const prose = phase.replace(/```[\s\S]*?```/g, "");
+  const previewAt = skill.indexOf("With a factory run (Phase 2, step 5), also show:");
+  const open = skill.indexOf("```", previewAt);
+  const preview = previewAt < 0 || open < 0 ? "" : skill.slice(previewAt, skill.indexOf("```", open + 3));
+  const changelog = skill.slice(skill.indexOf("**Changelog:**"));
+  assert(
+    /critique\.json|plan critique/.test(prose) &&
+      preview.includes("plan critique") &&
+      changelog.split("\n").some((l) => l.startsWith("- v") && l.includes("#101") && l.includes("critique")),
+    "archive-work's SKILL.md names the plan critique outside the copy command: Phase 6.5 prose, the Phase 5 preview and the changelog",
   );
 }
 
