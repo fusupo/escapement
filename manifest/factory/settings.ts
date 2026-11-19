@@ -42,6 +42,14 @@ export type FactorySettings = {
   execHook: (typeof EXEC_HOOK_MODES)[number];
   gateMode: (typeof GATE_MODES)[number];
   /**
+   * The gate's limits (§6.3, #110): a PR recommends auto_merge only when its
+   * diff, its advisory findings and the run's attempts stay within them.
+   */
+  gateMaxDiffLines: number;
+  gateMaxDiffFiles: number;
+  gateMaxAdvisories: number;
+  gateMaxAttempts: number;
+  /**
    * The project's browser test tool, or null. Only reported by `check`, for
    * setup-work, its planner and the plan critic to plan UI criteria as test
    * evidence (#104); the runner does nothing else with it.
@@ -66,6 +74,10 @@ export const FACTORY_KEYS = [
   "run-budget",
   "exec-hook",
   "gate-mode",
+  "gate-max-diff-lines",
+  "gate-max-diff-files",
+  "gate-max-advisories",
+  "gate-max-attempts",
   "browser-tests",
 ] as const;
 
@@ -78,6 +90,10 @@ export const SETTING_DEFAULTS = {
   "run-budget": "2h",
   "exec-hook": "on",
   "gate-mode": "report-only",
+  "gate-max-diff-lines": "400",
+  "gate-max-diff-files": "15",
+  "gate-max-advisories": "0",
+  "gate-max-attempts": "1",
 } as const;
 
 export type SettingsError = { key: string; message: string };
@@ -147,6 +163,16 @@ export function parseFactorySettings(raw: Map<string, string>): { settings: Fact
     errors.push({ key: "max-attempts", message: `"${attempts}" is not a positive whole number` });
   }
 
+  // The gate's limits (#110): lines, files and advisories may be 0; a run
+  // always makes at least one attempt, so its limit is at least 1.
+  const count = (key: "gate-max-diff-lines" | "gate-max-diff-files" | "gate-max-advisories" | "gate-max-attempts"): number => {
+    const value = withDefault(key);
+    const positive = key === "gate-max-attempts";
+    if ((positive ? /^[1-9]\d*$/ : /^\d+$/).test(value)) return Number(value);
+    errors.push({ key, message: `"${value}" is not a ${positive ? "positive" : "non-negative"} whole number` });
+    return Number(SETTING_DEFAULTS[key]);
+  };
+
   const bt = get("browser-tests");
   let browserTests: BrowserTestTool | null = null;
   if (bt !== null) {
@@ -170,6 +196,10 @@ export function parseFactorySettings(raw: Map<string, string>): { settings: Fact
     runBudgetMs: duration("run-budget"),
     execHook: oneOf("exec-hook", withDefault("exec-hook"), EXEC_HOOK_MODES, errors, "on"),
     gateMode: oneOf("gate-mode", withDefault("gate-mode"), GATE_MODES, errors, "report-only"),
+    gateMaxDiffLines: count("gate-max-diff-lines"),
+    gateMaxDiffFiles: count("gate-max-diff-files"),
+    gateMaxAdvisories: count("gate-max-advisories"),
+    gateMaxAttempts: count("gate-max-attempts"),
     browserTests,
   };
   return { settings, errors };

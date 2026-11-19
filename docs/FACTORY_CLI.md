@@ -133,6 +133,10 @@ The runner reads the factory keys of `## Escapement Settings` (FACTORY_DESIGN.md
 | `command-timeout`, `lock-timeout`, `run-budget` | duration | `15m`, `30m`, `2h` |
 | `exec-hook` | `on`, `off`: the exec guard during runs | `on` |
 | `gate-mode` | `report-only` | `report-only` |
+| `gate-max-diff-lines` | whole number: the most lines (added plus removed) a PR may change and still be recommended for auto-merge | `400` |
+| `gate-max-diff-files` | whole number: the most files a PR may change and still be recommended for auto-merge | `15` |
+| `gate-max-advisories` | whole number: the most advisory findings a passing attempt may have and still be recommended for auto-merge | `0` |
+| `gate-max-attempts` | positive whole number: the most attempts a run may use and still be recommended for auto-merge | `1` |
 | `browser-tests` | `playwright`: the project has browser tests, so setup-work, its planner and the plan critic plan UI criteria as browser-test evidence. `check` reports it; the runner does nothing else with it ([Browser tests as evidence](#browser-tests-as-evidence)) | none |
 
 - Settings are read when a command needs them, not copied per run. Their digest (factory keys only) is reported by `check` and goes into each report's `policy_version`. A branch that changes them is an execution-policy change (§4.6), so weakening them is visible to review.

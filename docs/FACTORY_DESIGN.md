@@ -753,6 +753,10 @@ Extends `## Escapement Settings` in each project's CLAUDE.md:
 - **run-budget**: 2h
 - **exec-hook**: on
 - **gate-mode**: report-only
+- **gate-max-diff-lines**: 400
+- **gate-max-diff-files**: 15
+- **gate-max-advisories**: 0
+- **gate-max-attempts**: 1
 ```
 
 All keys optional. Missing `static`/`verify` → `blocked` ("not configured"). `required-checks` cannot be narrowed by a contract. `test-results` should reference `$FACTORY_RESULTS_DIR` (for jest-junit, set `JEST_JUNIT_OUTPUT_DIR` from it). If a test runner can only write to a fixed path inside the worktree, it must be gitignored; the runner clears it before each invocation and moves results into the artifact dir afterward (§4.4). `run-budget` sets the enforced run deadline; agent time and token figures are advisory.
@@ -762,6 +766,8 @@ All keys optional. Missing `static`/`verify` → `blocked` ("not configured"). `
 *As built (#64):* `exec-hook` defaults to `on`; it governs the exec guard during runs (§4.1).
 
 *As built (#104):* `browser-tests` (`playwright`) says the project's `verify` runs browser tests. `factory check` reports it as `browser_tests` for setup-work, its planner and the plan critic, which then plan UI criteria as browser-test evidence; the runner does nothing else with it. Setting a project up, and the rootDir rule its selectors depend on: [FACTORY_CLI.md](FACTORY_CLI.md#browser-tests-as-evidence).
+
+*As built (#110):* the gate's limits (§6.3) are four settings: `gate-max-diff-lines` (default 400, lines added plus removed), `gate-max-diff-files` (default 15), `gate-max-advisories` (default 0: reviewer findings are only blocking or advisory, so the limit is a count) and `gate-max-attempts` (default 1: only a first-attempt pass is recommended for auto-merge). They are read from the validated head's CLAUDE.md, so a branch that loosens them is an execution-policy change, and the gate recommends `ping` for it. `gate-mode` still accepts only `report-only`.
 
 *As built (#61):* `test-files` (glob list) names test files for classification (§4.6); its default covers common layouts (`*.test.*`, `*.spec.*`, `test/`, `tests/`, `__tests__/`, `test_*.py`, `*_test.py`, `*_test.go`). `base-branch` is the default target for `factory start`.
 

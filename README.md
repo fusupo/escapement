@@ -320,6 +320,10 @@ A project configures Escapement in a `## Escapement Settings` section of its `CL
 | `command-timeout`, `lock-timeout`, `run-budget` | Per-command timeout, lock wait, and the run's deadline from approval | `15m`, `30m`, `2h` |
 | `exec-hook` | The exec guard during runs (`on`, `off`) | `on` |
 | `gate-mode` | How the gate acts on a report | `report-only` |
+| `gate-max-diff-lines` | The gate recommends auto-merge only for a diff of at most this many lines (added plus removed) | `400` |
+| `gate-max-diff-files` | The gate recommends auto-merge only for a diff of at most this many files | `15` |
+| `gate-max-advisories` | The gate recommends auto-merge only with at most this many advisory findings | `0` |
+| `gate-max-attempts` | The gate recommends auto-merge only for a run that passed within this many attempts | `1` |
 | `browser-tests` | The project's browser test tool (`playwright`), so planning writes UI criteria as browser-test evidence. See [Browser tests as evidence](docs/FACTORY_CLI.md#browser-tests-as-evidence) | none |
 
 The factory keys are read by the runner, which applies the same section and fence rules. See [FACTORY_CLI.md Settings](docs/FACTORY_CLI.md#settings) for value formats and glob rules. Escapement's own settings, at the end of its [CLAUDE.md](CLAUDE.md), make it a factory project too.

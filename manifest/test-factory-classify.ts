@@ -135,6 +135,15 @@ function repo() {
   }
 
   {
+    // A branch that loosens its own gate limits (#110) is flagged, so the gate it would loosen says ping.
+    const head = commit(root, { "CLAUDE.md": SETTINGS + "- **gate-max-diff-lines**: 5000\n" }, "loosen the gate");
+    const r = classify(head);
+    const reason = r.policy_reasons.find((p) => p.includes("CLAUDE.md")) ?? "";
+    assert(r.execution_policy === 1 && reason.includes("gate-max-diff-lines"), "a changed gate limit is an execution policy change");
+    sh("git", ["reset", "-q", "--hard", base], root);
+  }
+
+  {
     const head = commit(root, { "CLAUDE.md": SETTINGS + "- **context-path**: ../ctx\n\nMore docs.\n" }, "docs");
     assert(classify(head).execution_policy === 0, "a CLAUDE.md edit that leaves the factory settings alone is not a policy change");
   }
