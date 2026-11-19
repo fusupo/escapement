@@ -248,11 +248,14 @@ async function run() {
       "continue uses the budget fixed at approval, not the branch's setting",
     );
 
-    // A failed manual check sets the attempt's outcome to fail and escalates a pr_open run (record-manual).
+    // An escalated run with a PR goes back too (#97); test-factory-reentry.ts covers the rest.
     const withPr = escalatedAfter([["fail"]]);
     db.prepare("UPDATE factory_runs SET pr_number = 41 WHERE run_id = ?").run(withPr.run_id);
-    throws(() => continueRun(db, withPr.run_id, { reason: "x", maxAttempts: 3 }), /has_pr/, "continue is refused once the run has a PR");
-    assert(getRun(db, withPr.run_id).state === "escalated", "and the run stays escalated (#97)");
+    const back = continueRun(db, withPr.run_id, { reason: "x", maxAttempts: 3, budgetMs: HOUR });
+    assert(
+      back.changed && getRun(db, withPr.run_id).state === "implementing" && back.reentry?.trigger === "attempt_failed",
+      "a run with a PR can continue now, recorded as a re-entry (#97)",
+    );
     const blockedRun = escalatedAfter([["fail"]]);
     db.prepare("UPDATE factory_runs SET state = 'blocked' WHERE run_id = ?").run(blockedRun.run_id);
     throws(() => continueRun(db, blockedRun.run_id, { reason: "x", maxAttempts: 3 }), /wrong_state/, "a blocked run can't continue (only escalated)");

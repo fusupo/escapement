@@ -1,11 +1,12 @@
 import type { Database } from "better-sqlite3";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { FactoryError, blocked } from "./util.ts";
+import { FactoryError, blocked, nowIso } from "./util.ts";
 import { tx, getRun, getAttempt, transitionRun, type AttemptError, type AttemptRow, type RunRow, type RunState } from "./state.ts";
 import { activeAuthorization, contractDigest, deadlinePassed } from "./runs.ts";
 import { readSettings } from "./settings.ts";
 import { faultPoint } from "./fault.ts";
+import { GIVEN_TRIGGERS, recordReentry, reentries, type GivenTrigger, type Reentry, type ReentryTrigger } from "./reentry.ts";
 import type { Owner } from "./owner.ts";
 
 /**
@@ -166,18 +167,20 @@ export function advanceRun(
   });
 }
 
-// ── continue: the operator's way back (slice 1) ───────────────────────
+// ── continue: the operator's way back (#92, #97) ─────────────────────
 
 export type ContinueResult = {
   run: RunRow;
   /** False when the run was already back in implementing after this attempt. */
   changed: boolean;
-  /** The failed or errored attempt the implementer goes back to fix. */
+  /** The latest attempt: the failed or errored one to fix, or (pr_open) the one the PR shows. */
   attempt: number;
   outcome: string;
   error: AttemptError | null;
   attempts_used: number;
   max_attempts: number;
+  /** For a run with a PR (#97): the re-entry recorded for this attempt; null otherwise. */
+  reentry: Reentry | null;
 };
 
 function latestAttempt(db: Database, runId: string): AttemptRow | null {
@@ -187,30 +190,81 @@ function latestAttempt(db: Database, runId: string): AttemptRow | null {
   );
 }
 
+/** Did a human record a manual check of `attempt` (at its head) as failed? */
+function manualCheckFailed(db: Database, runId: string, attempt: AttemptRow): boolean {
+  const rows = db
+    .prepare("SELECT detail_json FROM factory_events WHERE run_id = ? AND kind = 'manual_outcome' ORDER BY id")
+    .all(runId) as { detail_json: string }[];
+  return rows.some((r) => {
+    const d = JSON.parse(r.detail_json) as { attempt?: number; head_sha?: string; outcome?: string };
+    return d.attempt === attempt.attempt && d.outcome === "fail" && (d.head_sha === undefined || d.head_sha === attempt.head_sha);
+  });
+}
+
 /**
- * `factory continue <run_id> --reason …` (§6.2, #92): the operator takes an
- * escalated run back to implementing, under the same contract, digest and
- * authorization. The next validation is a new attempt; neither the
- * deadline nor the attempt budget is reset. Refused (blocked) when:
+ * The budget a run with a PR gets again on re-entry (#97), when the
+ * operator gives none: the one fixed at first approval, never the branch's
+ * current `run-budget` setting (a commit to the branch can't buy the run
+ * more time, as for the deadline and the attempt budget, #92). It is the
+ * first re-entry's recorded budget, else the first approval's deadline
+ * minus the time of the run's first authorization.
+ */
+function approvedBudgetMs(db: Database, run: RunRow): number | null {
+  const first = reentries(db, run.run_id).find((r) => typeof r.run_budget_ms === "number");
+  if (first) return first.run_budget_ms;
+  if (!run.deadline_at) return null;
+  const auth = db
+    .prepare(
+      `SELECT created_at FROM factory_events WHERE run_id = ? AND kind = 'state_change'
+         AND json_extract(detail_json, '$.entity') = 'authorization' AND json_extract(detail_json, '$.to') = 'active'
+       ORDER BY id LIMIT 1`,
+    )
+    .get(run.run_id) as { created_at: string } | undefined;
+  if (!auth) return null;
+  const ms = Date.parse(run.deadline_at) - Date.parse(auth.created_at);
+  if (!(ms > 0)) return null;
+  // The deadline and the event are written a moment apart: round to the second.
+  return Math.round(ms / 1000) * 1000;
+}
+
+/**
+ * `factory continue <run_id> --reason …` (§6.2, #92; §4.7, #97): the
+ * operator takes a run back to implementing, under the same contract,
+ * digest and authorization. The next validation is a new attempt, and the
+ * attempt budget is never reset or raised. It takes:
  *
- * - the run deadline has passed (`run_deadline`): a hard stop;
- * - the run has no active authorization (`not_authorized`), or its
- *   contract file no longer matches it (`contract_mismatch`);
- * - the run already has a PR (`has_pr`): a failed manual check escalates
- *   a `pr_open` run with the attempt's outcome set to `fail`, but going
- *   back to implementation after the PR opened isn't supported (#97);
- * - the latest attempt isn't a completed `fail` or `error`
- *   (`no_failed_attempt`): there's nothing for the implementer to fix;
- * - every attempt is used (`attempt_budget`).
+ * - an escalated run whose latest attempt is a completed `fail` or `error`
+ *   (any `error` cause: the operator judges whether the environment is
+ *   fixed);
+ * - a run with a PR (#97), so the fix lands on the open PR: a `pr_open`
+ *   run, on the operator's request (`--trigger review_finding` or
+ *   `operator_request`, the default), or an escalated one as above, whose
+ *   trigger is derived (`manual_check_failed` when a human recorded a
+ *   manual check of that attempt as failed, else `attempt_failed`).
+ *   Review and manual checks usually come after the run's deadline, so a
+ *   run with a PR gets a new deadline: now plus `opts.budgetMs` (the
+ *   operator's `--run-budget`), else the budget fixed at approval. A run
+ *   with no deadline keeps none. Each re-entry is recorded (reentry.ts), in
+ *   the same transaction.
  *
- * Any `error` cause is accepted: the operator judges whether the
- * environment is fixed. A run already back in implementing after that
- * attempt is left as it is.
+ * Refused, in this order:
+ * - a closed run (`run_closed`); a run already back in implementing after
+ *   this attempt is answered as it is (`changed: false`), before anything
+ *   else, so a retry after a crash succeeds;
+ * - any state but escalated or pr_open (`wrong_state`): a blocked run, or
+ *   a validated one, whose PR is refreshed first;
+ * - `--trigger` on any run but a pr_open one, or an unknown trigger (`usage`);
+ * - a run with no PR past its deadline (`run_deadline`): a hard stop;
+ * - no active authorization (`not_authorized`), or a contract file that no
+ *   longer matches it (`contract_mismatch`);
+ * - an escalated run whose latest attempt isn't a completed `fail` or
+ *   `error` (`no_failed_attempt`): there's nothing to fix;
+ * - every attempt used (`attempt_budget`).
  */
 export function continueRun(
   db: Database,
   runId: string,
-  opts: { reason: string; owner?: Owner; now?: number; maxAttempts?: number },
+  opts: { reason: string; owner?: Owner; now?: number; maxAttempts?: number; trigger?: string; budgetMs?: number },
 ): ContinueResult {
   const why = opts.reason.trim();
   if (!why) throw new FactoryError("usage", "continue needs a --reason");
@@ -221,7 +275,8 @@ export function continueRun(
     const failed = latest !== null && latest.status === "complete" && (latest.outcome === "fail" || latest.outcome === "error");
     const used = attemptsUsed(db, runId);
     const max = attemptBudget(run, opts.maxAttempts);
-    const answer = (r: RunRow, changed: boolean): ContinueResult => ({
+    const reentryFor = (attempt: number) => reentries(db, runId).filter((r) => r.attempt === attempt).pop() ?? null;
+    const answer = (r: RunRow, changed: boolean, reentry: Reentry | null): ContinueResult => ({
       run: r,
       changed,
       attempt: latest!.attempt,
@@ -229,15 +284,25 @@ export function continueRun(
       error: latest!.error_cause ? { cause: latest!.error_cause, reason: latest!.error_reason ?? "" } : null,
       attempts_used: used,
       max_attempts: max,
+      reentry,
     });
-    if (run.state === "implementing" && failed) return answer(run, false);
-    if (run.state !== "escalated") {
-      throw new FactoryError("wrong_state", `run ${runId} is ${run.state}; only an escalated run can continue`);
+    if (run.state === "implementing" && latest !== null) {
+      const back = reentryFor(latest.attempt);
+      if (back || failed) return answer(run, false, back);
     }
-    if (run.pr_number !== null) {
-      throw blocked("has_pr", `run ${runId} already has PR #${run.pr_number}; going back to implementation after the PR opened isn't supported yet (#97)`);
+    if (run.state !== "escalated" && run.state !== "pr_open") {
+      throw new FactoryError("wrong_state", `run ${runId} is ${run.state}; only an escalated run, or one whose PR is open, can continue`);
     }
-    if (deadlinePassed(run, opts.now)) {
+    if (opts.trigger !== undefined) {
+      if (run.state !== "pr_open") {
+        throw new FactoryError("usage", `--trigger is only for a run whose PR is open; run ${runId} is ${run.state}, and its trigger is worked out from its latest attempt`);
+      }
+      if (!(GIVEN_TRIGGERS as readonly string[]).includes(opts.trigger)) {
+        throw new FactoryError("usage", `--trigger must be one of: ${GIVEN_TRIGGERS.join(", ")}`);
+      }
+    }
+    const hasPr = run.pr_number !== null;
+    if (!hasPr && deadlinePassed(run, opts.now)) {
       throw blocked("run_deadline", `run ${runId} passed its deadline (${run.deadline_at}); going on needs a new run and budget`);
     }
     const auth = activeAuthorization(db, runId);
@@ -251,14 +316,51 @@ export function continueRun(
     if (contractDigest(content) !== auth.contract_digest) {
       throw blocked("contract_mismatch", `run ${runId}'s contract no longer matches the approved one (${auth.contract_digest}); re-approve it`);
     }
-    if (!failed) {
+    if (run.state === "escalated" && !failed) {
       const what = latest ? `attempt ${latest.attempt} is ${latest.status}${latest.outcome ? ` (${latest.outcome})` : ""}` : "it has no attempt";
       throw blocked("no_failed_attempt", `run ${runId} can't continue: ${what}; continue takes a run back after a failed or errored attempt`);
+    }
+    if (latest === null) {
+      throw blocked("no_failed_attempt", `run ${runId} can't continue: it has no attempt`);
     }
     if (used >= max) {
       throw blocked("attempt_budget", `run ${runId} has used all ${max} attempts; going on needs a new run`);
     }
-    return answer(transitionRun(db, runId, FIX_LOOP, { reason: `continue: ${why}`, owner: opts.owner }), true);
+    if (!hasPr) {
+      return answer(transitionRun(db, runId, FIX_LOOP, { reason: `continue: ${why}`, owner: opts.owner }), true, null);
+    }
+
+    const trigger: ReentryTrigger =
+      run.state === "pr_open"
+        ? ((opts.trigger as GivenTrigger | undefined) ?? "operator_request")
+        : manualCheckFailed(db, runId, latest)
+          ? "manual_check_failed"
+          : "attempt_failed";
+    const budget = opts.budgetMs ?? approvedBudgetMs(db, run);
+    if (run.deadline_at !== null && budget === null) {
+      throw new FactoryError("usage", `run ${runId}'s approved budget can't be worked out; pass --run-budget`);
+    }
+    const now = opts.now ?? Date.now();
+    const deadline = run.deadline_at === null || budget === null ? null : nowIso(new Date(now + budget));
+    db.prepare("UPDATE factory_runs SET deadline_at = ? WHERE run_id = ?").run(deadline, runId);
+    const reentry: Reentry = {
+      trigger,
+      reason: why,
+      pr_number: run.pr_number!,
+      from_state: run.state,
+      attempt: latest.attempt,
+      head_sha: latest.head_sha,
+      outcome: latest.outcome,
+      gate_recommendation: run.gate_recommendation ?? null,
+      gate_reasons: run.gate_reasons_json ? (JSON.parse(run.gate_reasons_json) as string[]) : [],
+      previous_deadline: run.deadline_at,
+      deadline,
+      run_budget_ms: deadline === null ? null : budget,
+      owner: opts.owner ?? null,
+    };
+    recordReentry(db, runId, reentry);
+    const moved = transitionRun(db, runId, FIX_LOOP, { reason: `continue (${trigger}, PR #${run.pr_number}): ${why}`, owner: opts.owner });
+    return answer(moved, true, reentryFor(latest.attempt));
   });
   if (result.changed) faultPoint("continue.committed");
   return result;
