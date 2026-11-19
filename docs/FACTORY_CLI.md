@@ -481,7 +481,16 @@ Updating an existing PR is bookkeeping: it works past the deadline, and for an `
 
 - `--close` takes the action from the run's PR, read as the agent: merged → `merged`; closed unmerged, or no PR at all (no GitHub call) → `abandoned`; still open → `pr_open`, nothing recorded.
 - `--abandon` closes the run as `abandoned` without asking GitHub.
-- Closing ends the authorization. The artifact dir stays where it is: the database records its paths. The merge commit and other operator actions are recorded later (manifest-sync).
+- **What the operator did (#110).** Closing also records the operator's action in the run's `operator_action` and as an `operator_action` event (`{action, pr_number, pr_state, changes_requested_by, validated_head, final_head, gate_recommendation}`), so the gate's recommendations can be judged against it (FACTORY_DESIGN.md §7.4). It reads the PR's `state`, `mergedAt`, `headRefOid` and `reviews`:
+  - merged, with no `CHANGES_REQUESTED` review and the PR's head still the last validated head → `merged_as_is`;
+  - merged otherwise (a changes-requested review, or commits pushed after the validated head) → `changes_requested`;
+  - closed unmerged after a `CHANGES_REQUESTED` review → `rejected`;
+  - closed unmerged otherwise, no PR, or `--abandon` → `abandoned`.
+
+  `.result.closed` stays `merged` or `abandoned`, the action on the run's state change; `.result.operator_action` is the richer record. Runs closed before #110 hold `merged`, the older form of `merged_as_is`.
+
+  **What it can't see.** A review dismissed afterwards reports `DISMISSED` and doesn't count. The agent opens the PR and reviews it through review-pr, and GitHub doesn't let a PR's author request changes on their own PR, so the agent's review is `COMMENTED`: its change requests show only if the head moves. An "Update branch" merge from the base moves the head too, so it reads as `changes_requested`. A head that can't be compared (no validated attempt) counts as moved. `operator_action` is a best-effort signal, not a record of GitHub's review state.
+- Closing ends the authorization. The artifact dir stays where it is: the database records its paths. The merge commit is recorded later (manifest-sync).
 - The same path again, or closing a closed run, changes nothing.
 
 ### The exec guard

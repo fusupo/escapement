@@ -562,7 +562,7 @@ async function dispatch(db: Database, command: string, p: Parsed, json: boolean)
       });
       return {
         result: r,
-        text: `${runId}: archived at ${r.archive_path}${r.changed ? "" : " (unchanged)"}\n  run: ${r.state}${r.closed ? ` (${r.closed})` : ""}`,
+        text: `${runId}: archived at ${r.archive_path}${r.changed ? "" : " (unchanged)"}\n  run: ${r.state}${r.closed ? ` (${r.closed})` : ""}${r.operator_action ? `\n  operator action: ${r.operator_action}` : ""}`,
       };
     }
     case "pr": {

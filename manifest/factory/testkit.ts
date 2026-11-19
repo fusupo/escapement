@@ -133,6 +133,10 @@ export type StubPr = {
   owner: string;
   state: "OPEN" | "CLOSED" | "MERGED";
   mergedAt: string | null;
+  /** The PR's head commit, as `gh pr view --json headRefOid` reports it (#110). */
+  headRefOid?: string | null;
+  /** Reviews, as `gh pr view --json reviews` reports them (#110). */
+  reviews?: { state: string; author: { login: string } }[];
 };
 export type StubState = {
   user: { login: string; id: number };
@@ -181,7 +185,8 @@ const done = (out) => {
   process.exit(0);
 };
 const view = (p) => ({ number: p.number, url: p.url, title: p.title, body: p.body, headRefName: p.headRefName,
-  baseRefName: p.baseRefName, headRepositoryOwner: { login: p.owner }, state: p.state, mergedAt: p.mergedAt });
+  baseRefName: p.baseRefName, headRepositoryOwner: { login: p.owner }, state: p.state, mergedAt: p.mergedAt,
+  headRefOid: p.headRefOid ?? null, reviews: p.reviews ?? [] });
 if (args[0] === "api" && args[1] === "user") done(JSON.stringify(st.user));
 if (patch !== null) {
   const pr = st.prs.find((p) => p.number === Number(patch.split("/").pop()));

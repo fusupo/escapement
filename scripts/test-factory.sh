@@ -355,7 +355,7 @@ case "$1 $2" in
       '. + [{number: $n, url: ("https://github.com/o/r/pull/" + ($n | tostring)), headRefName: $h, baseRefName: $base, title: $t, body: $b, state: "OPEN", headRepositoryOwner: null}]' \
       "$state" > "$state.tmp" && mv "$state.tmp" "$state"
     echo "https://github.com/o/r/pull/$n" ;;
-  "pr view") jq -c --argjson n "$3" '.[] | select(.number == $n) | {state, mergedAt: (.mergedAt // null)}' "$state" ;;
+  "pr view") jq -c --argjson n "$3" '.[] | select(.number == $n) | {state, mergedAt: (.mergedAt // null), headRefOid: (.headRefOid // null), reviews: (.reviews // [])}' "$state" ;;
   "pr edit")
     # as in a repository where classic Projects are deprecated (#65)
     echo "GraphQL: Projects (classic) is being deprecated in favor of the new Projects experience" >&2; exit 1 ;;
@@ -403,9 +403,12 @@ if [[ $status -eq 2 && "$(jq -r '.error.code' <<<"$out")" == not_pending_manual 
 out="$(ghf --json archive '#9-r1' --path "$tmp/archive/9" --close)"
 status=$?
 if [[ $status -eq 2 && "$(jq -r '.error.code' <<<"$out")" == pr_open ]]; then ok; else bad "archive-pr-open" "status=$status out=$out"; fi
-jq 'map(.state = "MERGED")' "$tmp/prs.json" > "$tmp/prs.tmp" && mv "$tmp/prs.tmp" "$tmp/prs.json"
+jq --arg h "$(git -C "$vproject" rev-parse HEAD)" 'map(.state = "MERGED" | .headRefOid = $h)' "$tmp/prs.json" > "$tmp/prs.tmp" && mv "$tmp/prs.tmp" "$tmp/prs.json"
 out="$(ghf --json archive '#9-r1' --path "$tmp/archive/9" --close)"
 if [[ "$(jq -r --arg p "$tmp/archive/9" '.ok and .result.closed == "merged" and .result.state == "closed" and .result.archive_path == $p' <<<"$out")" == true ]]; then ok; else bad "archive-close-merged" "$out"; fi
+# what the operator did (#110): merged at the validated head with no change request
+st="$(CWD="$vproject" f --json status '#9-r1')"
+if [[ "$(jq -r '.result.operator_action' <<<"$out")" == merged_as_is && "$(jq -r '.result.run.operator_action' <<<"$st")" == merged_as_is ]]; then ok; else bad "archive-operator-action" "$out $st"; fi
 out="$(CWD="$vproject" f --json authorization)"
 if [[ "$(jq -r '.result.reasons == ["no_run"]' <<<"$out")" == true ]]; then ok; else bad "archive-closed-no-run" "$out"; fi
 
