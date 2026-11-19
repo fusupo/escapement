@@ -183,7 +183,7 @@ bash "$FACTORY" --json record-manual '{run_id}' {evidence_id} pass --note '{what
 Use `fail` instead of `pass` for a failed check. Single-quote the note (a `'` inside is written `'\''`).
 
 - **`.result.resolved` is null:** report the checks still pending (`.result.pending`).
-- **`.result.resolved` is `pass` or `fail`:** the runner wrote report revision `.result.report_revision`. A `fail` escalates the run.
+- **`.result.resolved` is `pass` or `fail`:** the runner wrote report revision `.result.report_revision`. A `fail` escalates the run. A failed manual check can be re-entered through do-work (#97): its **Escalated after a failed attempt** offers "fix it and continue", the fix lands on the same PR, and every manual check is done again on the new head (outcomes are bound to the head, so the PR section lists them as awaiting a human again). Say so when reporting the fail.
 - **`.result.refresh_pr` is true:** the open PR still shows the old report. Refresh it; the description keeps its narrative and only the report section changes:
   ```bash
   bash "$FACTORY" --json pr '{run_id}'
@@ -221,10 +221,11 @@ Use `fail` instead of `pass` for a failed check. Single-quote the note (a `'` in
 
 ---
 
-**Version:** 1.4.0
-**Last Updated:** 2026-11-18
+**Version:** 1.5.0
+**Last Updated:** 2026-11-19
 **Maintained By:** Escapement
 **Changelog:**
+- v1.5.0: A failed manual check can be re-entered through do-work: the fix goes onto the same PR and the manual checks are done again on the new head (#97)
 - v1.4.0: After a manual outcome refreshes the PR, report the gate's new recommendation from `.result.gate` and notify the operator whatever it is (PushNotification); a resolved `pass` can turn an earlier `ping` into `auto_merge` (#110)
 - v1.3.0: Carry out a manual check on request: its steps in the plugin's headless browser or the shell, what was seen at each "Check:", screenshots and observations under `{artifact_dir}/manual/{evidence_id}/`, then the operator's outcome recorded with `--assisted` and the attachments; manual checks no longer need a matched authorization (#103)
 - v1.2.0: The fix loop: after `fail` or `error` the run goes back to implementing or escalates, by the runner's rules; report the run state and reason, and the error's cause (#92)

@@ -89,14 +89,14 @@ FACTORY="${CLAUDE_PLUGIN_ROOT}/scripts/factory.sh"
 bash "$FACTORY" --check && bash "$FACTORY" --json authorization
 ```
 
-- **`--check` fails, or `.result.matched` is false:** not authorized. Every phase below runs exactly as written. If `.result.run_id` is set, a run exists but can't continue on its own (`.result.reasons`, such as `run_halted` or `contract_changed`). Say so in one line, with the reason from `factory status '{run_id}' --json` (`.result.run.state_reason`), then continue interactively. An escalated run whose latest attempt failed or errored can be taken back: see **Escalated after a failed attempt** below. Any other escalated or blocked run isn't resumed: the operator closes it (archive-work, or `factory archive '{run_id}' --path … --abandon`), and a new attempt at the work starts with setup-work.
+- **`--check` fails, or `.result.matched` is false:** not authorized. Every phase below runs exactly as written. If `.result.run_id` is set, a run exists but can't continue on its own (`.result.reasons`, such as `run_halted` or `contract_changed`). Say so in one line, with the reason from `factory status '{run_id}' --json` (`.result.run.state_reason`), then continue interactively. An escalated run whose latest attempt failed or errored can be taken back, with a PR or without: see **Escalated after a failed attempt** below. A `pr_open` run whose only reason is `run_deadline` (`.result.state` is `pr_open` and `.result.reasons` is just `["run_deadline"]`) isn't stuck: its PR is open and waits for the merge, and review usually comes after the deadline. When the operator brings a review finding or a change for it, take it back before the generic interactive path: see **Back to an open PR** below; continue gives it a new deadline. Any other escalated or blocked run isn't resumed: the operator closes it (archive-work, or `factory archive '{run_id}' --path … --abandon`), and a new attempt at the work starts with setup-work.
 - **Matched:** authorized. Note `run_id`, `artifact_dir` and `next`, and check the agent identity commits will carry:
   ```bash
   bash "$FACTORY" --json agent
   ```
   If it fails (`no_agent_token`, or `agent_env_permissions`), stop before any work: "Factory run {run_id} commits and opens its PR as the AI agent: put ESCAPEMENT_AGENT_GH_TOKEN in ~/.config/escapement/agent.env (chmod 600) or export it, then resume." Nothing is escalated; this is setup, not a failure of the run.
 
-**Escalated after a failed attempt.** When `.result.state` is `escalated`, the run has no PR yet (`.result.run.pr_number` is null in `factory status '{run_id}' --json`), and the latest attempt there (`.result.attempts`, the last one) is `complete` with outcome `fail` or `error`, the run stopped to wait on the operator (docs/FACTORY_DESIGN.md §6.2). A run whose PR is open (escalated by a failed manual check, for example) can't go back to implementation yet (#97): offer only abandon and start over. Nor can a run escalated for a rejected manual procedure (`state_reason` names a `judgment:` finding as a rejected manual procedure, #99): the reviewer judged the contract's own instructions inadequate, no change to the code can fix them, and only a new plan under a new approval can. Offer only abandon and start over, and say that in plain words. Tell them in plain words why (`.result.run.state_reason`, and the attempt's blocking findings and error from its report), then ask; never show them runner commands:
+**Escalated after a failed attempt.** When `.result.state` is `escalated` and the latest attempt (`.result.attempts` in `factory status '{run_id}' --json`, the last one) is `complete` with outcome `fail` or `error`, the run stopped to wait on the operator (docs/FACTORY_DESIGN.md §6.2). That includes a run with a PR (`.result.run.pr_number` set): a failed manual check (`state_reason` `manual:{id}`; record-manual fails the attempt) or a later attempt that failed after a re-entry. A run with a PR can now continue too (#97): the fix lands on the same PR, and continue gives it a new deadline, since review and manual checks usually come after the first one. Say that the fix goes onto PR #{n}. A run whose latest attempt passed (escalated by its deadline, say) isn't this case: for a fix on its PR, see **Back to an open PR**. Nor can a run escalated for a rejected manual procedure (`state_reason` names a `judgment:` finding as a rejected manual procedure, #99): the reviewer judged the contract's own instructions inadequate, no change to the code can fix them, and only a new plan under a new approval can. Offer only abandon and start over, and say that in plain words. Tell them in plain words why (`.result.run.state_reason`, and the attempt's blocking findings and error from its report), then ask; never show them runner commands:
 
 ```
 AskUserQuestion:
@@ -115,9 +115,31 @@ AskUserQuestion:
   ```bash
   bash "$FACTORY" --json continue '{run_id}' --reason '{what the operator decided}'
   ```
-  On `.ok`, ask `factory authorization` again: it matches with `next: implement` and a `fix`, and the Authorized Path takes it from there. If it is refused, say why in plain words and offer the other two options: `run_deadline` (the run's time is up), `attempt_budget` (every attempt is used), `not_authorized` or `contract_mismatch` (the approval no longer holds), `no_failed_attempt` (nothing to fix), `has_pr` (the PR is already open).
+  On `.ok`, ask `factory authorization` again: it matches with `next: implement` and a `fix`, and the Authorized Path takes it from there. If it is refused, say why in plain words and offer the other two options: `run_deadline` (the run's time is up), `attempt_budget` (every attempt is used), `not_authorized` or `contract_mismatch` (the approval no longer holds), `no_failed_attempt` (nothing to fix), `wrong_state` (it isn't waiting for this: blocked, or validated with a PR that needs refreshing first).
 - **Abandon:** close the run with archive-work, or `factory archive '{run_id}' --path … --abandon`.
 - **Start over:** abandon it as above, then invoke setup-work for the issue.
+
+**Back to an open PR.** A fix that belongs on a run's open PR goes through the same run (#97, docs/FACTORY_DESIGN.md §4.7): a finding from a PR review, or a change the operator asks for. It applies to a matched `pr_open` run (`next` is `await_merge` or `refresh_pr`) and to an unmatched `pr_open` run whose only reason is `run_deadline`, when the operator tells you what to fix. Ask first, in plain words:
+
+```
+AskUserQuestion:
+  question: "Fix this on PR #{n} under factory run {run_id}? {what the operator asked for, in plain words}"
+  header: "Open PR"
+  options:
+    - label: "Fix it on the PR"
+      description: "Take the run back to implementation: same plan, same PR, a new time budget, attempts as approved; the PR is validated and refreshed again"
+    - label: "Leave the PR as it is"
+      description: "Nothing changes; the PR waits for your merge"
+```
+
+- **Fix it on the PR:** pass the trigger, `review_finding` for a finding from a PR review, else `operator_request`, and the operator's words as the reason (single-quoted as above):
+  ```bash
+  bash "$FACTORY" --json continue '{run_id}' --reason '{what to fix}' --trigger review_finding
+  ```
+  `--trigger` is only for a `pr_open` run: an escalated run's trigger is worked out by the runner. On `.ok`, ask `factory authorization` again: it matches with `next: implement` and a `fix` whose `trigger` and `reason` say what to do, and the Authorized Path takes it from there (step A). Refusals as above; `attempt_budget` means every approved attempt is used, so the change needs a new run.
+- **Leave the PR as it is:** stop; nothing is recorded.
+
+Re-entry is recorded on the run: the PR's gate then always recommends `ping` for this run, and archive-work's close records the merge as `changes_requested` (§6.3, §7.1).
 
 **The authorized path.** Follow the Authorized Path section below instead of the confirmations in Phases 1–6. In short:
 
@@ -126,7 +148,7 @@ AskUserQuestion:
 | `implement` | work through the unchecked tasks, then validate. With a `fix` (the run is back after a failed attempt), fix its findings first (step A) |
 | `validate`, `resume`, `review` | validate (validate-work picks up where the attempt stopped, after a crash too) |
 | `pr`, `refresh_pr` | open or refresh the PR (create-pr) |
-| `await_merge` | nothing: the PR is open and shows the current report. Report its number and stop |
+| `await_merge` | nothing: the PR is open and shows the current report. Report its number and stop, unless the operator brings a fix for it: **Back to an open PR** |
 
 ### Phase 1: Validate Setup
 
@@ -370,7 +392,8 @@ Only after Phase 0.5 matched. The approved plan and contract stand in for every 
 ### A. Implement
 
 1. **Resume** from the first unchecked task in the scratchpad, without asking. TodoWrite and the Work Log are kept as usual.
-   **Back after a failed attempt** (`factory authorization` has a `fix`, from the fix loop or `factory continue`): the task list is the fix. Add a Work Log entry "Fix attempt {fix.attempt} ({fix.outcome})" listing each of `fix.blocking_findings` and, for an error, `fix.error` (its cause and reason); the report at `fix.report_path` has the details and logs. Fix exactly those (§6.2: the implementer works from the findings), commit with commit-changes, then validate (step B). A finding you can't fix inside the approved contract, such as one that would need a contract change or a change to the project's checks, test configuration or CI, is a blocker (step D).
+   **Back after a failed attempt** (`factory authorization` has a `fix`, from the fix loop or `factory continue`): the task list is the fix. Add a Work Log entry "Fix attempt {fix.attempt} ({fix.outcome})" listing each of `fix.blocking_findings` and, for an error, `fix.error` (its cause and reason); the report at `fix.report_path` has the details and logs. Fix exactly those (§6.2: the implementer works from the findings), commit with commit-changes, then validate (step B).
+   **Back on an open PR** (the `fix` has a `trigger`, #97): add a Work Log entry "Re-entry on PR #{pr_number} ({fix.trigger}): {fix.reason}". For `review_finding` and `operator_request` there are no blocking findings: `fix.reason` is the work, and nothing beyond it. For `manual_check_failed`, the `manual:{id}` findings name the checks a human failed; for `attempt_failed`, the findings are the failed attempt's, as above. Then commit and validate (step B) as usual: the next passing or `pending_manual` attempt refreshes the same PR (step C), and manual checks recorded on the old head need doing again. A finding you can't fix inside the approved contract, such as one that would need a contract change or a change to the project's checks, test configuration or CI, is a blocker (step D).
 2. **No plan-mode or approach questions** (3.2): the approved plan is the plan. Explore agents and LSP are fine.
 3. **Builds and tests go through the runner**, so they wait their turn on the shared build lock:
    ```bash
@@ -515,10 +538,11 @@ Under an authorized run, `factory authorization` has already matched the branch,
 
 ---
 
-**Version:** 1.5.0
-**Last Updated:** 2026-11-18
+**Version:** 1.6.0
+**Last Updated:** 2026-11-19
 **Maintained By:** Escapement
 **Changelog:**
+- v1.6.0: A run with a PR can now continue (#97): an escalated run with a PR (a failed manual check, a failed attempt after a re-entry) offers "fix it and continue", and **Back to an open PR** takes a `pr_open` run back for a review finding or an operator request (`--trigger`), matched or past its deadline; the fix lands on the same PR, which is validated and refreshed again
 - v1.5.0: The notification for an opened or refreshed PR carries the gate's recommendation (`Gate: auto_merge | ping` and its reasons, from `.result.gate`), whatever it is; the gate is report-only and do-work never merges (#110)
 - v1.4.1: A run escalated for a rejected manual procedure offers only abandon and start over: its instructions are in the approved contract, so no fix can help (#99)
 - v1.4.0: The fix loop (#92): after a failed or errored attempt the run comes back to implementing with `fix` (its blocking findings and error), and do-work fixes, commits and validates again; an escalated run after a failed attempt offers "fix it and continue" (`factory continue`), "abandon" or "start over"
