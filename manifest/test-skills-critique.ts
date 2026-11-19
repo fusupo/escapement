@@ -112,6 +112,29 @@ function setupWork() {
       noCutDown,
     "setup-work keeps one readiness file across Phase 3.2, step 3d and the critic brief",
   );
+
+  // #120 (from #114): after the planner's round, step 5 rewrites readiness.json;
+  // it must mirror it into the manifest again, as step 3d does, or the manifest
+  // keeps the status from before the round.
+  const step5 = critique.slice(critique.indexOf("5. **One round with the planner.**"), critique.indexOf("\n6. **What goes to the operator."));
+  const mirror = step5.indexOf('manifest.sh" readiness {owner/repo} {issue_number} "$DRAFT_DIR/readiness.json"');
+  assert(
+    step5 !== "" &&
+      mirror > step5.indexOf("as in step 3d") &&
+      step5.indexOf("as in step 3d") > step5.indexOf("run Phase 3.2's `check` again") &&
+      step5.includes("${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh") &&
+      step5.includes("Only when `$MANIFEST_DB` exists") &&
+      step5.includes("no work item"),
+    "setup-work Phase 3.55 step 5 mirrors the updated readiness into the manifest, only when the manifest database exists",
+  );
+  const atLeast = (v: string, min: string) => {
+    const [a, b] = [v, min].map((x) => x.split(".").map(Number));
+    for (let i = 0; i < 3; i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0);
+    return true;
+  };
+  const version = /^\*\*Version:\*\* (\d+\.\d+\.\d+)$/m.exec(skill)?.[1] ?? "0.0.0";
+  assert(atLeast(version, "1.4.2"), "setup-work is at least version 1.4.2");
+  assert(/^- v1\.4\.2: .*step 5.*\(#120[,)]/m.test(skill), "setup-work has a 1.4.2 changelog line for issue 120");
 }
 
 function docs() {

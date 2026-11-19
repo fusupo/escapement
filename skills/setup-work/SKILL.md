@@ -554,7 +554,11 @@ Run it on the factory path once Phase 3.5 is done and the contract passes Phase 
 
 4. **Apply a tier raise** (`tier_raise`): set the contract's `risk_tier_proposed` to `sensitive` and add the critic's reason to `risk_reasons`. A raise is never a question; the critic can only raise a tier.
 
-5. **One round with the planner.** When the critique has findings, whatever its verdict, resume the scratchpad-planner agent **once** with the critique and the brief's paths. For each finding it either accepts it and changes the plan or contract (say what changed), or rejects it with a reason. Apply its changes to the scratchpad and the contract, and run Phase 3.2's `check` again, which rewrites `readiness.json`; bring it up to date in place as in step 3d. The revised plan isn't critiqued again: the round ends here, and so does a later **Revise plan** at Phase 3.6.
+5. **One round with the planner.** When the critique has findings, whatever its verdict, resume the scratchpad-planner agent **once** with the critique and the brief's paths. For each finding it either accepts it and changes the plan or contract (say what changed), or rejects it with a reason. Apply its changes to the scratchpad and the contract, and run Phase 3.2's `check` again, which rewrites `readiness.json`; bring it up to date in place as in step 3d. Then mirror that same file into the manifest again, as step 3d does, so the manifest never keeps the status from before the planner's round:
+   ```bash
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" readiness {owner/repo} {issue_number} "$DRAFT_DIR/readiness.json"
+   ```
+   Only when `$MANIFEST_DB` exists (Phase 1). It does nothing when the issue has no work item. The revised plan isn't critiqued again: the round ends here, and so does a later **Revise plan** at Phase 3.6.
 
    Record each answer as a disposition, `decided_by: planner`: `{"finding": "F-1", "accepted": true, "plan_change": "…"}` or `{"finding": "F-2", "accepted": false, "reason": "…"}`.
 
@@ -884,10 +888,11 @@ plan mode to design the implementation approach before we proceed?
 
 ---
 
-**Version:** 1.4.1
-**Last Updated:** 2026-11-18
+**Version:** 1.4.2
+**Last Updated:** 2026-11-19
 **Maintained By:** Escapement
 **Changelog:**
+- v1.4.2: Factory path: Phase 3.55 step 5 mirrors the readiness document into the manifest again after the planner's round, as step 3d does, so the manifest never keeps the status from before it; only when the manifest database exists (#120, from #114)
 - v1.4.1: Factory path: one readiness document, `factory check`'s full result plus setup-work's still-open questions, is brought up to date after the Q&A, mirrored into the manifest and given to the plan critic, so `browser_tests`, `tier` and `required_checks` reach the critic; the manifest's cut-down copy no longer overwrites it (#109)
 - v1.4.0: Factory path: `browser_tests` from `factory check` goes to the planner, and in a project with browser tests UI criteria are planned as browser-test evidence, with `manual` kept for what a machine can't judge (#104)
 - v1.3.0: Factory path: Phase 3.55, one round of fresh-context plan critique (the `plan-critic` agent) before approval; unresolved findings shown with both positions at the approval question; dispositions in `## Plan Critique` and on the run with `factory record-critique` (#99)
