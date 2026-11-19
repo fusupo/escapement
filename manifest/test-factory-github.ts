@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { realpathSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
+import { realpathSync, writeFileSync, mkdirSync, chmodSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -63,6 +63,49 @@ async function run() {
   );
   stub.setState({ failOn: null });
   throws(() => gh(["api", "user"], { token: TOKEN, env: { ...process.env, PATH: tempDir() } }), /gh_missing/, "no gh on PATH: gh_missing");
+  {
+    const pinnedEnv = { ...env, GH_HOST: "evil.example", GH_ENTERPRISE_TOKEN: "ent-token", GITHUB_ENTERPRISE_TOKEN: "ent-token" };
+    gh(["api", "user"], { token: TOKEN, env: pinnedEnv });
+    const pinned = stub.calls().at(-1)!;
+    assert(
+      pinned.ghHost === "github.com" && pinned.enterpriseToken === null && pinned.token === TOKEN,
+      "gh is pinned to github.com whatever GH_HOST the environment sets",
+    );
+  }
+  {
+    // Every gh call carries the agent token, so each caller must check the
+    // host before its first one. agentIdentity (`gh api user`) has no
+    // origin to check: it is the one exemption, covered by the GH_HOST pin
+    // above. test-skills-github.ts already pins execFileSync("gh") to
+    // github.ts, so gh()/ghJson() are the only ways in.
+    const here = dirname(fileURLToPath(import.meta.url));
+    const factoryDir = join(here, "factory");
+    const files = [...readdirSync(factoryDir).filter((f) => f.endsWith(".ts")).map((f) => join(factoryDir, f)), join(here, "factory-cli.ts")];
+    const CALL = /\bgh\(|\bghJson\s*(?:<[^>]*>)?\(/g;
+    const DEFINITION = /export function (?:gh|ghJson)\b/;
+    const callers = new Map<string, number[]>();
+    for (const f of files) {
+      const text = readFileSync(f, "utf-8");
+      const at = [...text.matchAll(CALL)]
+        .map((m) => m.index!)
+        .filter((i) => !DEFINITION.test(text.slice(text.lastIndexOf("\n", i) + 1, text.indexOf("\n", i))));
+      if (at.length) callers.set(f.slice(here.length + 1), at);
+    }
+    const enclosing = (text: string, i: number) => [...text.slice(0, i).matchAll(/function (\w+)/g)].at(-1)?.[1];
+    const ghText = readFileSync(join(factoryDir, "github.ts"), "utf-8");
+    const prText = readFileSync(join(factoryDir, "pr.ts"), "utf-8");
+    const archiveText = readFileSync(join(factoryDir, "archive.ts"), "utf-8");
+    const firstCall = (text: string) => text.search(/\bgh\(|\bghJson\s*(?:<[^>]*>)?\(/);
+    const firstOf = (text: string, names: string[]) => Math.min(...names.map((n) => text.indexOf(`${n}(`)).filter((i) => i >= 0));
+    const githubOk = (callers.get("factory/github.ts") ?? []).every((i) => ["ghJson", "agentIdentity"].includes(enclosing(ghText, i) ?? ""));
+    assert(
+      [...callers.keys()].sort().join(",") === "factory/archive.ts,factory/github.ts,factory/pr.ts" &&
+        githubOk &&
+        firstOf(prText, ["assertPushTarget"]) < firstCall(prText) &&
+        firstOf(archiveText, ["assertTokenHost", "assertPushTarget"]) < firstCall(archiveText),
+      "gh is called only from github.ts, pr.ts and archive.ts, and pr.ts and archive.ts check the host before their first gh call",
+    );
+  }
 
   console.log("\nAgent identity\n");
   const before = stub.calls().length;

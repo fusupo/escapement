@@ -261,6 +261,32 @@ async function run() {
     );
   }
 
+  console.log("\nThe host before any gh call (#87)\n");
+  {
+    // A run in its own worktree whose origin is off github.com, with a PR.
+    const offRoot = realpathSync(makeRepo({ branch: "87-off", origin: "https://gitlab.com/acme/w.git" }));
+    const offRun = startRun(db, { workItem: "acme/w#87", ctx: projectContext(offRoot), artifactDir: tempDir() }).run_id;
+    approveRun(db, offRun, { contractFile: contractFor(offRun), budgetMs: HOUR });
+    withPr(offRun, "MERGED");
+    const before = stub.calls().length;
+    let code = "ok";
+    let cause: unknown;
+    try {
+      await archiveRun(db, offRun, { ...o, path: join(tempDir(), "archive"), close: true });
+    } catch (err) {
+      code = (err as { code?: string }).code ?? "thrown";
+      cause = (err as { detail?: { cause?: unknown } }).detail?.cause;
+    }
+    assert(
+      code === "not_github" &&
+        cause === "origin_host" &&
+        stub.calls().length === before &&
+        getRun(db, offRun).state === "pr_open" &&
+        getRun(db, offRun).archive_path === null,
+      "archive --close on an origin off github.com is refused with not_github before any gh call",
+    );
+  }
+
   db.close();
   cleanup();
   console.log("\nAll archive tests passed.");

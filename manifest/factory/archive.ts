@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { FactoryError, blocked } from "./util.ts";
 import { tx, getRun, transitionRun, recordEvent, type RunState } from "./state.ts";
 import { withLocks, worktreeLock } from "./locks.ts";
-import { agentToken, ghJson, remoteOf } from "./github.ts";
+import { agentToken, assertTokenHost, ghJson, remoteOf } from "./github.ts";
 import type { Owner } from "./owner.ts";
 import { reentries, type Reentry } from "./reentry.ts";
 
@@ -117,6 +117,8 @@ export async function archiveRun(
       } else {
         const env = opts.env ?? process.env;
         const remote = remoteOf(run.worktree_path, run.repo);
+        // Reading the PR carries the agent token: never to a host but github.com (#87).
+        assertTokenHost(remote);
         const pr = ghJson<PrView>(
           ["pr", "view", String(run.pr_number), "-R", remote.ghRepo, "--json", "state,mergedAt,headRefOid,reviews"],
           { token: agentToken(env), env },

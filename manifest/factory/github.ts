@@ -99,17 +99,22 @@ function redact(text: string, token: string): string {
 
 /**
  * Run `gh` as the agent. Prompts and update checks are off; a failure is
- * `gh_failed` with gh's stderr (token redacted).
+ * `gh_failed` with gh's stderr (token redacted). gh is pinned to github.com
+ * (GH_HOST), whatever host the caller's environment or gh's own config
+ * names, and no Enterprise token rides along (#87): the agent token is a
+ * github.com credential. Callers with an origin check its host first
+ * (assertTokenHost / assertPushTarget).
  */
 export function gh(args: string[], opts: { token: string; cwd?: string; env?: NodeJS.ProcessEnv }): string {
   const env = {
     ...(opts.env ?? process.env),
     GH_TOKEN: opts.token,
+    GH_HOST: GITHUB_HOST,
     GH_PROMPT_DISABLED: "1",
     GH_NO_UPDATE_NOTIFIER: "1",
     NO_COLOR: "1",
   };
-  delete (env as Record<string, string | undefined>).GITHUB_TOKEN;
+  for (const k of ["GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"]) delete (env as Record<string, string | undefined>)[k];
   try {
     return execFileSync("gh", args, { cwd: opts.cwd, env, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   } catch (err) {

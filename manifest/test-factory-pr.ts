@@ -585,6 +585,57 @@ async function run() {
   await rejects(openPr(db, c.run.run_id, { ...o, title: "t" }), /run_deadline/, "past the deadline, no new PR is created");
   assert(getRun(db, c.run.run_id).state === "escalated" && stub.state().prs.filter((p) => p.headRefName === "44-z").length === 1, "the run escalates; a fork's PR with the same branch name is ignored");
 
+  console.log("\nThe host before any gh call (#87)\n");
+  {
+    const codeOf = async (p: Promise<unknown>): Promise<{ code: string; cause?: unknown }> => {
+      try {
+        await p;
+        return { code: "ok" };
+      } catch (err) {
+        const e = err as { code?: string; detail?: { cause?: unknown } };
+        return { code: e.code ?? "thrown", cause: e.detail?.cause };
+      }
+    };
+    const gates = (runId: string) => gateEvents(db, runId).length;
+
+    const off = setup(db, "acme/w#87", "87-off");
+    validated(db, off.run.run_id, "pass");
+    sh("git", ["remote", "set-url", "origin", "https://gitlab.com/acme/w.git"], off.root);
+    let before = stub.calls().length;
+    const offResult = await codeOf(openPr(db, off.run.run_id, { ...o, title: "t" }));
+    assert(
+      offResult.code === "not_github" &&
+        offResult.cause === "origin_host" &&
+        stub.calls().length === before &&
+        gates(off.run.run_id) === 0 &&
+        getRun(db, off.run.run_id).state === "validated",
+      "factory pr on an origin off github.com is refused with not_github before any gh call",
+    );
+
+    // A failing ssh, so even the old order could never reach a network.
+    const savedSsh = process.env.GIT_SSH_COMMAND;
+    process.env.GIT_SSH_COMMAND = "false";
+    try {
+      const rw = setup(db, "acme/w#88", "88-rw");
+      validated(db, rw.run.run_id, "pass");
+      sh("git", ["remote", "set-url", "origin", "git@github.com:acme/w.git"], rw.root);
+      sh("git", ["config", "url.ssh://elsewhere.invalid/.insteadOf", "https://github.com/"], rw.root);
+      before = stub.calls().length;
+      const rwResult = await codeOf(openPr(db, rw.run.run_id, { ...o, title: "t" }));
+      assert(
+        rwResult.code === "not_github" &&
+          rwResult.cause === "push_url" &&
+          stub.calls().length === before &&
+          gates(rw.run.run_id) === 0 &&
+          getRun(db, rw.run.run_id).state === "validated",
+        "factory pr refuses a push URL rewritten off github.com before any gh call",
+      );
+    } finally {
+      if (savedSsh === undefined) delete process.env.GIT_SSH_COMMAND;
+      else process.env.GIT_SSH_COMMAND = savedSsh;
+    }
+  }
+
   db.close();
   cleanup();
   console.log("\nAll factory pr tests passed.");
