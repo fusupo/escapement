@@ -78,7 +78,9 @@ pr/body.md                      the PR description as last sent (pr)
 | `push` | Push the current branch as the agent, with no run (plain skills). Never forced, never the base branch, `main` or `master`. No database needed | n/a |
 | `pr <run_id>` | Push the branch and open or update the run's PR, as the agent | **no** to create; yes to update |
 | `record-manual <run_id> <evidence_id> pass\|fail --note <text> [--assisted [--attachment <file>]...]` | Record a human's outcome for manual evidence | yes |
-| `archive <run_id> --path <dir>` | Record where the run was archived; `--close` closes it | yes |
+| `archive <run_id> --path <dir>` | Record where the run was archived; `--close` closes it (and records the merge SHA) | yes |
+| `backfill-merge-shas [run_id]` | Fill in the merge SHA of this repository's runs closed as merged before `archive --close` recorded it, from their PRs, as the agent (#117) | yes |
+| `reverts` | Record reverts of this repository's merged runs found on their target branches, in local git only (#117) | yes |
 | `check [--contract <file>]` | Readiness: is the contract valid and runnable in this project? Without `--contract`, only the settings are checked. No run or database needed | n/a |
 | `check-critique <file> [--final]` | Check a plan critique against `critique.schema.json` and its rules (`-` reads stdin). No run or database needed | n/a |
 | `exclude <pattern>…` | Add the host's working-file patterns to the repository's `.git/info/exclude`. No run or database needed | n/a |
@@ -91,7 +93,7 @@ Options:
 |---|---|---|
 | `--json` | all | off |
 | `--data-dir <path>` | all | shared manifest |
-| `--project-root <path>` | start, check, exclude, authorization | git toplevel of the cwd |
+| `--project-root <path>` | start, check, exclude, authorization, push, backfill-merge-shas, reverts | git toplevel of the cwd |
 | `--artifact-dir <path>` | start | see Storage |
 | `--issue <n>` | start | parsed from `#N` or `owner/repo#N` |
 | `--manifest-id <id>` | start | none |
@@ -515,8 +517,33 @@ Updating an existing PR is bookkeeping: it works past the deadline, and for an `
   `.result.closed` stays `merged` or `abandoned`, the action on the run's state change; `.result.operator_action` is the richer record. Runs closed before #110 hold `merged`, the older form of `merged_as_is`.
 
   **What it can't see.** A review dismissed afterwards reports `DISMISSED` and doesn't count. The agent opens the PR and reviews it through review-pr, and GitHub doesn't let a PR's author request changes on their own PR, so the agent's review is `COMMENTED`: its change requests show only if the head moves. An "Update branch" merge from the base moves the head too, so it reads as `changes_requested`. A head that can't be compared (no validated attempt) counts as moved. `operator_action` is a best-effort signal, not a record of GitHub's review state.
-- Closing ends the authorization. The artifact dir stays where it is: the database records its paths. The merge commit is recorded later (manifest-sync).
+- **The merge SHA (#117).** A merged PR's merge commit (`mergeCommit`, read in the same `pr view`) is stored as the run's `merge_sha` with the close, and added to the `operator_action` event as `merge_sha`. A run closed as abandoned records none, and so does a merged PR for which GitHub reports no merge commit. Runs closed before this are filled in by [backfill-merge-shas](#backfill-merge-shas).
+- Closing ends the authorization. The artifact dir stays where it is: the database records its paths.
 - The same path again, or closing a closed run, changes nothing.
+
+### backfill-merge-shas
+
+`backfill-merge-shas [run_id]` (#117) fills in `merge_sha` for runs closed as merged before `archive --close` recorded it.
+
+- **Which runs.** Those of the repository the command runs in (`--project-root`, else the cwd's checkout; a detached HEAD is fine) that are closed, have a PR and no merge SHA, and whose `operator_action` is `merged_as_is`, `changes_requested` or the older `merged`. A run ID narrows it to one. A run's own `worktree_path` is never used: an old run's worktree is usually gone.
+- **As the agent.** origin is read in that checkout, and its host is checked before any `gh` call (`not_github`, as for `archive --close`). Each PR is looked up with `gh pr view --json state,mergedAt,mergeCommit` and the agent token.
+- **Records.** A merged PR's 40-hex merge commit is written to `merge_sha`, with a `state_change` event `{entity: "merge_sha", to, previous: null, source: "backfill", pr_number, owner}`. The close's `operator_action` event is left as it was. A PR that isn't merged, or reports no merge commit, is skipped with the reason.
+- **Idempotent.** A run with a merge SHA is never looked at again.
+- **No database.** It answers an empty result (exit 0), not an error.
+
+### reverts
+
+`reverts` (#117, FACTORY_DESIGN.md §7.2) records reverts of the repository's merged runs. archive-work runs it after every close, and it can also be run by hand.
+
+- **Which runs.** Those of the repository the command runs in (`--project-root`, else the cwd's checkout) that are closed and have a merge SHA, grouped by target branch. A run's own `worktree_path` is never used.
+- **Local git only.** Each target is read as `origin/{target}` when that exists, else the local branch. Nothing is fetched, and GitHub is never asked. A target that isn't there is skipped with the reason.
+- **What counts.** A commit on the target whose message says `This reverts commit <sha>` (git revert and GitHub's Revert button), where the sha is:
+  - the run's merge SHA, or
+  - one of its PR's own commits: for a merge commit, those its second parent brought in.
+
+  A squash or rebase merge has one parent, so only the merge SHA matches. A rebase merge's earlier commits can't be told apart locally.
+- **Records.** One `revert` event per run and revert commit: `{revert_sha, reverted_sha, run_id, merge_sha, target_ref, found_at, owner}`. Scanning again records nothing new.
+- **No database.** It answers an empty result (exit 0), not an error.
 
 ### The exec guard
 
@@ -724,7 +751,9 @@ An error carries `detail` only when it has facts a caller routes on; today only 
 - **push:** `{branch, sha, repo, remote}`; `remote` is the URL pushed to, never with the token
 - **pr:** `{run_id, pr_number, url, action, state, head_sha, attempt, report_revision, outcome, body_path, gate}`; `action` is `created`, `updated` (the recorded PR) or `recovered` (an unrecorded PR an earlier, interrupted call created); `gate` is `{mode, recommendation, reasons, checks: [{rule, ok, detail}], changed}`, with `recommendation` `auto_merge` or `ping` and `changed` true when this call added a `gate` event (#110)
 - **record-manual:** `{run_id, attempt, evidence_id, outcome, noop, recorded: [{evidence_id, outcome}], pending, resolved, report_path, report_revision, run_state, pr_number, refresh_pr}`; `resolved` is null until the report resolves
-- **archive:** `{run_id, archive_path, changed, closed, operator_action, pr_state, state}`; `closed` is `merged`, `abandoned` or null; `operator_action` is `merged_as_is`, `changes_requested`, `rejected`, `abandoned`, or null when this call closed nothing (#110)
+- **archive:** `{run_id, archive_path, changed, closed, operator_action, merge_sha, pr_state, state}`; `closed` is `merged`, `abandoned` or null; `operator_action` is `merged_as_is`, `changes_requested`, `rejected`, `abandoned`, or null when this call closed nothing (#110); `merge_sha` is the merge commit this call recorded, else null (#117)
+- **backfill-merge-shas:** `{repo, filled: [{run_id, pr_number, merge_sha}], skipped: [{run_id, pr_number, reason}]}`
+- **reverts:** `{repo, scanned: [{target_ref, ref, tip}], recorded: [{run_id, revert_sha, reverted_sha, merge_sha, target_ref}], already, skipped: [{target_ref, reason}]}`; `ref` is `origin/{target}` or `{target}`, and `already` counts reverts an earlier scan recorded
 - **exclude:** `{path, added, present}`: the exclude file, the patterns appended, and those already there
 - **check-critique:** `{valid, final, verdict, findings: {blocking, major, minor}, concerns, tier_raise, dispositions, unresolved}`; `concerns` lists the checklist items judged `concern`, `dispositions` counts them, and `unresolved` lists the findings the operator decided
 - **record-critique:** `{run_id, path, digest, verdict, findings, accepted, rejected, unresolved, noop}`
@@ -740,7 +769,7 @@ Run fields:
 - `tier_proposed` (from the contract, set by approve), `tier_actual` and `policy_version` (set by validate)
 - `contract_digest`, `operator_action` (what the operator did, set by `archive --close`: `merged_as_is`, `changes_requested`, `rejected` or `abandoned`; runs closed before #110 hold the plain close action)
 - `gate_recommendation`, `gate_reasons_json` (the gate's latest result, set by `pr`)
-- `pr_number` (set by pr), `archive_path` (set by archive), `merge_sha` (null until manifest-sync records it)
+- `pr_number` (set by pr), `archive_path` (set by archive), `merge_sha` (the PR's merge commit, set by `archive --close` and by `backfill-merge-shas`, #117)
 - `started_at`, `ended_at`
 
 The remaining §7.1 columns appear too and stay null until later issues fill them.

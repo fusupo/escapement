@@ -13,7 +13,8 @@ import { validateRun } from "./factory/validate.ts";
 import { reviewInput, recordReview } from "./factory/review.ts";
 import { openPr } from "./factory/pr.ts";
 import { recordManual, type RecordedView } from "./factory/manual.ts";
-import { archiveRun } from "./factory/archive.ts";
+import { archiveRun, backfillMergeShas, type BackfillResult } from "./factory/archive.ts";
+import { scanReverts, type RevertsResult } from "./factory/reverts.ts";
 import { syncGuard } from "./factory/guard.ts";
 import { currentOwner } from "./factory/owner.ts";
 import { parseFaultSpec, FAULT_ENV } from "./factory/fault.ts";
@@ -77,6 +78,12 @@ Commands:
                                 Record where the run's artifacts were archived;
                                 --close closes the run (merged or abandoned,
                                 from its PR), --abandon without asking GitHub
+  backfill-merge-shas [run_id]  Fill in the merge SHA of this repository's runs
+                                closed as merged before archive --close recorded
+                                it, from their PRs, as the agent (idempotent)
+  reverts                       Record reverts of this repository's merged runs
+                                found on their target branches in local git
+                                (never fetches, no GitHub; idempotent)
   status [run_id]               List open runs (--all: include closed), or show one
   resume <run_id>               Reconcile an interrupted run
   revoke <run_id>               End the run's active authorization
@@ -119,7 +126,8 @@ Commands:
 Options:
   --json                Print one JSON object (see docs/FACTORY_CLI.md)
   --data-dir <path>     Use {path}/manifest.db instead of the shared manifest
-  --project-root <path> start, check, exclude, push, authorization: the worktree
+  --project-root <path> start, check, exclude, push, authorization,
+                        backfill-merge-shas, reverts: the worktree
                         (default: git toplevel of the cwd)
   --artifact-dir <path> Put run artifacts in {path}/{run_id}/
   --issue <n>           start: issue number, when the work item isn't #N
@@ -301,6 +309,8 @@ const KNOWN_DB_COMMANDS = new Set([
   "pr",
   "record-manual",
   "archive",
+  "backfill-merge-shas",
+  "reverts",
 ]);
 
 /** Commands that don't touch the manifest database, so hosts can run them anywhere. */
@@ -573,8 +583,16 @@ async function dispatch(db: Database, command: string, p: Parsed, json: boolean)
       });
       return {
         result: r,
-        text: `${runId}: archived at ${r.archive_path}${r.changed ? "" : " (unchanged)"}\n  run: ${r.state}${r.closed ? ` (${r.closed})` : ""}${r.operator_action ? `\n  operator action: ${r.operator_action}` : ""}`,
+        text: `${runId}: archived at ${r.archive_path}${r.changed ? "" : " (unchanged)"}\n  run: ${r.state}${r.closed ? ` (${r.closed})` : ""}${r.operator_action ? `\n  operator action: ${r.operator_action}` : ""}${r.merge_sha ? `\n  merge: ${r.merge_sha}` : ""}`,
       };
+    }
+    case "backfill-merge-shas": {
+      const r = backfillMergeShas(db, { worktree: resolveWorktree(str(p, "--project-root")), runId: arg, owner });
+      return { result: r, text: describeBackfill(r) };
+    }
+    case "reverts": {
+      const r = scanReverts(db, { worktree: resolveWorktree(str(p, "--project-root")), owner });
+      return { result: r, text: describeReverts(r) };
     }
     case "pr": {
       const runId = need(arg, "run_id");
@@ -679,6 +697,21 @@ async function dispatch(db: Database, command: string, p: Parsed, json: boolean)
   }
 }
 
+function describeBackfill(r: BackfillResult): string {
+  const lines = [`${r.repo}: ${r.filled.length} merge SHA(s) filled in, ${r.skipped.length} skipped`];
+  for (const f of r.filled) lines.push(`  ${f.run_id}: PR #${f.pr_number} merged as ${f.merge_sha}`);
+  for (const s of r.skipped) lines.push(`  ${s.run_id}: ${s.reason}`);
+  return lines.join("\n");
+}
+
+function describeReverts(r: RevertsResult): string {
+  const lines = [`${r.repo}: ${r.recorded.length} revert(s) recorded, ${r.already} already known`];
+  for (const s of r.scanned) lines.push(`  scanned ${s.ref} at ${s.tip}`);
+  for (const x of r.recorded) lines.push(`  ${x.run_id}: ${x.revert_sha} reverts ${x.reverted_sha} (merge ${x.merge_sha})`);
+  for (const s of r.skipped) lines.push(`  skipped ${s.target_ref}: ${s.reason}`);
+  return lines.join("\n");
+}
+
 /** A command other than start when the manifest database doesn't exist yet. */
 function withoutDatabase(command: string, p: Parsed): Outcome {
   const where = resolveDbPath({ dataDir: str(p, "--data-dir") });
@@ -687,6 +720,15 @@ function withoutDatabase(command: string, p: Parsed): Outcome {
     return { result: r, text: describeMatch(r) };
   }
   if (command === "status" && p.positional.length === 0) return { result: { runs: [] }, text: "No open runs." };
+  // Sweeps over a repository's closed runs: with no database there are none (#117).
+  if (command === "backfill-merge-shas") {
+    const r: BackfillResult = { repo: repoName(mainRepoRoot(resolveWorktree(str(p, "--project-root")))), filled: [], skipped: [] };
+    return { result: r, text: "No factory database; nothing to check." };
+  }
+  if (command === "reverts") {
+    const r: RevertsResult = { repo: repoName(mainRepoRoot(resolveWorktree(str(p, "--project-root")))), scanned: [], recorded: [], already: 0, skipped: [] };
+    return { result: r, text: "No factory database; nothing to check." };
+  }
   if (!KNOWN_DB_COMMANDS.has(command)) throw new FactoryError("usage", `unknown command ${command}`);
   const runId = p.positional[0];
   if (!runId) throw new FactoryError("usage", "missing run_id");

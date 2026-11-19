@@ -539,9 +539,14 @@ fusupo
 
 ## Version
 
-**Current:** 4.6.1
+**Current:** 4.7.0
 
 **Changelog:**
+- 4.7.0 (2026-11-19): Merge SHAs and reverts for the trust record (#117)
+  - **The merge SHA is recorded.** `factory archive --close` stores a merged PR's merge commit on the run and in its `operator_action` event; an abandoned run records none
+  - **Backfill.** `factory backfill-merge-shas` fills it in for runs closed as merged before this, from their PRs, as the agent, from the checkout it runs in; idempotent
+  - **Reverts.** `factory reverts` finds commits on a run's target branch that revert its merge SHA or one of its PR's own commits, in local git only (no fetch, no GitHub), and records each once as a `revert` event, so §7.4's false auto-merge rate can count it. A rebase merge links only its final commit
+  - **Skill.** `archive-work` 2.7.0 reports the merge SHA and sweeps for reverts after each close; a failed sweep never blocks it
 - 4.6.1 (2026-11-19): The agent token can't be led off github.com (#87)
   - **Host before gh.** `factory pr` and `archive --close` check origin's host before any `gh` call that carries the token, and `gh` is pinned to github.com (`GH_HOST`)
   - **Scoped credential helper.** The push's helper answers only for `https://github.com`

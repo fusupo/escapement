@@ -106,7 +106,7 @@ One run through the first release. This table only gathers what §3.6, §4.1, §
 | 6 | Validate | runner (via `do-work` / `validate-work`) | `factory validate <run_id>` | `validating` | `checks_running → awaiting_review` (or `complete` on a deterministic failure) | draft report, logs, structured results | worktree lock, clean tree, contract digest, deadline; `HEAD` captured and re-checked (§4.3) |
 | 7 | Review | agent (`validation-reviewer`), runner | `factory review-input`, `factory record-review` | `validated` | `finalizing → complete` | source snapshot, `review.json`, final report | completeness rules and source digest (§4.9) |
 | 8 | PR | runner | `factory pr <run_id>` | `pr_open` | — | PR number; operator notified | idempotent lookup; branch head = report `head_sha` (§4.8) |
-| 9 | Merge (**operator touch 2**) | operator | — | `closed` (merged) | — | operator action and merge SHA (recorded by `manifest-sync`, next) | merge is never authorized |
+| 9 | Merge (**operator touch 2**) | operator | — | `closed` (merged) | — | operator action and merge SHA (recorded by `archive --close` when archive-work closes the run, #110, #117) | merge is never authorized |
 
 - Step 8 runs on `pass` or `pending_manual` (§6.1). Manual outcomes are recorded later with `factory record-manual` (§5.5).
 - *As built (#64):* steps 4–8 run in `do-work` without questions when `factory authorization` matches. Commits (step 5) carry the AI agent's identity, and step 8's push and PR run as the agent's GitHub account (§4.8). `archive-work` closes the run after the merge.
@@ -742,15 +742,28 @@ CREATE TABLE factory_events (
 );
 ```
 
-*As built (#110):* `factory archive --close` fills `operator_action` from the PR, read as the agent: merged with no `CHANGES_REQUESTED` review and the head still the last validated one → `merged_as_is`; merged otherwise (a change request, or commits pushed after validation) → `changes_requested`; closed unmerged after a change request → `rejected`; closed unmerged otherwise, no PR, or `--abandon` → `abandoned`. Each close also adds an `operator_action` event with the PR's state, who requested changes, the validated and final heads, and the run's latest gate recommendation, which is what the false auto-merge rate compares. The run's state change keeps the plain close action (`merged`, `abandoned`), and runs closed earlier hold `merged`, the older form of `merged_as_is`. What it can't see, and so how it skews §7.4: a review dismissed afterwards (`DISMISSED`) doesn't count; the agent opens the PR and reviews it through review-pr, and GitHub doesn't let a PR's author request changes on their own PR, so the agent's review is `COMMENTED` and its change requests show only if the head moves; an "Update branch" merge from the base moves the head, so it reads as `changes_requested`. Reverts and attributed defects (§7.2) are still recorded later.
+*As built (#110):* `factory archive --close` fills `operator_action` from the PR, read as the agent: merged with no `CHANGES_REQUESTED` review and the head still the last validated one → `merged_as_is`; merged otherwise (a change request, or commits pushed after validation) → `changes_requested`; closed unmerged after a change request → `rejected`; closed unmerged otherwise, no PR, or `--abandon` → `abandoned`. Each close also adds an `operator_action` event with the PR's state, who requested changes, the validated and final heads, and the run's latest gate recommendation, which is what the false auto-merge rate compares. The run's state change keeps the plain close action (`merged`, `abandoned`), and runs closed earlier hold `merged`, the older form of `merged_as_is`. What it can't see, and so how it skews §7.4: a review dismissed afterwards (`DISMISSED`) doesn't count; the agent opens the PR and reviews it through review-pr, and GitHub doesn't let a PR's author request changes on their own PR, so the agent's review is `COMMENTED` and its change requests show only if the head moves; an "Update branch" merge from the base moves the head, so it reads as `changes_requested`. Reverts are recorded since #117 (§7.2); attributed defects are still to come.
 
 *As built (#97):* a re-entered run that merged is `changes_requested` too, even with no changes-requested review and its head the validated one: re-entry validates the final head again, so without this a wrong first `auto_merge` recommendation would read as `merged_as_is` and drop out of the false auto-merge rate. The event lists each re-entry (trigger, the gate's recommendation then, the attempt and head it left from). Closed unmerged, a re-entered run is `rejected` or `abandoned` as any other.
+
+*As built (#117): the merge SHA.* `merge_sha` is what ties a later revert or defect back to a run and to the gate's recommendation for it.
+- **At close.** `factory archive --close` reads `mergeCommit` in the same `pr view` as the operator action. A merged PR's 40-hex merge commit is stored as `merge_sha` with the close, and added to the `operator_action` event as `merge_sha`. A run closed as abandoned (PR closed unmerged, no PR, `--abandon`) records none. So does a merged PR for which GitHub reports no merge commit: nothing is made up. It isn't manifest-sync's job, as first planned: the close already reads the merged PR as the agent.
+- **Backfill.** `factory backfill-merge-shas [run_id]` fills `merge_sha` for runs closed as merged before #117: those with `operator_action` `merged_as_is`, `changes_requested` or the older `merged`, a PR, and no merge SHA.
+  - It reads the repository and origin from the checkout it runs in, never a run's own `worktree_path`, which is usually gone.
+  - It checks origin's host before any `gh` call, and looks each PR up as the agent.
+  - Each fill is a `state_change` event (`entity: "merge_sha"`, `source: "backfill"`). The `operator_action` event recorded at close is left as it was, so those older events have no `merge_sha`.
+  - It is idempotent. An unmerged PR, or one without a merge commit, is skipped with the reason.
+- **Limits.** It needs a checkout of the run's repository whose origin is the PR's. A squash or rebase merge's merge commit is the commit GitHub created on the target, not the PR's own commits. Reverts of those are §7.2's concern.
 
 ### 7.2 Event conventions
 
 - `critique_finding`: `{finding, severity, accepted, plan_change, tokens}` — measures critic value directly, not only via later validation failures.
 - `defect`: explicit link from a later bug issue or incident to a `run_id` / `merge_sha`, with how it was attributed (label, manual, heuristic).
-- `revert`: a revert commit linked to a `merge_sha`.
+- `revert`: a revert commit linked to a `merge_sha`. *As built (#117):* `factory reverts` records it. archive-work runs it after every close, and it can also be run by hand.
+  - **How a revert is found.** It scans the target branch of each closed, merged run of the repository it runs in, for commits whose message says `This reverts commit <sha>`. That is the wording of both `git revert` and GitHub's Revert button. The sha must be the run's merge SHA or one of its PR's own commits: for a merge commit, those its second parent brought in (`M^1..M^2`).
+  - **Local git only.** It reads `origin/{target}`, else the local branch, as validate does. It never fetches and never asks GitHub. The result names the ref and tip each scan read, so a stale view shows. A revert not pulled yet is found by a later archive.
+  - **The event.** One per run and revert commit, recorded once: `{revert_sha, reverted_sha, run_id, merge_sha, target_ref, found_at}`.
+  - **Limits.** A squash merge is one commit, so it is matched in full. A rebase merge rewrites the PR's commits, so locally only its final commit, the merge SHA, can be linked; reverting an earlier rebased commit isn't seen. A revert of a revert says the same words, so it counts too.
 
 ### 7.3 Questions it answers
 
@@ -817,11 +830,11 @@ All keys optional. Missing `static`/`verify` → `blocked` ("not configured"). `
 | `validate-work` (new) | thin skill: `factory validate` → reviewer → `factory record-review`; runnable standalone | first |
 | `commit-changes` | skip confirmation under matching authorization | first |
 | `create-pr` | under authorization delegates to `factory pr`; verifies report head = branch head | first |
-| `archive-work` | archive run artifact dir; record `archive_path` | first |
+| `archive-work` | archive run artifact dir; record `archive_path` | first (since #117 it also reports the merge SHA and sweeps for reverts) |
 | agents | `validation-reviewer` | first |
 | `do-work` | fix loop (§6.2) | next |
 | `setup-work` + `plan-critic` agent | critique loop (§3.5) | next (as built: #99) |
-| gate + `manifest-sync` | report-only recommendation; operator action and merge SHA recording | next (as built: #110, the gate and the operator action; merge SHA recording still next) |
+| gate + `manifest-sync` | report-only recommendation; operator action and merge SHA recording | next (as built: #110, the gate and the operator action; #117, merge SHA recording, by `archive --close` rather than manifest-sync, plus `backfill-merge-shas` and the `reverts` sweep) |
 | `factory continue` + `do-work`, `create-pr`, `validate-work` | re-entry after the PR is open (§4.7) | next (as built: #97) |
 | `PreToolUse` exec hook | optional enforcement of `factory exec` | first (as built: on during runs, opt out per project) |
 
