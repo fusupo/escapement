@@ -86,10 +86,29 @@ function pushUrlDocs() {
   );
 }
 
+function release() {
+  console.log("\nThe release\n");
+  // Minimums and this release's own changelog line, never the current
+  // version: the next release moves it (PROJECT_LORE).
+  const atLeast = (v: string, min: string) => {
+    const [a, b] = [v, min].map((x) => x.split(".").map(Number));
+    for (let i = 0; i < 3; i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0);
+    return true;
+  };
+  assert(atLeast(JSON.parse(read(".claude-plugin/plugin.json")).version, "4.7.1"), "plugin.json is at least 4.7.1");
+  const readme = read("README.md");
+  const current = /^\*\*Current:\*\* (\d+\.\d+\.\d+)$/m.exec(readme)?.[1] ?? "0.0.0";
+  assert(
+    /^- 4\.7\.1 \(\d{4}-\d{2}-\d{2}\): .*\(#120\)$/m.test(readme) && atLeast(current, "4.7.1"),
+    "README has a 4.7.1 changelog line for issue 120 and a Current version of at least 4.7.1",
+  );
+}
+
 try {
   cliDocs();
   designDocs();
   pushUrlDocs();
+  release();
   console.log("\nAll #120 docs checks passed.");
 } catch (err) {
   console.error(err);

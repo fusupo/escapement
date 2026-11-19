@@ -51,13 +51,20 @@ function run() {
   );
 
   const readme = read("README.md");
+  // Minimums, not the current versions: a later release moves them (PROJECT_LORE).
+  const atLeast = (v: string, min: string) => {
+    const [a, b] = [v, min].map((x) => x.split(".").map(Number));
+    for (let i = 0; i < 3; i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0);
+    return true;
+  };
+  const current = /^\*\*Current:\*\* (\d+\.\d+\.\d+)$/m.exec(readme)?.[1] ?? "0.0.0";
   assert(
     skill.includes("**Version:** 2.7.0") &&
       /^- v2\.7\.0: .*\(#117\)$/m.test(skill) &&
-      JSON.parse(read(".claude-plugin/plugin.json")).version === "4.7.0" &&
-      readme.includes("**Current:** 4.7.0") &&
+      atLeast(JSON.parse(read(".claude-plugin/plugin.json")).version, "4.7.0") &&
+      atLeast(current, "4.7.0") &&
       /^- 4\.7\.0 \(\d{4}-\d{2}-\d{2}\): .*\(#117\)$/m.test(readme),
-    "archive-work 2.7.0, plugin 4.7.0 and the README changelog carry a line for #117",
+    "archive-work 2.7.0, a plugin and README Current of at least 4.7.0, and the README changelog carry a line for #117",
   );
 
   console.log("\nThe docs (#117)\n");
