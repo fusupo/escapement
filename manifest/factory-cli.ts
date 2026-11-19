@@ -14,6 +14,7 @@ import { reviewInput, recordReview } from "./factory/review.ts";
 import { openPr } from "./factory/pr.ts";
 import { recordManual, type RecordedView } from "./factory/manual.ts";
 import { archiveRun, backfillMergeShas, type BackfillResult } from "./factory/archive.ts";
+import { scanReverts, type RevertsResult } from "./factory/reverts.ts";
 import { syncGuard } from "./factory/guard.ts";
 import { currentOwner } from "./factory/owner.ts";
 import { parseFaultSpec, FAULT_ENV } from "./factory/fault.ts";
@@ -80,6 +81,9 @@ Commands:
   backfill-merge-shas [run_id]  Fill in the merge SHA of this repository's runs
                                 closed as merged before archive --close recorded
                                 it, from their PRs, as the agent (idempotent)
+  reverts                       Record reverts of this repository's merged runs
+                                found on their target branches in local git
+                                (never fetches, no GitHub; idempotent)
   status [run_id]               List open runs (--all: include closed), or show one
   resume <run_id>               Reconcile an interrupted run
   revoke <run_id>               End the run's active authorization
@@ -123,7 +127,7 @@ Options:
   --json                Print one JSON object (see docs/FACTORY_CLI.md)
   --data-dir <path>     Use {path}/manifest.db instead of the shared manifest
   --project-root <path> start, check, exclude, push, authorization,
-                        backfill-merge-shas: the worktree
+                        backfill-merge-shas, reverts: the worktree
                         (default: git toplevel of the cwd)
   --artifact-dir <path> Put run artifacts in {path}/{run_id}/
   --issue <n>           start: issue number, when the work item isn't #N
@@ -306,6 +310,7 @@ const KNOWN_DB_COMMANDS = new Set([
   "record-manual",
   "archive",
   "backfill-merge-shas",
+  "reverts",
 ]);
 
 /** Commands that don't touch the manifest database, so hosts can run them anywhere. */
@@ -585,6 +590,10 @@ async function dispatch(db: Database, command: string, p: Parsed, json: boolean)
       const r = backfillMergeShas(db, { worktree: resolveWorktree(str(p, "--project-root")), runId: arg, owner });
       return { result: r, text: describeBackfill(r) };
     }
+    case "reverts": {
+      const r = scanReverts(db, { worktree: resolveWorktree(str(p, "--project-root")), owner });
+      return { result: r, text: describeReverts(r) };
+    }
     case "pr": {
       const runId = need(arg, "run_id");
       const bodyFile = str(p, "--body-file");
@@ -695,6 +704,14 @@ function describeBackfill(r: BackfillResult): string {
   return lines.join("\n");
 }
 
+function describeReverts(r: RevertsResult): string {
+  const lines = [`${r.repo}: ${r.recorded.length} revert(s) recorded, ${r.already} already known`];
+  for (const s of r.scanned) lines.push(`  scanned ${s.ref} at ${s.tip}`);
+  for (const x of r.recorded) lines.push(`  ${x.run_id}: ${x.revert_sha} reverts ${x.reverted_sha} (merge ${x.merge_sha})`);
+  for (const s of r.skipped) lines.push(`  skipped ${s.target_ref}: ${s.reason}`);
+  return lines.join("\n");
+}
+
 /** A command other than start when the manifest database doesn't exist yet. */
 function withoutDatabase(command: string, p: Parsed): Outcome {
   const where = resolveDbPath({ dataDir: str(p, "--data-dir") });
@@ -706,6 +723,10 @@ function withoutDatabase(command: string, p: Parsed): Outcome {
   // Sweeps over a repository's closed runs: with no database there are none (#117).
   if (command === "backfill-merge-shas") {
     const r: BackfillResult = { repo: repoName(mainRepoRoot(resolveWorktree(str(p, "--project-root")))), filled: [], skipped: [] };
+    return { result: r, text: "No factory database; nothing to check." };
+  }
+  if (command === "reverts") {
+    const r: RevertsResult = { repo: repoName(mainRepoRoot(resolveWorktree(str(p, "--project-root")))), scanned: [], recorded: [], already: 0, skipped: [] };
     return { result: r, text: "No factory database; nothing to check." };
   }
   if (!KNOWN_DB_COMMANDS.has(command)) throw new FactoryError("usage", `unknown command ${command}`);
