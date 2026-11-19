@@ -41,9 +41,15 @@ import { reentries, type Reentry } from "./reentry.ts";
  * recommendation then, the attempt and head it left from). A re-entered
  * run closed unmerged is rejected or abandoned as any other.
  *
+ * A merged PR's merge commit (`mergeCommit.oid`, from the same `pr view`)
+ * is recorded as the run's `merge_sha` and in the `operator_action` event
+ * (#117), so a later revert or defect can be traced back to the run and
+ * its gate recommendation. An abandoned run records none. Runs closed
+ * before #117 are filled in by `backfillMergeShas`.
+ *
  * The close action passed to the run's state change stays merged or
  * abandoned, as before. The artifact dir stays where it is (the database
- * holds its paths). The merge commit is recorded later (manifest-sync).
+ * holds its paths).
  * Bookkeeping: it works past the deadline, under the worktree lock, so it
  * waits for a live operation to finish.
  */
@@ -56,7 +62,14 @@ type PrView = {
   mergedAt: string | null;
   headRefOid?: string | null;
   reviews?: { state?: string; author?: { login?: string } | null }[] | null;
+  mergeCommit?: { oid?: string | null } | null;
 };
+
+/** A merge commit's SHA from a PR view: a full 40-hex SHA, or null. */
+function mergeShaOf(pr: Pick<PrView, "mergeCommit">): string | null {
+  const oid = pr.mergeCommit?.oid ?? null;
+  return oid && /^[0-9a-f]{40}$/.test(oid) ? oid : null;
+}
 
 /** What the operator did, from the PR as GitHub reports it and the head the run last validated. */
 export function operatorAction(
@@ -83,6 +96,8 @@ export type ArchiveResult = {
   closed: "merged" | "abandoned" | null;
   /** What the operator did, recorded when this call closed the run (#110); null otherwise. */
   operator_action: OperatorAction | null;
+  /** The PR's merge commit, recorded when this call closed the run as merged (#117); null otherwise. */
+  merge_sha: string | null;
   pr_state: string | null;
   state: RunState;
 };
@@ -108,7 +123,7 @@ export async function archiveRun(
     const run = getRun(db, runId);
     let action: "merged" | "abandoned" | null = null;
     let prState: string | null = null;
-    let detail: { action: OperatorAction; changesRequestedBy: string[]; finalHead: string | null } | null = null;
+    let detail: { action: OperatorAction; changesRequestedBy: string[]; finalHead: string | null; mergeSha: string | null } | null = null;
     if (close && run.state !== "closed") {
       if (opts.abandon) {
         action = "abandoned";
@@ -120,16 +135,20 @@ export async function archiveRun(
         // Reading the PR carries the agent token: never to a host but github.com (#87).
         assertTokenHost(remote);
         const pr = ghJson<PrView>(
-          ["pr", "view", String(run.pr_number), "-R", remote.ghRepo, "--json", "state,mergedAt,headRefOid,reviews"],
+          ["pr", "view", String(run.pr_number), "-R", remote.ghRepo, "--json", "state,mergedAt,headRefOid,reviews,mergeCommit"],
           { token: agentToken(env), env },
         );
         prState = pr.state;
         if (pr.state === "MERGED" || pr.mergedAt) action = "merged";
         else if (pr.state === "CLOSED") action = "abandoned";
         else throw blocked("pr_open", `PR #${run.pr_number} is still open; merge or close it first, or pass --abandon`);
-        detail = { ...operatorAction(pr, validatedHead(db, runId), reentries(db, runId)), finalHead: pr.headRefOid ?? null };
+        detail = {
+          ...operatorAction(pr, validatedHead(db, runId), reentries(db, runId)),
+          finalHead: pr.headRefOid ?? null,
+          mergeSha: action === "merged" ? mergeShaOf(pr) : null,
+        };
       }
-      if (!detail) detail = { action: "abandoned", changesRequestedBy: [], finalHead: null };
+      if (!detail) detail = { action: "abandoned", changesRequestedBy: [], finalHead: null, mergeSha: null };
     }
     const changed = run.archive_path !== archivePath || action !== null;
     const updated = tx(db, () => {
@@ -141,7 +160,7 @@ export async function archiveRun(
       transitionRun(db, runId, "closed", { action, owner: opts.owner, reason: prState ? `PR #${run.pr_number} ${prState.toLowerCase()}` : "archived" });
       // The close action (merged, abandoned) goes on the state change; the
       // column keeps the richer record of what the operator did.
-      db.prepare("UPDATE factory_runs SET operator_action = ? WHERE run_id = ?").run(detail.action, runId);
+      db.prepare("UPDATE factory_runs SET operator_action = ?, merge_sha = ? WHERE run_id = ?").run(detail.action, detail.mergeSha, runId);
       recordEvent(db, runId, "operator_action", {
         action: detail.action,
         pr_number: run.pr_number,
@@ -149,6 +168,7 @@ export async function archiveRun(
         changes_requested_by: detail.changesRequestedBy,
         validated_head: validatedHead(db, runId),
         final_head: detail.finalHead,
+        merge_sha: detail.mergeSha,
         gate_recommendation: run.gate_recommendation ?? null,
         reentries: reentries(db, runId).map((r) => ({
           trigger: r.trigger,
@@ -167,6 +187,7 @@ export async function archiveRun(
       changed,
       closed: action,
       operator_action: action && detail ? detail.action : null,
+      merge_sha: action && detail ? detail.mergeSha : null,
       pr_state: prState,
       state: updated.state,
     };
