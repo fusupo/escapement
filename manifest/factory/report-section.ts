@@ -101,11 +101,31 @@ export function cell(text: string, max = 300): string {
 
 const short = (sha: string) => sha.slice(0, 10);
 
-export function renderSection(report: ReportView, criteria: CriterionView[], branch: string, history: AttemptSummary[] = []): string {
+/** The gate's recommendation for the report the section shows (§6.3, #110). */
+export type GateView = { mode: string; recommendation: string; reasons: string[] };
+
+const GATE_LABEL: Record<string, string> = {
+  auto_merge: "recommends auto-merge",
+  ping: "recommends a human look (ping)",
+};
+
+export function renderSection(
+  report: ReportView,
+  criteria: CriterionView[],
+  branch: string,
+  history: AttemptSummary[] = [],
+  gate?: GateView,
+): string {
   const lines: string[] = [SECTION_BEGIN, "## Factory validation report", ""];
   const outcome = report.outcome ?? "none";
   lines.push(`**Outcome:** ${OUTCOME_LABEL[outcome] ?? cell(outcome)}`);
   lines.push("");
+  if (gate) {
+    lines.push(`**Gate (${cell(gate.mode, 40)}):** ${GATE_LABEL[gate.recommendation] ?? cell(gate.recommendation, 40)}`);
+    for (const reason of gate.reasons.slice(0, 20)) lines.push(`- ${cell(reason, 240)}`);
+    if (gate.reasons.length > 20) lines.push(`- … and ${gate.reasons.length - 20} more`);
+    lines.push("", "Report-only: nothing is merged by the factory; the merge is yours.", "");
+  }
   const rev = report.revision && report.revision > 1 ? `, report revision ${report.revision}` : "";
   lines.push(`- **Run:** \`${cell(report.run_id)}\`, attempt ${report.attempt}${rev}`);
   const reasons = report.tier.reasons.length ? `: ${report.tier.reasons.map((r) => cell(r, 160)).join("; ")}` : "";

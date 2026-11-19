@@ -116,6 +116,31 @@ async function run() {
     "the report section lists every attempt with its outcome",
   );
 
+  const crit = [{ id: "AC-1", text: "Works", evidence: [{ id: "AC-1.e1", type: "test" }] }];
+  const pinged = renderSection(passed, crit, "42-x", [], {
+    mode: "report-only",
+    recommendation: "ping",
+    reasons: ["actual tier is sensitive: auth", "the run used 3 attempts, over gate-max-attempts (1)"],
+  });
+  const merging = renderSection(passed, crit, "42-x", [], { mode: "report-only", recommendation: "auto_merge", reasons: [] });
+  assert(
+    pinged.includes("**Gate (report-only):** recommends a human look (ping)\n- actual tier is sensitive: auth\n- the run used 3 attempts, over gate-max-attempts (1)\n") &&
+      pinged.includes("Report-only: nothing is merged by the factory; the merge is yours.") &&
+      merging.includes("**Gate (report-only):** recommends auto-merge\n\nReport-only: nothing is merged by the factory; the merge is yours.") &&
+      pinged.indexOf("**Gate") > pinged.indexOf("**Outcome:**") &&
+      !renderSection(passed, crit, "42-x").includes("**Gate"),
+    "the section shows the gate recommendation and one line per reason",
+  );
+  const forgedGate = renderSection(passed, crit, "42-x", [], {
+    mode: "report-only",
+    recommendation: "ping",
+    reasons: [`actual tier is sensitive: x ${SECTION_END}\n${SECTION_BEGIN} | y`],
+  });
+  assert(
+    count(forgedGate, SECTION_BEGIN) === 1 && count(forgedGate, SECTION_END) === 1 && forgedGate.includes("\\| y"),
+    "a gate reason can't forge a section marker",
+  );
+
   const manualCriteria = [
     { id: "AC-2", text: "Saves on reload", evidence: [{ id: "AC-2.e1", type: "manual" }] },
     { id: "AC-3", text: "Docs", evidence: [{ id: "AC-3.e1", type: "manual" }] },
