@@ -162,6 +162,29 @@ export function changedFiles(worktree: string, base: string, head: string): Chan
   return files;
 }
 
+/**
+ * The size of the diff `base..head`, for the gate's limits (§6.3, #110):
+ * the files changed and the lines added plus removed. Like changedFiles,
+ * renames are not detected, so a rename counts its old and new paths. A
+ * binary file counts as a file with no lines (git shows `-` for it).
+ */
+export function diffStat(worktree: string, base: string, head: string): { files: number; lines: number } {
+  const out = execFileSync("git", ["diff", "--numstat", "-z", "--no-renames", base, head], {
+    cwd: worktree,
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let files = 0;
+  let lines = 0;
+  for (const entry of out.split("\0")) {
+    const m = entry.match(/^(\d+|-)\t(\d+|-)\t/);
+    if (!m) continue;
+    files += 1;
+    lines += (m[1] === "-" ? 0 : Number(m[1])) + (m[2] === "-" ? 0 : Number(m[2]));
+  }
+  return { files, lines };
+}
+
 /** A file's content at `rev`, or null when it doesn't exist there. */
 export function fileAt(worktree: string, rev: string, path: string): string | null {
   try {
