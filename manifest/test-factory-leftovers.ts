@@ -6,6 +6,7 @@ import { mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { backfillMergeShas } from "./factory/archive.ts";
 import { gh } from "./factory/github.ts";
+import { renderSection, type ReportView } from "./factory/report-section.ts";
 import { currentOwner } from "./factory/owner.ts";
 import { FactoryError } from "./factory/util.ts";
 import { assert, cleanup, makeRepo, memDb, seedRun, sh, stubGh, tempDir } from "./factory/testkit.ts";
@@ -121,9 +122,33 @@ async function backfillStops() {
   );
 }
 
+function redoLine() {
+  console.log("\nThe redo line says what happened (item 10)\n");
+  const H1 = "1".repeat(40);
+  const H2 = "2".repeat(40);
+  const report = (head: string, attempt: number, redoHead: string): ReportView => ({
+    run_id: "acme-w#7-r1", attempt, outcome: "pending_manual", head_sha: head, target_ref: "main", target_sha: "f".repeat(40),
+    contract_digest: "sha256:x", validation_scope: "branch", tier: { proposed: "standard", actual: "standard", reasons: [] },
+    evidence: [{ id: "AC-1.e1", executed: "pending_manual", supports_criterion: null }], findings: [], flags: [],
+    manual_redo: [{ evidence_id: "AC-1.e1", outcome: "pass", head_sha: redoHead, attempt: 1 }],
+  });
+  const same = renderSection(report(H1, 2, H1), [], "b");
+  assert(
+    same.includes("`AC-1.e1`: awaiting a human again: pass at `1111111` (attempt 1), validated again on the same head (attempt 2)") &&
+      !same.includes("the head moved"),
+    "the redo line says the same head was validated again when it was",
+  );
+  const moved = renderSection(report(H2, 2, H1), [], "b");
+  assert(
+    moved.includes("`AC-1.e1`: awaiting a human again: pass at `1111111` (attempt 1), the head moved") && !moved.includes("validated again on the same head"),
+    "the redo line still says the head moved when it did",
+  );
+}
+
 async function run() {
   stubEnterpriseToken();
   await backfillStops();
+  redoLine();
 }
 
 run()
