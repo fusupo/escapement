@@ -192,6 +192,25 @@ export function assertTokenHost(remote: Remote): void {
 }
 
 /**
+ * The `-c` arguments that give git the agent token, for `https://github.com`
+ * only (#87). The empty values first clear every helper configured before
+ * (the operator's own, generic or for github.com), so the helper that
+ * remains reads the token from the environment and answers no other host:
+ * a URL that git rewrites to another host (insteadOf, pushInsteadOf) gets
+ * no token from it.
+ */
+export function tokenHelperArgs(): string[] {
+  return [
+    "-c",
+    "credential.helper=",
+    "-c",
+    `credential.https://${GITHUB_HOST}.helper=`,
+    "-c",
+    `credential.https://${GITHUB_HOST}.helper=!f() { echo username=x-access-token; echo "password=$${TOKEN_VAR}"; }; f`,
+  ];
+}
+
+/**
  * Push HEAD to `refs/heads/{branch}` and nothing else, never forced (the
  * authorization excludes force_push and push_other_branches). On github.com
  * the push goes to `https://github.com/{repo}.git` with the agent token
@@ -204,15 +223,7 @@ export function pushBranch(opts: { worktree: string; remote: Remote; repo: strin
   const refspec = `HEAD:refs/heads/${opts.branch}`;
   const env = { ...process.env, [TOKEN_VAR]: opts.token, GIT_TERMINAL_PROMPT: "0" };
   const args = opts.remote.host
-    ? [
-        "-c",
-        "credential.helper=",
-        "-c",
-        `credential.helper=!f() { echo username=x-access-token; echo "password=$${TOKEN_VAR}"; }; f`,
-        "push",
-        `https://${opts.remote.host}/${opts.repo}.git`,
-        refspec,
-      ]
+    ? [...tokenHelperArgs(), "push", `https://${opts.remote.host}/${opts.repo}.git`, refspec]
     : ["push", "origin", refspec];
   try {
     execFileSync("git", args, { cwd: opts.worktree, env, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });

@@ -1,6 +1,7 @@
+import { execFileSync } from "node:child_process";
 import { realpathSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { join } from "node:path";
-import { agentToken, agentIdentity, gh, remoteOf, pushBranch, pushAsAgent, TOKEN_VAR, agentEnvPath, parseAgentEnv } from "./factory/github.ts";
+import { agentToken, agentIdentity, gh, remoteOf, pushBranch, pushAsAgent, tokenHelperArgs, TOKEN_VAR, agentEnvPath, parseAgentEnv } from "./factory/github.ts";
 import { assert, throws, cleanup, makeRepo, tempDir, sh, stubGh } from "./factory/testkit.ts";
 
 const TOKEN = "ghp_test_agent_token_123";
@@ -107,6 +108,42 @@ async function run() {
   sh("git", ["config", `url.${gbare}.insteadOf`, "https://github.com/acme/w.git"], repo);
   pushBranch({ worktree: repo, remote: remoteOf(repo, "acme/w"), repo: "acme/w", branch: "42-x", token: TOKEN });
   assert(sh("git", ["rev-parse", "refs/heads/42-x"], gbare) === sh("git", ["rev-parse", "HEAD"], repo), "a GitHub remote is pushed over https as the agent");
+
+  console.log("\nThe credential helper (#87)\n");
+  {
+    // A throwaway HOME and no system config, so only the runner's arguments
+    // can answer; no terminal prompt, so a host nobody answers for fails.
+    const credHome = tempDir();
+    const credEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      HOME: credHome,
+      XDG_CONFIG_HOME: credHome,
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_TERMINAL_PROMPT: "0",
+      [TOKEN_VAR]: TOKEN,
+    };
+    delete credEnv.GIT_ASKPASS;
+    delete credEnv.SSH_ASKPASS;
+    const fill = (host: string): string => {
+      try {
+        return execFileSync("git", [...tokenHelperArgs(), "credential", "fill"], {
+          cwd: credHome,
+          env: credEnv,
+          input: `protocol=https\nhost=${host}\n\n`,
+          encoding: "utf-8",
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+      } catch (err) {
+        return String((err as { stdout?: string }).stdout ?? "");
+      }
+    };
+    const forGitHub = fill("github.com");
+    const forOther = fill("elsewhere.invalid");
+    assert(
+      forGitHub.includes(`password=${TOKEN}`) && !forOther.includes(TOKEN) && !forOther.includes("password="),
+      "the credential helper answers for https://github.com and for no other host",
+    );
+  }
 
   console.log("\nfactory push (no run)\n");
   {
