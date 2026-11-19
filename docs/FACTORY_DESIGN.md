@@ -116,7 +116,7 @@ One run through the first release. This table only gathers what §3.6, §4.1, §
 
 1. **Bounded fix loop** — on `fail`, implementer iterates on findings instead of stopping. **Done** (#92, §6.2).
 2. **Plan critique** — one round, measured from its first run. **Done** (#99, §3.5).
-3. **Gate in report-only mode** — compute and record a recommendation; always ping.
+3. **Gate in report-only mode** — compute and record a recommendation; always ping. **Done** (#110, §6.3).
 
 ### 2.3 Later
 
@@ -623,9 +623,18 @@ On `fail`, the implementer receives findings only, fixes, commits, and re-valida
 
 ### 6.3 Gate
 
-**Report-only (next):** compute a recommendation, record it, always ping.
+**Report-only (#110):** compute a recommendation, record it, always ping.
 
 `auto_merge` recommended only if all hold: actual tier `standard`; outcome `pass`; no modified-assertion or policy flags; report head = branch head; contract digest matches authorization; no advisory findings above configured severity; diff size and attempt count under thresholds. Otherwise `ping` with reasons.
+
+*As built (#110):*
+
+- **Where.** `factory pr` works the gate out for the report the PR shows (`manifest/factory/gate.ts`), every time it opens or refreshes the PR. `evaluateGate` is pure: ten rules, each `{rule, ok, detail}`, and `auto_merge` only when all hold. Otherwise `ping`, with one reason per failed rule, in rule order.
+- **The rules.** Actual tier `standard` (its reasons shown otherwise); outcome `pass` (`pending_manual` names the checks awaiting a human); no modified assertions and no execution-policy changes, each from the report's `changes` counts or its `assertion:` / `policy:` findings; the report's head is the branch head and the tree is clean; the report's contract digest is the active authorization's; advisory findings within `gate-max-advisories`, not counting the `assertion:` and `policy:` ones (validate reports those as advisory too, and they have rules of their own); the diff from the report's merge base to its head within `gate-max-diff-lines` and `gate-max-diff-files` (§8); the run's attempts, interrupted ones included, within `gate-max-attempts`. A diff that can't be measured fails both diff rules: it never passes silently. `factory pr` already refuses a moved head and a stale contract, so those two rules hold whenever it gets that far; they are still recorded, for later callers that lack those guards.
+- **Recorded before it is shown.** The result goes on the run (`gate_recommendation`, `gate_reasons_json`: always the latest) and into a `gate` event (`{mode, recommendation, reasons, checks, attempt, report_revision, head_sha, outcome, limits}`) before anything is pushed. The PR's report section then shows it, and `.result.gate` returns it. A result unchanged since the latest event, for the same attempt, report revision and head, adds no event. A crash after recording (new fault point `pr.gate_recorded`) is repaired by running `pr` again: one event, one PR.
+- **Refreshes.** Each refresh works the gate out again from the current report. Once every manual check is recorded `pass`, the report resolves to `pass` and every rule is applied again, so an earlier `ping` can become `auto_merge`; the `ping` stays in the events. A failed manual check gives `ping` for the outcome.
+- **Notification.** `do-work`, `create-pr` and `validate-work` report the recommendation and its reasons for every PR opened or refreshed, and notify the operator whatever it is. Nothing merges: the runner never calls a merge, and the skills never do.
+- **The other half of §7.4.** `factory archive --close` records what the operator then did, in `operator_action` (§7.1).
 
 **Before enforcing mode (later), additionally required:**
 
@@ -712,6 +721,8 @@ CREATE TABLE factory_events (
 );
 ```
 
+*As built (#110):* `factory archive --close` fills `operator_action` from the PR, read as the agent: merged with no `CHANGES_REQUESTED` review and the head still the last validated one → `merged_as_is`; merged otherwise (a change request, or commits pushed after validation) → `changes_requested`; closed unmerged after a change request → `rejected`; closed unmerged otherwise, no PR, or `--abandon` → `abandoned`. Each close also adds an `operator_action` event with the PR's state, who requested changes, the validated and final heads, and the run's latest gate recommendation, which is what the false auto-merge rate compares. The run's state change keeps the plain close action (`merged`, `abandoned`), and runs closed earlier hold `merged`, the older form of `merged_as_is`. What it can't see, and so how it skews §7.4: a review dismissed afterwards (`DISMISSED`) doesn't count; the agent opens the PR and reviews it through review-pr, and GitHub doesn't let a PR's author request changes on their own PR, so the agent's review is `COMMENTED` and its change requests show only if the head moves; an "Update branch" merge from the base moves the head, so it reads as `changes_requested`. Reverts and attributed defects (§7.2) are still recorded later.
+
 ### 7.2 Event conventions
 
 - `critique_finding`: `{finding, severity, accepted, plan_change, tokens}` — measures critic value directly, not only via later validation failures.
@@ -753,6 +764,10 @@ Extends `## Escapement Settings` in each project's CLAUDE.md:
 - **run-budget**: 2h
 - **exec-hook**: on
 - **gate-mode**: report-only
+- **gate-max-diff-lines**: 400
+- **gate-max-diff-files**: 15
+- **gate-max-advisories**: 0
+- **gate-max-attempts**: 1
 ```
 
 All keys optional. Missing `static`/`verify` → `blocked` ("not configured"). `required-checks` cannot be narrowed by a contract. `test-results` should reference `$FACTORY_RESULTS_DIR` (for jest-junit, set `JEST_JUNIT_OUTPUT_DIR` from it). If a test runner can only write to a fixed path inside the worktree, it must be gitignored; the runner clears it before each invocation and moves results into the artifact dir afterward (§4.4). `run-budget` sets the enforced run deadline; agent time and token figures are advisory.
@@ -762,6 +777,8 @@ All keys optional. Missing `static`/`verify` → `blocked` ("not configured"). `
 *As built (#64):* `exec-hook` defaults to `on`; it governs the exec guard during runs (§4.1).
 
 *As built (#104):* `browser-tests` (`playwright`) says the project's `verify` runs browser tests. `factory check` reports it as `browser_tests` for setup-work, its planner and the plan critic, which then plan UI criteria as browser-test evidence; the runner does nothing else with it. Setting a project up, and the rootDir rule its selectors depend on: [FACTORY_CLI.md](FACTORY_CLI.md#browser-tests-as-evidence).
+
+*As built (#110):* the gate's limits (§6.3) are four settings: `gate-max-diff-lines` (default 400, lines added plus removed), `gate-max-diff-files` (default 15), `gate-max-advisories` (default 0: reviewer findings are only blocking or advisory, so the limit is a count) and `gate-max-attempts` (default 1: only a first-attempt pass is recommended for auto-merge). They are read from the validated head's CLAUDE.md, so a branch that loosens them is an execution-policy change, and the gate recommends `ping` for it. `gate-mode` still accepts only `report-only`.
 
 *As built (#61):* `test-files` (glob list) names test files for classification (§4.6); its default covers common layouts (`*.test.*`, `*.spec.*`, `test/`, `tests/`, `__tests__/`, `test_*.py`, `*_test.py`, `*_test.go`). `base-branch` is the default target for `factory start`.
 
@@ -781,14 +798,14 @@ All keys optional. Missing `static`/`verify` → `blocked` ("not configured"). `
 | agents | `validation-reviewer` | first |
 | `do-work` | fix loop (§6.2) | next |
 | `setup-work` + `plan-critic` agent | critique loop (§3.5) | next (as built: #99) |
-| gate + `manifest-sync` | report-only recommendation; operator action and merge SHA recording | next |
+| gate + `manifest-sync` | report-only recommendation; operator action and merge SHA recording | next (as built: #110, the gate and the operator action; merge SHA recording still next) |
 | `PreToolUse` exec hook | optional enforcement of `factory exec` | first (as built: on during runs, opt out per project) |
 
 ---
 
 ## 10. Build Order
 
-Status as of 2026-11-17; tracked in #66.
+Status as of 2026-11-18; tracked in #66.
 
 1. **#57** — context-path detection. **Done** (PR #68). Found alongside it and also done: **#67**, the manifest skills run their CLI through a plugin-root wrapper, `scripts/manifest.sh` (PR #69).
 2. **#58 Shared manifest location + versioned schema** — one per-user manifest database independent of plugin and project location; `PRAGMA user_version` and ordered migrations replacing `ensureSchema` (§2.5). **Done.**
@@ -808,7 +825,7 @@ Status as of 2026-11-17; tracked in #66.
 10. **#92 Bounded fix loop.** **Done.** The runner loops a `fail` or an implementer-fixable `error` back to implementing within `max-attempts`, with stuck detection on deterministic findings, regression flags and error causes (migration 3); `factory continue` is the operator's way back from `escalated`; the PR shows the attempt history; crash tests at each boundary (§6.2). Re-entry after the PR is open is #97.
 11. **#99 Plan critique**, one round. **Done.** The `plan-critic` agent (a prompt plus `critique.schema.json`) critiques the plan and contract in `setup-work` before approval; unresolved findings reach the operator with both positions; dispositions are recorded in the scratchpad and, with `record-critique`, on the run as `critique_finding` events. In the fix loop, a rejected manual procedure now escalates at once (§3.5, §6.2).
 12. **#103 Agent-assisted manual checks.** **Done.** The plugin bundles the Playwright MCP server; `validate-work` carries out a manual check's steps on request and the operator decides; `record-manual --assisted --attachment`; recorded outcomes are visible before the report resolves (§5.5).
-13. **Gate, report-only.**
+13. **#110 Gate, report-only.** **Done.** `factory pr` recommends `auto_merge` or `ping` for the report the PR shows, with one reason per failed §6.3 rule, records it on the run and as a `gate` event before the PR shows it, and works it out again on every refresh; four new limit settings (§8); `archive --close` records the operator's action (§7.1); the skills notify the operator whatever the recommendation, and nothing merges. A crash test at the new boundary (`pr.gate_recorded`).
 14. **Later:** merge-result validation, enforcing gate, async escalation, hidden scenarios, test-first, outer loop.
 
 ---

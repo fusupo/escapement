@@ -396,7 +396,7 @@ After the last task:
 
 ### C. Open the PR
 
-Invoke create-pr. It writes the title and description, and `factory pr` pushes the branch and opens the PR as the agent, with the validation report. On success, tick the scratchpad's Quality Checks and the acceptance criteria the report shows as demonstrated (manual ones stay open until recorded), update the Work Log and notify (step E) with the PR URL. Merging is the operator's: never merge. Advisory findings don't block: list them in the summary. Don't change code after validation to address them, since that needs a new attempt.
+Invoke create-pr. It writes the title and description, and `factory pr` pushes the branch and opens the PR as the agent, with the validation report and the gate's recommendation (`.result.gate`, docs/FACTORY_DESIGN.md §6.3). On success, tick the scratchpad's Quality Checks and the acceptance criteria the report shows as demonstrated (manual ones stay open until recorded), update the Work Log and notify (step E) with the PR URL and the gate. Merging is the operator's: never merge, whatever the gate recommends. The gate is report-only: `auto_merge` is a recommendation for the operator, not an instruction. Advisory findings don't block: list them in the summary. Don't change code after validation to address them, since that needs a new attempt.
 
 If `factory pr` fails, route on its code:
 - **No JSON, or exit status 128 or more:** the runner died mid-step, possibly after GitHub created the PR. Run the same `factory pr` command again: its lookup finds that PR and records it (`action: recovered`). Then route on that result as here.
@@ -421,8 +421,11 @@ Send a push notification (PushNotification tool, when available) and end with th
 ```
 🏭 {run_id}: {PR #{n} opened: {url} | escalated: {reason}}
    Outcome: {outcome}   Report: {report_path}   (leave out when there is no attempt yet)
+   Gate: {auto_merge | ping}: {each reason, or "every rule holds"} (report-only: you merge)
    {pending manual checks, if any: each ID and how to record it (validate-work)}
 ```
+
+The `Gate:` line comes from `factory pr`'s `.result.gate` (create-pr reports it). Include it for every PR opened or refreshed, whatever the recommendation: the operator is always notified, and in report-only mode the operator always merges (#110). Leave it out when the run escalated before a PR.
 
 ## State Management
 
@@ -512,10 +515,11 @@ Under an authorized run, `factory authorization` has already matched the branch,
 
 ---
 
-**Version:** 1.4.1
-**Last Updated:** 2026-11-17
+**Version:** 1.5.0
+**Last Updated:** 2026-11-18
 **Maintained By:** Escapement
 **Changelog:**
+- v1.5.0: The notification for an opened or refreshed PR carries the gate's recommendation (`Gate: auto_merge | ping` and its reasons, from `.result.gate`), whatever it is; the gate is report-only and do-work never merges (#110)
 - v1.4.1: A run escalated for a rejected manual procedure offers only abandon and start over: its instructions are in the approved contract, so no fix can help (#99)
 - v1.4.0: The fix loop (#92): after a failed or errored attempt the run comes back to implementing with `fix` (its blocking findings and error), and do-work fixes, commits and validates again; an escalated run after a failed attempt offers "fix it and continue" (`factory continue`), "abandon" or "start over"
 - v1.3.1: Push reminders push as the agent with `factory push` (#80)

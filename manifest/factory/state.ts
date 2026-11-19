@@ -103,6 +103,9 @@ export type RunRow = {
   tier_actual: string | null;
   contract_digest: string | null;
   policy_version: string | null;
+  /** The gate's latest recommendation and its reasons (JSON), set by `factory pr` (#110). */
+  gate_recommendation?: string | null;
+  gate_reasons_json?: string | null;
   operator_action: string | null;
   pr_number: number | null;
   merge_sha: string | null;

@@ -562,7 +562,7 @@ async function dispatch(db: Database, command: string, p: Parsed, json: boolean)
       });
       return {
         result: r,
-        text: `${runId}: archived at ${r.archive_path}${r.changed ? "" : " (unchanged)"}\n  run: ${r.state}${r.closed ? ` (${r.closed})` : ""}`,
+        text: `${runId}: archived at ${r.archive_path}${r.changed ? "" : " (unchanged)"}\n  run: ${r.state}${r.closed ? ` (${r.closed})` : ""}${r.operator_action ? `\n  operator action: ${r.operator_action}` : ""}`,
       };
     }
     case "pr": {
@@ -584,7 +584,9 @@ async function dispatch(db: Database, command: string, p: Parsed, json: boolean)
       });
       return {
         result: r,
-        text: `${runId}: PR #${r.pr_number} ${r.action} (${r.outcome}, attempt ${r.attempt})\n  ${r.url}\n  run:  ${r.state}\n  body: ${r.body_path}`,
+        text:
+          `${runId}: PR #${r.pr_number} ${r.action} (${r.outcome}, attempt ${r.attempt})\n  ${r.url}\n  run:  ${r.state}\n  body: ${r.body_path}\n` +
+          `  gate: ${r.gate.recommendation} (${r.gate.mode}; the merge is yours)${r.gate.reasons.map((x) => `\n    - ${x}`).join("")}`,
       };
     }
     case "status": {

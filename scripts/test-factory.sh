@@ -355,7 +355,7 @@ case "$1 $2" in
       '. + [{number: $n, url: ("https://github.com/o/r/pull/" + ($n | tostring)), headRefName: $h, baseRefName: $base, title: $t, body: $b, state: "OPEN", headRepositoryOwner: null}]' \
       "$state" > "$state.tmp" && mv "$state.tmp" "$state"
     echo "https://github.com/o/r/pull/$n" ;;
-  "pr view") jq -c --argjson n "$3" '.[] | select(.number == $n) | {state, mergedAt: (.mergedAt // null)}' "$state" ;;
+  "pr view") jq -c --argjson n "$3" '.[] | select(.number == $n) | {state, mergedAt: (.mergedAt // null), headRefOid: (.headRefOid // null), reviews: (.reviews // [])}' "$state" ;;
   "pr edit")
     # as in a repository where classic Projects are deprecated (#65)
     echo "GraphQL: Projects (classic) is being deprecated in favor of the new Projects experience" >&2; exit 1 ;;
@@ -380,6 +380,13 @@ if [[ $status -eq 0 && "$(jq -r '.ok and .result.action == "created" and .result
 if [[ "$(git -C "$vproject.origin.git" rev-parse refs/heads/9-validate 2>/dev/null)" == "$(git -C "$vproject" rev-parse HEAD)" ]]; then ok; else bad "pr-pushed"; fi
 if [[ "$(jq -r '.[0] | .baseRefName == "main" and (.body | startswith("## Summary\nMakes it work.") and contains("<!-- escapement:factory-report:begin -->"))' "$tmp/prs.json")" == true ]]; then ok; else bad "pr-body" "$(cat "$tmp/prs.json")"; fi
 if [[ "$(cut -f1 "$tmp/prs.json.log" | sort -u)" == agent-token ]]; then ok; else bad "pr-as-agent" "$(cat "$tmp/prs.json.log")"; fi
+# the gate (#110): recorded on the run and shown in the PR, never merged
+gate="$(jq -r '.result.gate.recommendation' <<<"$out")"
+st="$(CWD="$vproject" f --json status '#9-r1')"
+if [[ ( "$gate" == auto_merge || "$gate" == ping ) && "$(jq -r '.result.gate.mode' <<<"$out")" == report-only &&
+      "$(jq -r '.result.run.gate_recommendation' <<<"$st")" == "$gate" &&
+      "$(jq -r '.[0].body | contains("**Gate (report-only):**")' "$tmp/prs.json")" == true &&
+      "$(jq -r '[.[] | select(.mergedAt != null)] | length' "$tmp/prs.json")" == 0 ]]; then ok; else bad "pr-gate-recorded" "$out $st"; fi
 
 # again: the same PR is found and updated, not duplicated
 out="$(ghf --json pr '#9-r1')"
@@ -396,9 +403,12 @@ if [[ $status -eq 2 && "$(jq -r '.error.code' <<<"$out")" == not_pending_manual 
 out="$(ghf --json archive '#9-r1' --path "$tmp/archive/9" --close)"
 status=$?
 if [[ $status -eq 2 && "$(jq -r '.error.code' <<<"$out")" == pr_open ]]; then ok; else bad "archive-pr-open" "status=$status out=$out"; fi
-jq 'map(.state = "MERGED")' "$tmp/prs.json" > "$tmp/prs.tmp" && mv "$tmp/prs.tmp" "$tmp/prs.json"
+jq --arg h "$(git -C "$vproject" rev-parse HEAD)" 'map(.state = "MERGED" | .headRefOid = $h)' "$tmp/prs.json" > "$tmp/prs.tmp" && mv "$tmp/prs.tmp" "$tmp/prs.json"
 out="$(ghf --json archive '#9-r1' --path "$tmp/archive/9" --close)"
 if [[ "$(jq -r --arg p "$tmp/archive/9" '.ok and .result.closed == "merged" and .result.state == "closed" and .result.archive_path == $p' <<<"$out")" == true ]]; then ok; else bad "archive-close-merged" "$out"; fi
+# what the operator did (#110): merged at the validated head with no change request
+st="$(CWD="$vproject" f --json status '#9-r1')"
+if [[ "$(jq -r '.result.operator_action' <<<"$out")" == merged_as_is && "$(jq -r '.result.run.operator_action' <<<"$st")" == merged_as_is ]]; then ok; else bad "archive-operator-action" "$out $st"; fi
 out="$(CWD="$vproject" f --json authorization)"
 if [[ "$(jq -r '.result.reasons == ["no_run"]' <<<"$out")" == true ]]; then ok; else bad "archive-closed-no-run" "$out"; fi
 
@@ -475,15 +485,28 @@ if [[ "$(jq -r '[.result.actions[] | select(.attempt == 2) | .action] == ["refin
 out="$(cf --json record-review '#12-r1' 2 "$vfile")"
 if [[ "$(jq -r '.ok and .result.refinalized and .result.outcome == "pass" and .result.run_state == "validated"' <<<"$out")" == true && ! -e "$cguard" ]]; then ok; else bad "crash-refinalized" "$out"; fi
 
-# between PR creation and recording: running pr again records that PR, no second one
 echo '[]' > "$tmp/cprs.json"
 cgh() { PATH="$tmp/ghbin:$PATH" GH_STUB_STATE="$tmp/cprs.json" ESCAPEMENT_AGENT_GH_TOKEN=agent-token "$@"; }
+
+# between recording the gate and the PR (#110): the gate is on the run, nothing
+# is pushed or created, and the rerun below records the same gate once
+out="$(cgh crash 'pr.gate_recorded' --json pr '#12-r1' --title 'feat: crash test (#12)' --body-file "$tmp/narrative.md")"
+status=$?
+st="$(cf --json status '#12-r1')"
+if [[ $status -eq 137 && "$(jq length "$tmp/cprs.json")" == 0 && -z "$(git -C "$cproject.origin.git" for-each-ref refs/heads 2>/dev/null)" &&
+      "$(jq -r '.result.run.gate_recommendation == "ping" and .result.run.pr_number == null and .result.run.state == "validated"' <<<"$st")" == true &&
+      "$(jq -r '.result.run.gate_reasons_json | fromjson | any(test("2 attempts, over gate-max-attempts"))' <<<"$st")" == true &&
+      "$(cnext)" == pr ]]; then ok; else bad "crash-gate-recorded" "status=$status $st $(cat "$tmp/crash.err")"; fi
+
+# between PR creation and recording: running pr again records that PR, no second one
 out="$(cgh crash 'pr.created' --json pr '#12-r1' --title 'feat: crash test (#12)' --body-file "$tmp/narrative.md")"
 status=$?
 st="$(cf --json status '#12-r1')"
 if [[ $status -eq 137 && "$(jq length "$tmp/cprs.json")" == 1 && "$(jq -r '.result.run.pr_number == null and .result.run.state == "validated"' <<<"$st")" == true && "$(cnext)" == pr ]]; then ok; else bad "crash-pr-created" "status=$status $st"; fi
 out="$(cgh cf --json pr '#12-r1' --title 'feat: crash test (#12)' --body-file "$tmp/narrative.md")"
 if [[ "$(jq -r '.ok and .result.action == "recovered" and .result.pr_number == 1 and .result.state == "pr_open"' <<<"$out")" == true && "$(jq length "$tmp/cprs.json")" == 1 ]]; then ok; else bad "crash-pr-recovered" "$out"; fi
+if [[ "$(jq -r '.result.gate.recommendation == "ping" and .result.gate.changed == false' <<<"$out")" == true &&
+      "$(jq -r '.[0].body | contains("recommends a human look (ping)")' "$tmp/cprs.json")" == true ]]; then ok; else bad "crash-gate-once" "$out"; fi
 
 # the run used two attempts (the interrupted one counts) and lost nothing
 st="$(cf --json status '#12-r1')"

@@ -11,6 +11,8 @@ import { identityHolds } from "./revision.ts";
 import { withLocks, worktreeLock } from "./locks.ts";
 import { agentToken, gh, ghJson, pushBranch, remoteOf } from "./github.ts";
 import { renderSection, withSection, type ReportView, type CriterionView, type AttemptSummary } from "./report-section.ts";
+import { evaluateGate, gatherFacts, gateLimits, recordGate, type GateResult } from "./gate.ts";
+import { loadSettings } from "./settings.ts";
 import type { Owner } from "./owner.ts";
 
 /**
@@ -23,12 +25,16 @@ import type { Owner } from "./owner.ts";
  *    attempt's current report is for that contract; HEAD equals the
  *    report's head_sha and the tree is clean.
  * 2. Look up the open PR whose head is the run's branch (in the run's repo).
- * 3. None: refuse past the deadline (the run escalates), then push the
+ * 3. Work out the gate's recommendation for the report (§6.3, #110) and
+ *    record it on the run and as a `gate` event, before the PR shows it.
+ * 4. None: refuse past the deadline (the run escalates), then push the
  *    branch and create the PR. One: push and edit its body.
- * 4. Record the PR number on the run (`validated` → `pr_open`).
+ * 5. Record the PR number on the run (`validated` → `pr_open`).
  *
  * A crash anywhere is repaired by running the command again: step 2 finds
- * the PR an earlier call created, and recording the same number is a no-op.
+ * the PR an earlier call created, recording the same number is a no-op, and
+ * the same gate result adds no second event. Report-only: the runner never
+ * merges, whatever the gate recommends.
  * The body is the host's narrative (`--body-file`) plus the runner's
  * report section between markers; on update only the section is replaced.
  */
@@ -45,6 +51,8 @@ export type PrResult = {
   report_revision: number;
   outcome: string | null;
   body_path: string;
+  /** The gate's recommendation for this report, and whether it changed (a new `gate` event). */
+  gate: GateResult & { changed: boolean };
 };
 
 type GhPr = { number: number; url: string; body?: string; headRefName: string; headRepositoryOwner?: { login: string } | null };
@@ -90,7 +98,7 @@ export async function openPr(
         `run ${runId} is ${run.state}${run.state_reason ? ` (${run.state_reason})` : ""}; a PR needs a validated run`,
       );
     }
-    checkAuthorization(db, run);
+    const auth = checkAuthorization(db, run);
 
     const current = currentReport(db, run);
     if (!current) throw blocked("no_report", `run ${runId} has no complete validation report`);
@@ -130,11 +138,25 @@ export async function openPr(
       if (!opts.title?.trim()) throw new FactoryError("usage", "--title is needed to create the PR");
     }
 
+    // The gate, recorded before the PR shows it: a crash after this point
+    // leaves the database ahead of the PR, and the rerun records nothing new.
+    const limits = gateLimits(loadSettings(run.worktree_path).settings);
+    const gate = evaluateGate(gatherFacts(db, run, report, auth.contract_digest), limits);
+    const { changed } = recordGate(db, runId, gate, {
+      attempt: report.attempt,
+      report_revision: current.revision,
+      head_sha: report.head_sha,
+      outcome: report.outcome,
+      limits,
+      owner: opts.owner,
+    });
+    faultPoint("pr.gate_recorded");
+
     const contract = readJson<{ criteria: CriterionView[] }>(join(run.artifact_dir, "contract.json"), "contract");
     // Outcomes recorded so far, while the report still awaits other checks (#103).
     const progress = report.outcome === "pending_manual" ? manualProgress(db, run) : null;
     const view = progress?.recorded.length ? { ...report, manual_recorded: progress.recorded } : report;
-    const section = renderSection(view, contract.criteria, run.branch, attemptHistory(db, run.run_id));
+    const section = renderSection(view, contract.criteria, run.branch, attemptHistory(db, run.run_id), gate);
     const base = opts.narrative ?? existing?.body ?? "";
     const body = withSection(base, section);
     const bodyPath = join(run.artifact_dir, "pr", "body.md");
@@ -196,6 +218,7 @@ export async function openPr(
       report_revision: current.revision,
       outcome: report.outcome,
       body_path: bodyPath,
+      gate: { ...gate, changed },
     };
   });
 }

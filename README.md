@@ -162,7 +162,7 @@ stateDiagram-v2
 - **Fix loop.** When a check fails, or the reviewer blocks the attempt, the run goes back to `implementing` on its own: `do-work` fixes exactly what the report found, commits, and validates a new attempt (since 4.1.0). An error the change caused (a check timed out, the tests wrote into the tree) or the run caused (HEAD moved during validation) loops too. Every attempt counts toward `max-attempts`, and the deadline never moves.
 - **Escalation.** The run is `escalated`, and you get a notification with the report, when it needs you: an error from the environment (a check couldn't start, setup failed), `max-attempts` used up, the deadline passed, a sensitive-path sign-off refused or an assertion change the reviewer won't justify, a manual check whose instructions the reviewer rejects (only a new plan can change them, so `do-work` offers abandon or start over), the same check failing the same way twice, or a blocker the agent can't resolve. Any non-terminal state can be escalated, blocked or closed. After a failed attempt, `do-work` offers you **fix it and continue** (the same run, plan and budget, through `factory continue`), **abandon**, or **start over** with `setup-work`. Any other halted run is closed with `archive-work`. Once the PR is open, the run can't take more commits yet (#97).
 - **Resume.** If the runner or the session dies mid-run, `factory resume` kills orphaned check processes and reconciles the attempt. `do-work` and `validate-work` pick up from `factory authorization`'s `next` step, and a `factory pr` that died finds the PR it already opened instead of opening a second one.
-- **Gate.** `gate-mode` is `report-only`: the report recommends, and the merge is always yours.
+- **Gate.** `gate-mode` is `report-only`: the merge is always yours. Each time `factory pr` opens or refreshes the PR, the gate recommends `auto_merge` only when every rule holds: standard tier, outcome `pass`, no modified assertions or policy changes, the report's head and contract, and the advisory findings, diff size and attempts within the `gate-max-*` limits. Otherwise it recommends `ping`, with one reason per failed rule. The recommendation is recorded on the run, shown in the PR and sent in your notification, whatever it is. When the run is archived, `factory archive --close` records what you did with the PR (`merged_as_is`, `changes_requested`, `rejected` or `abandoned`), so the gate can later be judged against it.
 
 ### Layer 3: The Manifest
 
@@ -320,6 +320,10 @@ A project configures Escapement in a `## Escapement Settings` section of its `CL
 | `command-timeout`, `lock-timeout`, `run-budget` | Per-command timeout, lock wait, and the run's deadline from approval | `15m`, `30m`, `2h` |
 | `exec-hook` | The exec guard during runs (`on`, `off`) | `on` |
 | `gate-mode` | How the gate acts on a report | `report-only` |
+| `gate-max-diff-lines` | The gate recommends auto-merge only for a diff of at most this many lines (added plus removed) | `400` |
+| `gate-max-diff-files` | The gate recommends auto-merge only for a diff of at most this many files | `15` |
+| `gate-max-advisories` | The gate recommends auto-merge only with at most this many advisory findings | `0` |
+| `gate-max-attempts` | The gate recommends auto-merge only for a run that passed within this many attempts | `1` |
 | `browser-tests` | The project's browser test tool (`playwright`), so planning writes UI criteria as browser-test evidence. See [Browser tests as evidence](docs/FACTORY_CLI.md#browser-tests-as-evidence) | none |
 
 The factory keys are read by the runner, which applies the same section and fence rules. See [FACTORY_CLI.md Settings](docs/FACTORY_CLI.md#settings) for value formats and glob rules. Escapement's own settings, at the end of its [CLAUDE.md](CLAUDE.md), make it a factory project too.
@@ -534,9 +538,15 @@ fusupo
 
 ## Version
 
-**Current:** 4.4.2
+**Current:** 4.5.0
 
 **Changelog:**
+- 4.5.0 (2026-11-18): The gate in report-only mode (#110)
+  - **Recommendation.** `factory pr` works out a recommendation for the report the PR shows. `auto_merge` needs every rule to hold: actual tier `standard`, outcome `pass`, no modified assertions, no execution-policy changes, the report's head and contract, and the advisory findings, diff lines, diff files and attempts within their limits. Otherwise it is `ping`, with one reason per failed rule. It is recorded on the run (`gate_recommendation`, `gate_reasons_json`) and as a `gate` event before the PR shows it. It is returned as `.result.gate`, and the PR's report section shows it. Nothing is ever merged
+  - **Limits.** Four new settings: `gate-max-diff-lines` (400), `gate-max-diff-files` (15), `gate-max-advisories` (0) and `gate-max-attempts` (1). A branch that loosens them is an execution-policy change, so its gate says `ping`
+  - **Refreshes.** Each refresh works the gate out again. Once the manual checks resolve to `pass`, an earlier `ping` can become `auto_merge`, and the earlier one stays in the run's events. An unchanged result adds no event. A crash between recording the gate and the PR (fault point `pr.gate_recorded`) is repaired by running `pr` again
+  - **What you did.** `factory archive --close` records `merged_as_is`, `changes_requested`, `rejected` or `abandoned` in the run's `operator_action`, and as an `operator_action` event, next to the gate's recommendation. `.result.closed` is unchanged. [FACTORY_CLI.md](docs/FACTORY_CLI.md#archive) lists what it can't see
+  - **Skills.** `do-work` 1.5.0, `create-pr` 1.4.0 and `validate-work` 1.4.0 report the gate and notify you whatever it recommends. `archive-work` 2.6.0 reports the operator action
 - 4.4.2 (2026-11-18): archive-work copies a run's plan critique (#101)
   - **Fix.** Since #99, `factory record-critique` writes the plan critique to the run's `critique.json`, but `archive-work` left it out of the archive. Phase 6.5 now copies it into `archive/runs/{run_id}/` when the run has one (`archive-work` 2.5.2). [docs/CONTEXT_PATH.md](docs/CONTEXT_PATH.md) lists what an archived run holds, the manual-check attachments from #103 included
 - 4.4.1 (2026-11-18): One readiness document for the plan critic (#109)

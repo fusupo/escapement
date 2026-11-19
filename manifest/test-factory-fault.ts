@@ -17,6 +17,7 @@ function run() {
   assert(spec.get("validate.before_check") === 3 && spec.get("pr.created") === 1 && spec.size === 2, "parses point@N and bare points, ignoring spaces");
   throws(() => parseFaultSpec("validate.befor_check"), /unknown fault point/, "a mistyped point is rejected");
   throws(() => parseFaultSpec("pr.created@0"), /count of 1 or more/, "a zero count is rejected");
+  assert(FAULT_POINTS.includes("pr.gate_recorded") && parseFaultSpec("pr.gate_recorded").get("pr.gate_recorded") === 1, "pr.gate_recorded is a known fault point");
 
   process.env[FAULT_ENV] = "validate.before_check@2,pr.created";
   faultPoint("validate.before_check");

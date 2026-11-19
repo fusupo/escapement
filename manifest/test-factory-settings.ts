@@ -96,6 +96,38 @@ function run() {
     );
   }
 
+  {
+    const none = parse("# No settings at all\n").settings;
+    assert(
+      none.gateMaxDiffLines === 400 && none.gateMaxDiffFiles === 15 && none.gateMaxAdvisories === 0 && none.gateMaxAttempts === 1,
+      "the gate limits default to 400 lines, 15 files, 0 advisories and 1 attempt",
+    );
+    const own = parse(
+      "## Escapement Settings\n- **gate-max-diff-lines**: 1200\n- **gate-max-diff-files**: 40\n- **gate-max-advisories**: 2\n- **gate-max-attempts**: 3\n",
+    );
+    assert(
+      own.errors.length === 0 && own.settings.gateMaxDiffLines === 1200 && own.settings.gateMaxDiffFiles === 40 && own.settings.gateMaxAdvisories === 2 && own.settings.gateMaxAttempts === 3,
+      "the gate limits can be set",
+    );
+  }
+
+  {
+    // Their own fixture: "every invalid value is reported, by key" keeps its own list.
+    const bad = parse(
+      "## Escapement Settings\n- **gate-max-diff-lines**: lots\n- **gate-max-diff-files**: -1\n- **gate-max-advisories**: 0\n- **gate-max-attempts**: 0\n",
+    );
+    const zero = parse("## Escapement Settings\n- **gate-max-diff-lines**: 0\n- **gate-max-diff-files**: 0\n- **gate-max-advisories**: 0\n");
+    assert(
+      bad.errors.map((e) => e.key).join() === "gate-max-diff-lines,gate-max-diff-files,gate-max-attempts" &&
+        bad.errors[2].message.includes("positive whole number") &&
+        bad.settings.gateMaxAdvisories === 0 &&
+        bad.settings.gateMaxAttempts === 1 &&
+        zero.errors.length === 0 &&
+        zero.settings.gateMaxAdvisories === 0,
+      "invalid gate limits are reported by key, and 0 is allowed for advisories but not for attempts",
+    );
+  }
+
   console.log("\nReal documents\n");
 
   {

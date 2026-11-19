@@ -133,6 +133,10 @@ The runner reads the factory keys of `## Escapement Settings` (FACTORY_DESIGN.md
 | `command-timeout`, `lock-timeout`, `run-budget` | duration | `15m`, `30m`, `2h` |
 | `exec-hook` | `on`, `off`: the exec guard during runs | `on` |
 | `gate-mode` | `report-only` | `report-only` |
+| `gate-max-diff-lines` | whole number: the most lines (added plus removed) a PR may change and still be recommended for auto-merge | `400` |
+| `gate-max-diff-files` | whole number: the most files a PR may change and still be recommended for auto-merge | `15` |
+| `gate-max-advisories` | whole number: the most advisory findings a passing attempt may have and still be recommended for auto-merge | `0` |
+| `gate-max-attempts` | positive whole number: the most attempts a run may use and still be recommended for auto-merge | `1` |
 | `browser-tests` | `playwright`: the project has browser tests, so setup-work, its planner and the plan critic plan UI criteria as browser-test evidence. `check` reports it; the runner does nothing else with it ([Browser tests as evidence](#browser-tests-as-evidence)) | none |
 
 - Settings are read when a command needs them, not copied per run. Their digest (factory keys only) is reported by `check` and goes into each report's `policy_version`. A branch that changes them is an execution-policy change (§4.6), so weakening them is visible to review.
@@ -450,12 +454,13 @@ ESCAPEMENT_AGENT_EMAIL=agent@example.com      # optional
    - the current report, the latest complete attempt's highest revision, exists (`no_report`), is `pass` or `pending_manual` when creating (`not_validated`), and is for the approved contract (`stale_report`);
    - HEAD equals the report's `head_sha` and the tree is clean (`head_moved`: validate again).
 2. **Lookup.** `gh pr list --head {branch} --state open`, keeping PRs from the run's repository (a fork's PR with the same branch name is ignored). Two open PRs: `pr_conflict`. A recorded number that isn't the open PR: `pr_conflict`. A recorded PR that is no longer open: `pr_not_open`.
-3. **Create or update.** With no open PR, creating needs `--title` (`usage`) and the deadline not passed (otherwise the run escalates: `run_deadline`). The runner pushes HEAD to `refs/heads/{branch}` and nothing else, never forced, then runs `gh pr create --base {target_ref} --head {branch}`, or updates the PR with `gh api -X PATCH repos/{repo}/pulls/{number}` (not `gh pr edit`, which also queries classic Projects and fails where they are deprecated). On a GitHub remote the push goes over https as the agent, whatever protocol `origin` uses; a local remote is pushed as configured. Project `pre-push` hooks still run.
-4. **Record.** The PR number goes on the run, with a `state_change` event (entity `pr`), and a `validated` run moves to `pr_open`.
+3. **Gate (#110).** The runner works out the gate's recommendation for the current report (FACTORY_DESIGN.md §6.3): `auto_merge` only when every rule holds (actual tier `standard`; outcome `pass`; no modified assertions; no execution-policy changes; the report's head is HEAD; its contract is the authorized one; advisory findings within `gate-max-advisories`, not counting the `assertion:` and `policy:` ones; the diff from the report's merge base within `gate-max-diff-lines` and `gate-max-diff-files`; the run's attempts, interrupted ones included, within `gate-max-attempts`), otherwise `ping` with one reason per failed rule. A diff that can't be measured fails both diff rules. It is recorded on the run (`gate_recommendation`, `gate_reasons_json`, always the latest) and as a `gate` event, before anything is pushed. A result unchanged since the latest event, for the same attempt, report revision and head, adds no event. Each refresh works it out again from the current report, so once the manual checks resolve to `pass`, an earlier `ping` can become `auto_merge`. Report-only: nothing is ever merged.
+4. **Create or update.** With no open PR, creating needs `--title` (`usage`) and the deadline not passed (otherwise the run escalates: `run_deadline`). The runner pushes HEAD to `refs/heads/{branch}` and nothing else, never forced, then runs `gh pr create --base {target_ref} --head {branch}`, or updates the PR with `gh api -X PATCH repos/{repo}/pulls/{number}` (not `gh pr edit`, which also queries classic Projects and fails where they are deprecated). On a GitHub remote the push goes over https as the agent, whatever protocol `origin` uses; a local remote is pushed as configured. Project `pre-push` hooks still run.
+5. **Record.** The PR number goes on the run, with a `state_change` event (entity `pr`), and a `validated` run moves to `pr_open`.
 
-**The description** is the host's narrative (`--body-file`; on update without it, the PR's current description) plus the runner's report section, between `<!-- escapement:factory-report:begin -->` and `<!-- escapement:factory-report:end -->`. Updates replace only the section. It shows the outcome, the run and attempt (and report revision), the actual and proposed tier with reasons, what was validated (the branch, not the merge result), the contract digest, a table of every criterion's evidence with its result and judgment, manual checks (pending or recorded), findings and flags. Text from reports is escaped, so it can't break the table or forge a marker. The final description is kept at `{artifact_dir}/pr/body.md`.
+**The description** is the host's narrative (`--body-file`; on update without it, the PR's current description) plus the runner's report section, between `<!-- escapement:factory-report:begin -->` and `<!-- escapement:factory-report:end -->`. Updates replace only the section. It shows the outcome, the run and attempt (and report revision), the actual and proposed tier with reasons, what was validated (the branch, not the merge result), the contract digest, the gate's recommendation with one line per reason and a note that the merge is the operator's, a table of every criterion's evidence with its result and judgment, manual checks (pending or recorded), findings and flags. Text from reports is escaped, so it can't break the table or forge a marker. The final description is kept at `{artifact_dir}/pr/body.md`.
 
-**Crashes.** Running `pr` again after a crash at any step is safe: the lookup finds a PR an earlier call created, and the same number is recorded once. Its `action` is then `recovered`. Recovery is "run the command again"; `resume` doesn't touch PRs.
+**Crashes.** Running `pr` again after a crash at any step is safe: the lookup finds a PR an earlier call created, the same number is recorded once, and the same gate result adds no second event. Its `action` is then `recovered`. Recovery is "run the command again"; `resume` doesn't touch PRs.
 
 Updating an existing PR is bookkeeping: it works past the deadline, and for an `escalated` run with a PR, so its description stops showing a stale report.
 
@@ -477,7 +482,16 @@ Updating an existing PR is bookkeeping: it works past the deadline, and for an `
 
 - `--close` takes the action from the run's PR, read as the agent: merged → `merged`; closed unmerged, or no PR at all (no GitHub call) → `abandoned`; still open → `pr_open`, nothing recorded.
 - `--abandon` closes the run as `abandoned` without asking GitHub.
-- Closing ends the authorization. The artifact dir stays where it is: the database records its paths. The merge commit and other operator actions are recorded later (manifest-sync).
+- **What the operator did (#110).** Closing also records the operator's action in the run's `operator_action` and as an `operator_action` event (`{action, pr_number, pr_state, changes_requested_by, validated_head, final_head, gate_recommendation}`), so the gate's recommendations can be judged against it (FACTORY_DESIGN.md §7.4). It reads the PR's `state`, `mergedAt`, `headRefOid` and `reviews`:
+  - merged, with no `CHANGES_REQUESTED` review and the PR's head still the last validated head → `merged_as_is`;
+  - merged otherwise (a changes-requested review, or commits pushed after the validated head) → `changes_requested`;
+  - closed unmerged after a `CHANGES_REQUESTED` review → `rejected`;
+  - closed unmerged otherwise, no PR, or `--abandon` → `abandoned`.
+
+  `.result.closed` stays `merged` or `abandoned`, the action on the run's state change; `.result.operator_action` is the richer record. Runs closed before #110 hold `merged`, the older form of `merged_as_is`.
+
+  **What it can't see.** A review dismissed afterwards reports `DISMISSED` and doesn't count. The agent opens the PR and reviews it through review-pr, and GitHub doesn't let a PR's author request changes on their own PR, so the agent's review is `COMMENTED`: its change requests show only if the head moves. An "Update branch" merge from the base moves the head too, so it reads as `changes_requested`. A head that can't be compared (no validated attempt) counts as moved. `operator_action` is a best-effort signal, not a record of GitHub's review state.
+- Closing ends the authorization. The artifact dir stays where it is: the database records its paths. The merge commit is recorded later (manifest-sync).
 - The same path again, or closing a closed run, changes nothing.
 
 ### The exec guard
@@ -681,9 +695,9 @@ With `--json`, every command prints exactly one JSON object on stdout.
 - **authorization:** `{matched: false, reasons, run_id, state}`, or `{matched: true, reasons: [], run_id, state, repo, branch, target_ref, worktree_path, artifact_dir, contract_path, contract_digest, authorizes, approved_at, deadline_at, issue_number, pr_number, latest_attempt: {attempt, status, outcome, head_sha} | null, next}`
 - **agent:** `{name, email, login, source}`
 - **push:** `{branch, sha, repo, remote}`; `remote` is the URL pushed to, never with the token
-- **pr:** `{run_id, pr_number, url, action, state, head_sha, attempt, report_revision, outcome, body_path}`; `action` is `created`, `updated` (the recorded PR) or `recovered` (an unrecorded PR an earlier, interrupted call created)
+- **pr:** `{run_id, pr_number, url, action, state, head_sha, attempt, report_revision, outcome, body_path, gate}`; `action` is `created`, `updated` (the recorded PR) or `recovered` (an unrecorded PR an earlier, interrupted call created); `gate` is `{mode, recommendation, reasons, checks: [{rule, ok, detail}], changed}`, with `recommendation` `auto_merge` or `ping` and `changed` true when this call added a `gate` event (#110)
 - **record-manual:** `{run_id, attempt, evidence_id, outcome, noop, recorded: [{evidence_id, outcome}], pending, resolved, report_path, report_revision, run_state, pr_number, refresh_pr}`; `resolved` is null until the report resolves
-- **archive:** `{run_id, archive_path, changed, closed, pr_state, state}`; `closed` is `merged`, `abandoned` or null
+- **archive:** `{run_id, archive_path, changed, closed, operator_action, pr_state, state}`; `closed` is `merged`, `abandoned` or null; `operator_action` is `merged_as_is`, `changes_requested`, `rejected`, `abandoned`, or null when this call closed nothing (#110)
 - **exclude:** `{path, added, present}`: the exclude file, the patterns appended, and those already there
 - **check-critique:** `{valid, final, verdict, findings: {blocking, major, minor}, concerns, tier_raise, dispositions, unresolved}`; `concerns` lists the checklist items judged `concern`, `dispositions` counts them, and `unresolved` lists the findings the operator decided
 - **record-critique:** `{run_id, path, digest, verdict, findings, accepted, rejected, unresolved, noop}`
@@ -697,7 +711,8 @@ Run fields:
 - `issue_number`, `manifest_id`, `work_type`
 - `state`, `state_reason`
 - `tier_proposed` (from the contract, set by approve), `tier_actual` and `policy_version` (set by validate)
-- `contract_digest`, `operator_action` (the close action)
+- `contract_digest`, `operator_action` (what the operator did, set by `archive --close`: `merged_as_is`, `changes_requested`, `rejected` or `abandoned`; runs closed before #110 hold the plain close action)
+- `gate_recommendation`, `gate_reasons_json` (the gate's latest result, set by `pr`)
 - `pr_number` (set by pr), `archive_path` (set by archive), `merge_sha` (null until manifest-sync records it)
 - `started_at`, `ended_at`
 
@@ -732,6 +747,7 @@ Crash tests (`scripts/test-factory.sh`, and the first-release acceptance run, #6
 | `record-review.report_written` | the final `report.json` written, attempt still `finalizing` | the same | the same |
 | `record-review.committed` | the attempt complete and the run moved on (validated, back to implementing, or escalated), before output | the host saw no result | `next` follows the run state; `record-review` again is a no-op |
 | `continue.committed` | the run back in `implementing`, before output | the host saw no result | `next` is `implement`, with `fix`; `continue` again changes nothing |
+| `pr.gate_recorded` | the gate's recommendation recorded on the run, before anything is pushed or the PR is created or updated (#110) | `gate_recommendation` set, one `gate` event, no PR yet | `pr` again: the same result adds no event, then the PR shows it |
 | `pr.created` | `gh pr create` succeeded, number not recorded | an open PR, run `validated` without `pr_number` | `pr` again → `recovered` |
 | `pr.recorded` | the number recorded, before output | run `pr_open` | `pr` again → `updated` |
 

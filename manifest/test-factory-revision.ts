@@ -8,6 +8,7 @@ import {
   identityHolds,
   lockfileDigest,
   changedFiles,
+  diffStat,
   fileAt,
   existsAt,
 } from "./factory/revision.ts";
@@ -103,6 +104,24 @@ function run() {
     assert(files === "A:added.ts D:gone.ts M:keep.ts A:new.test.ts D:old.test.ts", "added, deleted, modified; a rename is a delete plus an add");
     assert(fileAt(r, b, "gone.ts") === "1\n" && fileAt(r, h, "gone.ts") === null, "fileAt reads a revision's content");
     assert(existsAt(r, b, "old.test.ts") && !existsAt(r, h, "old.test.ts"), "existsAt");
+  }
+
+  console.log("\nDiff size\n");
+
+  {
+    const r = makeRepo();
+    writeFileSync(join(r, "a.ts"), "1\n2\n3\n");
+    writeFileSync(join(r, "moved.ts"), "x\ny\n");
+    const b = commit(r, "base");
+    writeFileSync(join(r, "a.ts"), "1\nTWO\n3\n4\n"); // 2 added, 1 removed
+    writeFileSync(join(r, "img.bin"), Buffer.from([0, 1, 2, 0, 255, 0]));
+    sh("git", ["mv", "moved.ts", "renamed.ts"], r); // 2 removed + 2 added
+    const h = commit(r, "change");
+    const s = diffStat(r, b, h);
+    assert(
+      s.files === 4 && s.lines === 7 && diffStat(r, h, h).files === 0 && diffStat(r, h, h).lines === 0,
+      "diffStat counts files and added plus removed lines, a binary file as a file with no lines",
+    );
   }
 
   console.log("\nAll factory revision tests passed.");
