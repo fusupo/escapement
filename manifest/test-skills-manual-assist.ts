@@ -98,6 +98,41 @@ function validateWork() {
       section(skill, "## Recording a Manual Check").includes("Never record one on your own judgment"),
     "validate-work asks the operator for the outcome showing the observations, and never records one on its own judgment",
   );
+
+  // #120 (from #107): the walk-through's four gaps.
+  assert(
+    s5.includes("`mcp__plugin_escapement_playwright__*`") &&
+      s5.includes("never a page fetch or `curl`") &&
+      s5.includes("unless the instructions name the shell"),
+    "validate-work browser steps use the bundled Playwright tools and never a page fetch or curl unless the instructions name the shell",
+  );
+  const override = s6.indexOf("**`PLAYWRIGHT_BROWSERS_PATH` is set**");
+  const otherwise = s6.indexOf("**Otherwise:**");
+  const pinned = s6.indexOf("npx -y @playwright/mcp@0.0.84 install-browser chrome-for-testing");
+  assert(
+    override >= 0 &&
+      otherwise > override &&
+      pinned > otherwise &&
+      /name it as the likely cause/.test(s6.slice(override, otherwise)) &&
+      !s6.slice(override, otherwise).includes("npx ") &&
+      s6.includes("Record nothing") &&
+      s6.includes("Either way, record nothing"),
+    "validate-work names PLAYWRIGHT_BROWSERS_PATH as the likely cause of a missing browser when it is set, else the pinned install command, and either way records nothing",
+  );
+  const stopBullet = phase1.split("\n").find((l) => l.startsWith("- **`.result.matched` is false")) ?? "";
+  assert(
+    stopBullet.includes("except for manual checks") && stopBullet.includes("report the reasons and stop"),
+    "validate-work Phase 1 says a missing match stops everything except manual checks",
+  );
+  assert(/^tools:\n(?:  - .*\n)*  - AskUserQuestion\n/m.test(front + "\n"), "validate-work lists AskUserQuestion in its frontmatter tools");
+  const atLeast = (v: string, min: string) => {
+    const [a, b] = [v, min].map((x) => x.split(".").map(Number));
+    for (let i = 0; i < 3; i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0);
+    return true;
+  };
+  const version = /^\*\*Version:\*\* (\d+\.\d+\.\d+)$/m.exec(skill)?.[1] ?? "0.0.0";
+  assert(atLeast(version, "1.5.1"), "validate-work is at least version 1.5.1");
+  assert(/^- v1\.5\.1: .*PLAYWRIGHT_BROWSERS_PATH.*\(#120[,)]/m.test(skill), "validate-work has a 1.5.1 changelog line for issue 120");
 }
 
 /** Every file under `dir`, as sorted paths relative to it. */
