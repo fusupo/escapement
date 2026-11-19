@@ -235,10 +235,11 @@ export function assertTokenHost(remote: Remote): void {
  * push URL with the longest `url.<base>.pushInsteadOf` instead when one
  * matches (the original URL, not the insteadOf result); each applies once.
  * Every config scope counts, as it does for the push, so this reads the
- * config in the worktree. `pushurl` doesn't apply: both pushes that use it
- * name a URL, not a remote.
+ * config in the worktree. A remote's `pushurl` gets insteadOf only, never
+ * pushInsteadOf, as in git: `opts.pushInsteadOf: false` resolves one so
+ * (#120, `namedRemoteUrls`).
  */
-export function resolvePushUrl(worktree: string, url: string): string {
+export function resolvePushUrl(worktree: string, url: string, opts: { pushInsteadOf?: boolean } = {}): string {
   let raw = "";
   try {
     raw = execFileSync("git", ["config", "-z", "--get-regexp", "^url\\..*\\.(push)?insteadof$"], {
@@ -261,8 +262,33 @@ export function resolvePushUrl(worktree: string, url: string): string {
     const current = best[kind];
     if (!current || prefix.length > current.prefix.length) best[kind] = { base: m[1], prefix };
   }
-  const rule = best.pushinsteadof ?? best.insteadof;
+  const rule = (opts.pushInsteadOf === false ? null : best.pushinsteadof) ?? best.insteadof;
   return rule ? rule.base + url.slice(rule.prefix.length) : url;
+}
+
+/**
+ * Where git really pushes when told to push to `url` and a remote is named
+ * after that URL (#120): `git push https://github.com/acme/w.git` uses
+ * `remote."https://github.com/acme/w.git".pushurl`, else its `.url`, from
+ * any config scope (repo, global, system, `-c`), which `git remote get-url`
+ * doesn't see outside the repo's own config. Each pushurl is resolved with
+ * insteadOf only, each url with pushInsteadOf else insteadOf, as git does.
+ * Empty when no such remote is configured: git then pushes to `url`
+ * itself, resolved by `resolvePushUrl`.
+ */
+export function namedRemoteUrls(worktree: string, url: string): string[] {
+  const all = (key: string) => {
+    try {
+      return execFileSync("git", ["config", "--get-all", key], { cwd: worktree, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] })
+        .split("\n")
+        .filter(Boolean);
+    } catch {
+      return []; // exit 1: not set
+    }
+  };
+  const pushurls = all(`remote.${url}.pushurl`);
+  if (pushurls.length) return pushurls.map((u) => resolvePushUrl(worktree, u, { pushInsteadOf: false }));
+  return all(`remote.${url}.url`).map((u) => resolvePushUrl(worktree, u));
 }
 
 /** `https://github.com/…`, the one place the agent's credential helper answers. */
@@ -277,7 +303,10 @@ function isGitHubHttps(url: string): boolean {
  * Then the push URL, resolved as git will:
  * - origin on github.com is pushed at `https://github.com/{repo}.git`; after
  *   insteadOf / pushInsteadOf it must still be `https://github.com/…`, or a
- *   local path (a mirror or a test's bare repo, which no credential reaches);
+ *   local path (a mirror or a test's bare repo, which no credential reaches).
+ *   When a remote is named after that URL, in any config scope, git pushes
+ *   to its pushurls (else its urls) instead, and each of those must pass the
+ *   same test (`namedRemoteUrls`, #120);
  * - a local origin is pushed by name, so its pushurl, pushInsteadOf and
  *   insteadOf all apply (`git remote get-url --push --all origin`), and
  *   every URL it pushes to must stay local: that push carries no token, and
@@ -289,8 +318,13 @@ export function assertPushTarget(worktree: string, remote: Remote, repo: string)
   assertTokenHost(remote);
   let resolved: string;
   if (remote.host) {
-    resolved = resolvePushUrl(worktree, `https://${remote.host}/${repo}.git`);
-    if (isGitHubHttps(resolved) || urlHost(resolved) === null) return;
+    const url = `https://${remote.host}/${repo}.git`;
+    resolved = resolvePushUrl(worktree, url);
+    if (isGitHubHttps(resolved) || urlHost(resolved) === null) {
+      const away = namedRemoteUrls(worktree, url).find((u) => !isGitHubHttps(u) && urlHost(u) !== null);
+      if (away === undefined) return;
+      resolved = away;
+    }
   } else {
     // `git push origin` pushes to every push URL (each pushurl, else each
     // url), so every one must stay local, not just the first.
@@ -302,7 +336,7 @@ export function assertPushTarget(worktree: string, remote: Remote, repo: string)
   const shown = redactUrl(resolved);
   throw blocked(
     "not_github",
-    `the push URL resolves to ${shown}, not https://${GITHUB_HOST}: git's insteadOf, pushInsteadOf or pushurl rewrites it; the agent token is only ever sent to https://${GITHUB_HOST}, and nothing is pushed elsewhere`,
+    `the push URL resolves to ${shown}, not https://${GITHUB_HOST}: git's insteadOf, pushInsteadOf or pushurl, or a remote named after the push URL, rewrites it; the agent token is only ever sent to https://${GITHUB_HOST}, and nothing is pushed elsewhere`,
     { cause: "push_url", resolved_url: shown },
   );
 }

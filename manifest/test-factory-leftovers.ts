@@ -2,7 +2,7 @@
 // #117 reviews, each tested here so the existing suites keep their
 // assertions as they were.
 import { spawnSync } from "node:child_process";
-import { mkdirSync, realpathSync } from "node:fs";
+import { chmodSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { backfillMergeShas } from "./factory/archive.ts";
 import { allocateAttempt } from "./factory/attempts.ts";
@@ -10,7 +10,7 @@ import { projectContext } from "./factory/context.ts";
 import { continueRun } from "./factory/fixloop.ts";
 import { approveRun, startRun } from "./factory/runs.ts";
 import { getRun, transitionAttempt, transitionRun } from "./factory/state.ts";
-import { gh } from "./factory/github.ts";
+import { gh, namedRemoteUrls, pushBranch, remoteOf } from "./factory/github.ts";
 import { renderSection, type ReportView } from "./factory/report-section.ts";
 import { currentOwner } from "./factory/owner.ts";
 import { FactoryError } from "./factory/util.ts";
@@ -199,11 +199,162 @@ async function runBudgetWithoutPr() {
   );
 }
 
+/** Run `fn` with these environment variables set (undefined: unset), then put them back. */
+function withEnv<T>(vars: Record<string, string | undefined>, fn: () => T): T {
+  const saved = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]));
+  const put = (v: Record<string, string | undefined>) => {
+    for (const [k, x] of Object.entries(v)) {
+      if (x === undefined) delete process.env[k];
+      else process.env[k] = x;
+    }
+  };
+  put(vars);
+  try {
+    return fn();
+  } finally {
+    put(saved);
+  }
+}
+
+function namedRemote() {
+  console.log("\nA remote named after the push URL (item D)\n");
+  // An ssh "server" that is a local bare repo (PROJECT_LORE): git runs
+  // GIT_SSH_COMMAND with `git-receive-pack '<path>'` last, and the stub runs
+  // it here. A push that leaves github.com for ssh://x.invalid<path> lands
+  // in <path> instead of the network, so "nothing is pushed" is checked
+  // against a host the old code really would have reached.
+  const sshStub = join(tempDir(), "ssh");
+  writeFileSync(sshStub, '#!/bin/sh\nfor last; do :; done\nexec sh -c "$last"\n');
+  chmodSync(sshStub, 0o755);
+  const bare = (): string => {
+    const b = join(tempDir(), "bare.git");
+    sh("git", ["init", "-q", "--bare", b], tempDir());
+    return b;
+  };
+  const refs = (b: string) => sh("git", ["for-each-ref"], b);
+  const URL = "https://github.com/acme/w.git";
+  const settings = "## Escapement Settings\n\n- **base-branch**: develop\n";
+  let n = 0;
+  const repo = () => {
+    const branch = `120-d${++n}`;
+    return { w: realpathSync(makeRepo({ branch, origin: "git@github.com:acme/w.git", claudeMd: settings })), branch };
+  };
+  const push = (w: string, branch: string) => {
+    try {
+      pushBranch({ worktree: w, remote: remoteOf(w, "acme/w"), repo: "acme/w", branch, token: TOKEN });
+      return { code: "ok", cause: undefined as unknown };
+    } catch (err) {
+      const e = err as { code?: string; detail?: Record<string, unknown> };
+      return { code: e.code ?? "thrown", cause: e.detail?.cause };
+    }
+  };
+  const ssh = { GIT_SSH_COMMAND: sshStub, GIT_SSH_VARIANT: "simple" };
+  const global = join(tempDir(), "gitconfig");
+  writeFileSync(global, "");
+  // Every case runs with a scratch global config and no system config, so
+  // the operator's own never takes part.
+  const isolated = { ...ssh, GIT_CONFIG_GLOBAL: global, GIT_CONFIG_NOSYSTEM: "1" };
+
+  withEnv(isolated, () => {
+    const { w, branch } = repo();
+    const away = bare();
+    sh("git", ["config", `remote.${URL}.pushurl`, `ssh://x.invalid${away}`], w);
+    const r = push(w, branch);
+    assert(
+      r.code === "not_github" && r.cause === "push_url" && refs(away) === "",
+      "a remote named by the push URL with a pushurl away from github is refused as not_github and nothing is pushed",
+    );
+  });
+
+  {
+    const away = bare();
+    const cfg = join(tempDir(), "gitconfig");
+    writeFileSync(cfg, `[remote "${URL}"]\n\tpushurl = ssh://x.invalid${away}\n`);
+    withEnv({ ...ssh, GIT_CONFIG_GLOBAL: cfg, GIT_CONFIG_NOSYSTEM: "1" }, () => {
+      const { w, branch } = repo();
+      const r = push(w, branch);
+      assert(
+        r.code === "not_github" && r.cause === "push_url" && refs(away) === "",
+        "a remote named by the push URL in global config with a pushurl away from github is refused as not_github and nothing is pushed",
+      );
+    });
+  }
+
+  withEnv(isolated, () => {
+    const { w, branch } = repo();
+    const away = bare();
+    sh("git", ["config", `remote.${URL}.url`, `ssh://x.invalid${away}`], w);
+    const r = push(w, branch);
+    assert(
+      r.code === "not_github" && r.cause === "push_url" && refs(away) === "",
+      "a remote named by the push URL with only a url away from github is refused as not_github and nothing is pushed",
+    );
+  });
+
+  {
+    const away = bare();
+    withEnv({ ...isolated, GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: `remote.${URL}.pushurl`, GIT_CONFIG_VALUE_0: `ssh://x.invalid${away}` }, () => {
+      const { w, branch } = repo();
+      const r = push(w, branch);
+      assert(
+        r.code === "not_github" && r.cause === "push_url" && refs(away) === "",
+        "a remote named by the push URL and defined with GIT_CONFIG_COUNT with a pushurl away from github is refused as not_github and nothing is pushed",
+      );
+    });
+  }
+
+  withEnv(isolated, () => {
+    // insteadOf rewrites a pushurl: git pushes to `viaInsteadOf`, and so does
+    // namedRemoteUrls say. pushInsteadOf doesn't: git pushes to the pushurl
+    // as written (here, through the stub, into `asWritten`), never to
+    // `viaPushInsteadOf`.
+    const a = repo();
+    const viaInsteadOf = bare();
+    const written1 = bare();
+    sh("git", ["config", `remote.${URL}.pushurl`, `ssh://x.invalid${written1}`], a.w);
+    sh("git", ["config", `url.${viaInsteadOf}.insteadOf`, `ssh://x.invalid${written1}`], a.w);
+    const namedA = namedRemoteUrls(a.w, URL);
+    sh("git", ["push", "-q", URL, `HEAD:refs/heads/${a.branch}`], a.w);
+
+    const b = repo();
+    const viaPushInsteadOf = bare();
+    const asWritten = bare();
+    sh("git", ["config", `remote.${URL}.pushurl`, `ssh://x.invalid${asWritten}`], b.w);
+    sh("git", ["config", `url.${viaPushInsteadOf}.pushInsteadOf`, `ssh://x.invalid${asWritten}`], b.w);
+    const namedB = namedRemoteUrls(b.w, URL);
+    sh("git", ["push", "-q", URL, `HEAD:refs/heads/${b.branch}`], b.w);
+    assert(
+      namedA.join() === viaInsteadOf &&
+        refs(viaInsteadOf) !== "" &&
+        refs(written1) === "" &&
+        namedB.join() === `ssh://x.invalid${asWritten}` &&
+        refs(asWritten) !== "" &&
+        refs(viaPushInsteadOf) === "" &&
+        push(b.w, b.branch).code === "not_github",
+      "for a remote named by the push URL insteadOf applies to a pushurl and pushInsteadOf does not, as in git",
+    );
+  });
+
+  withEnv(isolated, () => {
+    const { w, branch } = repo();
+    const local = bare();
+    const away = bare();
+    sh("git", ["config", `remote.${URL}.url`, `ssh://x.invalid${away}`], w);
+    sh("git", ["config", `remote.${URL}.pushurl`, local], w);
+    const r = push(w, branch);
+    assert(
+      r.code === "ok" && refs(local).includes(`refs/heads/${branch}`) && refs(away) === "",
+      "a remote named by the push URL whose pushurl stays local is still pushed, even when its url points away",
+    );
+  });
+}
+
 async function run() {
   stubEnterpriseToken();
   await backfillStops();
   redoLine();
   await runBudgetWithoutPr();
+  namedRemote();
 }
 
 run()
