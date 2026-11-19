@@ -67,6 +67,51 @@ function setupWork() {
     "setup-work records each finding's disposition in the scratchpad and runs record-critique after start",
   );
   assert(critique.includes("set the contract's `risk_tier_proposed` to `sensitive`"), "a critic's tier raise is applied, never asked");
+
+  // #109: one readiness document. The manifest mirror (step 3d) and the
+  // critic's brief (Phase 3.55) once wrote different documents to the same
+  // readiness.json, so the critic could get the cut-down copy and lose
+  // browser_tests. Now Phase 3.2 writes check's full result once and both use it.
+  const contractCheck = section(skill, "### Phase 3.2: Check the Contract [factory]");
+  const qa = section(skill, "### Phase 3.5: Interactive Q&A");
+  const step3d = qa.slice(qa.indexOf("d) **[factory] Re-check and mirror readiness"), qa.indexOf("\n4. **Confirm Resolution"));
+  const step1 = critique.slice(critique.indexOf("1. **Write the brief.**"), critique.indexOf("brief.json"));
+  const briefPath = '"readiness": { "path": "{DRAFT_DIR}/readiness.json" }';
+  const noCutDown = !skill.includes('"version": 1, "status"');
+  assert(
+    contractCheck.includes("$DRAFT_DIR/readiness.json") &&
+      contractCheck.includes("full `.result`") &&
+      ["`tier`", "`required_checks`", "`target_ref`", "`browser_tests`"].every((k) => contractCheck.includes(k)) &&
+      contractCheck.includes("still-open"),
+    "setup-work writes the readiness document once, in Phase 3.2, as the full factory check result with its own questions",
+  );
+  assert(noCutDown, "setup-work writes no cut-down readiness copy");
+  assert(
+    step3d !== "" &&
+      step3d.includes("in place") &&
+      step3d.includes("answered") &&
+      /still open/.test(step3d) &&
+      step3d.includes("`needs_human`"),
+    "setup-work brings the readiness file up to date in place after the Q and A so the manifest never mirrors answered questions",
+  );
+  assert(
+    qa.includes('manifest.sh" readiness') && qa.includes('"$DRAFT_DIR/readiness.json"') && critique.includes(briefPath),
+    "setup-work mirrors the same readiness.json into the manifest and names it as the critic brief readiness.path",
+  );
+  assert(
+    step1 !== "" &&
+      ["full result", "`tier`", "`required_checks`", "`browser_tests`", "never a cut-down copy"].every((w) => step1.includes(w)),
+    "setup-work says the critic brief readiness.json is the full check result with tier required_checks and browser_tests",
+  );
+  assert(
+    contractCheck.includes("$DRAFT_DIR/readiness.json") &&
+      step3d.includes('"$DRAFT_DIR/readiness.json"') &&
+      critique.includes(briefPath) &&
+      step1 !== "" &&
+      !/to `readiness\.json`/.test(step1) &&
+      noCutDown,
+    "setup-work keeps one readiness file across Phase 3.2, step 3d and the critic brief",
+  );
 }
 
 function docs() {

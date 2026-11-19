@@ -534,9 +534,11 @@ fusupo
 
 ## Version
 
-**Current:** 4.4.0
+**Current:** 4.4.1
 
 **Changelog:**
+- 4.4.1 (2026-11-18): One readiness document for the plan critic (#109)
+  - **Fix.** On the factory path, `setup-work` wrote the manifest's cut-down readiness copy and the critic's full `factory check` result to the same file, so the critic could lose `browser_tests`, `tier` and `required_checks`. Now one document, check's full result plus setup-work's still-open questions, is brought up to date after the Q&A, mirrored into the manifest and given to the critic (`setup-work` 1.4.1)
 - 4.4.0 (2026-11-18): Browser tests as contract evidence (#104)
   - **`browser-tests` setting.** A project whose `verify` runs browser tests says so with `browser-tests: playwright`. `factory.sh check` reports it as `browser_tests` (in the published readiness schema, and as a `browser tests:` line in its text); the runner does nothing else with it
   - **Planning.** On the factory path, `setup-work` hands the setting to the `scratchpad-planner`, which writes UI criteria as browser-test evidence (`e2e/file.spec.ts::Describe › title`, repository-relative) and keeps `manual` for what a machine can't judge, such as a subjective visual or reading prose
