@@ -537,7 +537,7 @@ Only when Phase 2 found a run. Its artifacts stay where they are (the factory da
    ```bash
    bash "$FACTORY" --json archive '{run_id}' --path "$DEST" --close
    ```
-   - **`.ok`:** the run is `closed`, as `.result.closed` (`merged` when its PR merged, `abandoned` when it had none or it was closed unmerged).
+   - **`.ok`:** the run is `closed`, as `.result.closed` (`merged` when its PR merged, `abandoned` when it had none or it was closed unmerged). `.result.operator_action` records what the operator did with the PR, for judging the gate later (#110): `merged_as_is` (merged at the validated head with no changes requested), `changes_requested` (merged after a change request or with commits pushed after validation), `rejected` (closed unmerged after a change request) or `abandoned`. Report it in Phase 7; `.result.closed` is unchanged, so route on that as before.
    - **Refused `pr_open`:** the PR is still open. Ask:
      ```
      AskUserQuestion:
@@ -567,7 +567,7 @@ Files archived (to context directory):
    - README.md (summary generated)
 
 Factory run (if any):
-   - {run_id}: closed ({merged|abandoned}), or left open
+   - {run_id}: closed ({merged|abandoned}; operator action: {operator_action}), or left open
    - Artifacts copied to {context-path}/{branch}/archive/runs/{run_id}/
 
 INDEX.md updated:
@@ -737,10 +737,11 @@ No PR found for this work.
 
 ---
 
-**Version:** 2.5.2
+**Version:** 2.6.0
 **Last Updated:** 2026-11-18
 **Maintained By:** Escapement
 **Changelog:**
+- v2.6.0: Phase 6.5 reports the run's `operator_action` (`merged_as_is`, `changes_requested`, `rejected` or `abandoned`), which `factory archive --close` now records; `.result.closed` is unchanged (#110)
 - v2.5.2: Phase 6.5 also copies the run's plan critique (`critique.json`) when it has one (#101)
 - v2.5.1: Phase 6.5 also copies the attachments of agent-assisted manual checks (`manual/{evidence_id}/`) (#103)
 - v2.5.0: Phase 6.5 archives a factory run: copies its contract, reports, verdicts and PR body, records archive_path and closes the run (merged or abandoned, from its PR) (#64)

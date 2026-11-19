@@ -10,6 +10,7 @@ tools:
   - Write
   - Task
   - TaskStop
+  - PushNotification
 ---
 
 # Validate Work Skill
@@ -187,6 +188,12 @@ Use `fail` instead of `pass` for a failed check. Single-quote the note (a `'` in
   ```bash
   bash "$FACTORY" --json pr '{run_id}'
   ```
+  The refresh works the gate out again for the new report (docs/FACTORY_DESIGN.md §6.3, #110): `.result.gate` has its `recommendation` (`auto_merge` or `ping`) and `reasons`. Once every manual check is recorded `pass`, the report resolves to `pass` and every rule is applied again, so an earlier `ping` can become `auto_merge`; the earlier `ping` stays in the run's events. A failed check gives `ping` for the outcome. Notify the operator whatever the recommendation (PushNotification, when available), and end with the same line:
+  ```
+  🏭 {run_id}: PR #{pr_number} refreshed: {url}
+     Outcome: {outcome}   Gate: {auto_merge | ping}: {each reason, or "every rule holds"} (report-only: you merge)
+  ```
+  Never merge: the gate is report-only.
 - **Refused:** `stale_report` (HEAD moved since validation: validate again), `already_resolved`, `unknown_evidence` (the message lists the pending IDs), `not_pending_manual`, `bad_attachment` (an attachment that is missing or outside `{artifact_dir}/manual/{evidence_id}/`).
 
 ## Error Handling
@@ -214,10 +221,11 @@ Use `fail` instead of `pass` for a failed check. Single-quote the note (a `'` in
 
 ---
 
-**Version:** 1.3.0
-**Last Updated:** 2026-11-17
+**Version:** 1.4.0
+**Last Updated:** 2026-11-18
 **Maintained By:** Escapement
 **Changelog:**
+- v1.4.0: After a manual outcome refreshes the PR, report the gate's new recommendation from `.result.gate` and notify the operator whatever it is (PushNotification); a resolved `pass` can turn an earlier `ping` into `auto_merge` (#110)
 - v1.3.0: Carry out a manual check on request: its steps in the plugin's headless browser or the shell, what was seen at each "Check:", screenshots and observations under `{artifact_dir}/manual/{evidence_id}/`, then the operator's outcome recorded with `--assisted` and the attachments; manual checks no longer need a matched authorization (#103)
 - v1.2.0: The fix loop: after `fail` or `error` the run goes back to implementing or escalates, by the runner's rules; report the run state and reason, and the error's cause (#92)
 - v1.1.1: Fetch the issue text with the GitHub MCP tools only (#80)
