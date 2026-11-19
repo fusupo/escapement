@@ -138,7 +138,8 @@ Options:
   --run-budget <dur>    approve: run deadline after first approval
                         (default: run-budget setting, else ${SETTING_DEFAULTS["run-budget"]});
                         continue, for a run with a PR: the new deadline's
-                        budget (default: the one fixed at approval)
+                        budget (default: the one fixed at approval); a usage
+                        error on a run without one
   --trigger <t>         continue, for a pr_open run only: review_finding or
                         operator_request (default); other runs' is derived
   --timeout <dur>       exec, validate: timeout per command

@@ -254,6 +254,8 @@ function approvedBudgetMs(db: Database, run: RunRow): number | null {
  * - any state but escalated or pr_open (`wrong_state`): a blocked run, or
  *   a validated one, whose PR is refreshed first;
  * - `--trigger` on any run but a pr_open one, or an unknown trigger (`usage`);
+ * - `--run-budget` on a run with no PR (`usage`, #120): only a re-entry on
+ *   an open PR gets a new deadline, so it would be silently ignored;
  * - a run with no PR past its deadline (`run_deadline`): a hard stop;
  * - no active authorization (`not_authorized`), or a contract file that no
  *   longer matches it (`contract_mismatch`);
@@ -302,6 +304,9 @@ export function continueRun(
       }
     }
     const hasPr = run.pr_number !== null;
+    if (opts.budgetMs !== undefined && !hasPr) {
+      throw new FactoryError("usage", `--run-budget is only for a run that has a PR (it sets the deadline of a re-entry on the PR); run ${runId} has none`);
+    }
     if (!hasPr && deadlinePassed(run, opts.now)) {
       throw blocked("run_deadline", `run ${runId} passed its deadline (${run.deadline_at}); going on needs a new run and budget`);
     }

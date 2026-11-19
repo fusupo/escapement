@@ -5,11 +5,16 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { backfillMergeShas } from "./factory/archive.ts";
+import { allocateAttempt } from "./factory/attempts.ts";
+import { projectContext } from "./factory/context.ts";
+import { continueRun } from "./factory/fixloop.ts";
+import { approveRun, startRun } from "./factory/runs.ts";
+import { getRun, transitionAttempt, transitionRun } from "./factory/state.ts";
 import { gh } from "./factory/github.ts";
 import { renderSection, type ReportView } from "./factory/report-section.ts";
 import { currentOwner } from "./factory/owner.ts";
 import { FactoryError } from "./factory/util.ts";
-import { assert, cleanup, makeRepo, memDb, seedRun, sh, stubGh, tempDir } from "./factory/testkit.ts";
+import { assert, cleanup, contractFor, makeRepo, memDb, seedRun, sh, stubGh, tempDir } from "./factory/testkit.ts";
 
 const TOKEN = "ghp_test_agent_token_120";
 const owner = currentOwner("test");
@@ -145,10 +150,60 @@ function redoLine() {
   );
 }
 
+async function runBudgetWithoutPr() {
+  console.log("\ncontinue --run-budget on a run without a PR (item 11)\n");
+  const HOUR = 3_600_000;
+  const db = await memDb();
+  const ctxDir = tempDir();
+  const root = realpathSync(
+    makeRepo({ branch: "120-x", origin: "git@github.com:acme/w.git", claudeMd: `## Escapement Settings\n\n- **context-path**: ${ctxDir}\n` }),
+  );
+  const ctx = projectContext(root);
+  let n = 0;
+  /** An approved run with no PR, escalated after a failed attempt (as the fix loop leaves it at a stuck failure). */
+  const escalatedNoPr = () => {
+    const r = startRun(db, { workItem: `acme/w#${++n}`, ctx: { ...ctx, worktreePath: `/leftovers${n}` }, artifactDir: tempDir() });
+    approveRun(db, r.run_id, { contractFile: contractFor(r.run_id), budgetMs: HOUR, maxAttempts: 3 });
+    transitionRun(db, r.run_id, "implementing");
+    transitionRun(db, r.run_id, "validating");
+    const a = allocateAttempt(db, r.run_id, { owner, headSha: `head${n}`, contractDigest: getRun(db, r.run_id).contract_digest!, policyVersion: "p" });
+    transitionAttempt(db, r.run_id, a.attempt, "complete", { outcome: "fail" });
+    transitionRun(db, r.run_id, "escalated", { reason: "stuck" });
+    return getRun(db, r.run_id);
+  };
+  const codeOf = (fn: () => unknown) => {
+    try {
+      fn();
+      return "ok";
+    } catch (err) {
+      return `${(err as { code?: string }).code}`;
+    }
+  };
+
+  const r = escalatedNoPr();
+  const before = getRun(db, r.run_id);
+  const code = codeOf(() => continueRun(db, r.run_id, { reason: "try again", owner, budgetMs: 2 * HOUR }));
+  const after = getRun(db, r.run_id);
+  assert(
+    code === "usage" && after.state === "escalated" && after.deadline_at === before.deadline_at && after.state_reason === before.state_reason,
+    "continue with --run-budget on a run without a PR is a usage error and leaves the run as it was",
+  );
+
+  const back = escalatedNoPr();
+  const first = continueRun(db, back.run_id, { reason: "try again", owner });
+  const retry = codeOf(() => continueRun(db, back.run_id, { reason: "try again", owner, budgetMs: 2 * HOUR }));
+  const answered = continueRun(db, back.run_id, { reason: "try again", owner, budgetMs: 2 * HOUR });
+  assert(
+    first.changed && retry === "ok" && !answered.changed && getRun(db, back.run_id).state === "implementing",
+    "continue with --run-budget on a run already back in implementing is answered, not refused",
+  );
+}
+
 async function run() {
   stubEnterpriseToken();
   await backfillStops();
   redoLine();
+  await runBudgetWithoutPr();
 }
 
 run()
