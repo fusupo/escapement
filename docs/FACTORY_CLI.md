@@ -72,7 +72,7 @@ pr/body.md                      the PR description as last sent (pr)
 | `resume <run_id>` | Reconcile an interrupted run (§4.7) | yes, reconciliation only |
 | `revoke <run_id>` | End the active authorization | yes |
 | `escalate <run_id> --reason <text>` | Stop the run to wait on a human | yes |
-| `continue <run_id> --reason <text>` | Take an escalated run whose latest attempt failed or errored back to `implementing` (the fix loop's operator path) | **no** |
+| `continue <run_id> --reason <text> [--trigger <t>] [--run-budget <dur>]` | Take an escalated run whose latest attempt failed or errored, or a run whose PR is open, back to `implementing` (the operator's way back; #92, #97) | **no** without a PR; yes with one (it gets a new deadline) |
 | `authorization` | Does this worktree's run let skills act without asking? Read-only; never creates the database | yes |
 | `agent` | The AI agent's commit identity. No database needed | n/a |
 | `push` | Push the current branch as the agent, with no run (plain skills). Never forced, never the base branch, `main` or `master`. No database needed | n/a |
@@ -98,7 +98,8 @@ Options:
 | `--target-ref <ref>` | start | `base-branch` setting, else `develop` if `origin/develop` exists, else `main` |
 | `--work-type <type>` | start | none |
 | `--contract <file>` | approve (required), check (optional) | none |
-| `--run-budget <dur>` | approve | `run-budget` setting, else `2h` |
+| `--run-budget <dur>` | approve; continue, for a run with a PR (its new deadline's budget) | approve: `run-budget` setting, else `2h`; continue: the budget fixed at approval |
+| `--trigger <t>` | continue, for a `pr_open` run only: `review_finding` or `operator_request` | `operator_request` |
 | `--timeout <dur>` | exec, validate (per command) | `command-timeout` setting, else `15m` |
 | `--issue-file <file>` | review-input | none |
 | `--lock-timeout <dur>` | exec, validate, review-input, record-review, resume, pr, record-manual, archive | `lock-timeout` setting, else `30m` |
@@ -157,7 +158,7 @@ The runner reads the factory keys of `## Escapement Settings` (FACTORY_DESIGN.md
 - The contract must validate against `schemas/factory/contract.schema.json`, with unique criterion and evidence IDs. Its `run_id` must be this run, and its `issue`, if set, the run's issue. Otherwise `bad_contract` lists every problem.
 - A contract names no commands. Checks come only from settings, so a contract can't skip or narrow a required check.
 - The digest is the `sha256:` hash of the contract file's bytes.
-- The first approval sets `deadline_at` to `approved_at` plus `--run-budget`, and `max_attempts` to the worktree's `max-attempts` setting. Later approvals never move either, and the fix loop, `validate` and `continue` use the recorded budget, so a later commit to the branch's settings can't change it (#92).
+- The first approval sets `deadline_at` to `approved_at` plus `--run-budget`, and `max_attempts` to the worktree's `max-attempts` setting. Later approvals never move either, and the fix loop, `validate` and `continue` use the recorded budget, so a later commit to the branch's settings can't change it (#92). The one later change to `deadline_at` is `continue` on a run with a PR (#97), which sets a new deadline from the budget fixed here, or the operator's `--run-budget`.
 - Approving a different contract marks the active authorization `superseded` and issues a new one.
 - Approving the same contract again does nothing.
 - A run can be approved while it is `planned`, `approved` or `implementing`.
@@ -372,7 +373,7 @@ A matched answer carries the run, what the authorization allows (`authorizes`) a
 
 | `next` | When |
 |---|---|
-| `implement` | the run is `approved` or `implementing`: nothing is being validated. After a failed or errored attempt, `fix` says what to fix |
+| `implement` | the run is `approved` or `implementing`: nothing is being validated. After a failed or errored attempt, or a re-entry, `fix` says what to fix |
 | `validate` | the run is `validating` without a usable attempt: the last one was interrupted (a crash during checks), or none was allocated. Validate again |
 | `resume` | the latest attempt is left mid-way (checks running or crashed, or finalizing after a crash), or a complete attempt's run transition is still owed: run `resume` and follow its actions |
 | `review` | the latest attempt awaits review |
@@ -384,26 +385,41 @@ The runner still checks every command on its own; `next` only tells a host where
 
 **`fix`** is set while the run is `implementing` after a completed `fail` or `error` attempt, whether the fix loop or `continue` brought it back, and null otherwise: `{attempt, outcome, error, blocking_findings, report_path}`. `error` is `{cause, reason}` for an error attempt. `blocking_findings` are the attempt's blocking findings (`id`, `detail`, `location`). The implementer works from these (design §6.2: findings only).
 
+After a re-entry (#97: `continue` on a run with a PR), `fix` is set too, for the attempt the run left from, and `trigger` and `reason` say why: `review_finding` and `operator_request` have no blocking findings (the attempt passed; the reason is the work), `manual_check_failed` has the `manual:{id}` findings of the attempt's current report revision (record-manual writes them there; `report_path` points at that revision), and `attempt_failed` has the attempt's own. A plain fix-loop `fix` has `trigger` and `reason` null. A matched run also carries **`reentry`**, `{count, trigger, attempt, reason, pr_number}` for the latest re-entry, or null for a run never re-entered.
+
+A `pr_open` run past its deadline doesn't match (`run_deadline`), though its PR waits for the merge as before: `continue` gives it a new deadline, and it then matches with `next: implement`.
+
 ### escalate
 
 `escalate <run_id> --reason <text>` moves a run to `escalated`, so it shows why it stopped instead of looking active: the host hit something it can't get past, such as a blocked precondition or a real blocker. A run already blocked or escalated is left as it is (`changed: false`). It works past the deadline and refuses a closed run.
 
 ### continue
 
-`continue <run_id> --reason <text>` takes an `escalated` run back to `implementing`, under the same contract, digest and authorization (design §6.2). The operator decides; skills offer it in plain words and run it. The deadline and the attempt budget are never reset, and the next `validate` is a new attempt.
+`continue <run_id> --reason <text> [--trigger <t>] [--run-budget <dur>]` takes a run back to `implementing`, under the same contract, digest and authorization. The operator decides; skills offer it in plain words and run it. The attempt budget is never reset or raised, and the next `validate` is a new attempt. It takes:
 
-Refused, blocked (exit 2), and nothing changes, when:
+- **An escalated run whose latest attempt failed or errored** (design §6.2, #92). Any error cause is accepted: the operator judges whether the environment is fixed.
+- **A run with a PR** (design §4.7, #97), so the fix lands on the open PR, which the next passing or `pending_manual` attempt refreshes (`pr` → `updated`):
+  - a `pr_open` run, on the operator's request: `--trigger review_finding` (a finding from the PR's review) or `operator_request` (any other change; the default). Its latest attempt passed; `fix` then carries the reason and no findings;
+  - an escalated run with a PR whose latest attempt failed or errored. Its trigger is derived: `manual_check_failed` when a human recorded a manual check of that attempt as failed (`record-manual … fail`), else `attempt_failed` (a later attempt failed after a re-entry). `--trigger` here is a `usage` error.
+
+  Review and manual checks usually come after the run's deadline, so a run with a PR gets **a new deadline**: now plus `--run-budget`, else the budget fixed at first approval (the first approval's deadline less its time, or the first re-entry's recorded budget), never the branch's current `run-budget` setting, so a commit to the branch can't buy the run more time. A run with no deadline keeps none. Each re-entry is recorded in the same transaction, as a `state_change` event with `entity: "reentry"`: `{trigger, reason, pr_number, from_state, attempt, head_sha, outcome, gate_recommendation, gate_reasons, previous_deadline, deadline, run_budget_ms}`. The gate then always recommends `ping` for the run (`pr`, rule `reentry`), and `archive --close` records a merge as `changes_requested` (§7.4). Manual outcomes are bound to the head, so after a re-entry every manual check is done again on the new head.
+
+Checked in this order:
+
+1. A closed run: `run_closed`. A run already back in `implementing` after that attempt (by the fix loop, an earlier `continue`, or a re-entry recorded for that attempt) is answered as it is (`changed: false`), before anything else, so a retry after a crash succeeds, with or without `--trigger`.
+2. Any state but `escalated` or `pr_open` is `wrong_state` (exit 1): a blocked run can only be closed, and a `validated` run with a PR is refreshed first (`pr`).
+3. `--trigger` on any run but a `pr_open` one, or an unknown value: `usage`.
+4. Then refused, blocked (exit 2), and nothing changes:
 
 | Code | When |
 |---|---|
-| `run_deadline` | the run deadline has passed: going on needs a new run and budget |
+| `run_deadline` | a run with no PR passed its deadline: going on needs a new run and budget |
 | `not_authorized` | the run has no active authorization |
 | `contract_mismatch` | `{artifact_dir}/contract.json` is missing or no longer has the approved digest |
-| `has_pr` | the run already has a PR. A failed manual check escalates a `pr_open` run with the attempt's outcome set to `fail`, but going back after the PR opened isn't supported yet (#97) |
-| `no_failed_attempt` | the latest attempt isn't a completed `fail` or `error`, or there is none |
-| `attempt_budget` | every attempt (`max-attempts`) is used |
+| `no_failed_attempt` | an escalated run's latest attempt isn't a completed `fail` or `error` (an escalated run with a PR whose attempt passed included), or there is none |
+| `attempt_budget` | every attempt (`max-attempts`) is used: the change needs a new run |
 
-A run that isn't `escalated` is `wrong_state` (exit 1); a blocked run can only be closed. Any error cause is accepted: the operator judges whether the environment is fixed. A run already back in `implementing` after that attempt is left as it is (`changed: false`). The result names the attempt to fix, its outcome and error, and the attempts used of `max_attempts`.
+The result names the latest attempt, its outcome and error, the attempts used of `max_attempts`, and `reentry`: the re-entry recorded for that attempt, or null for a run without a PR.
 
 ### GitHub and the agent identity
 
@@ -454,7 +470,7 @@ ESCAPEMENT_AGENT_EMAIL=agent@example.com      # optional
    - the current report, the latest complete attempt's highest revision, exists (`no_report`), is `pass` or `pending_manual` when creating (`not_validated`), and is for the approved contract (`stale_report`);
    - HEAD equals the report's `head_sha` and the tree is clean (`head_moved`: validate again).
 2. **Lookup.** `gh pr list --head {branch} --state open`, keeping PRs from the run's repository (a fork's PR with the same branch name is ignored). Two open PRs: `pr_conflict`. A recorded number that isn't the open PR: `pr_conflict`. A recorded PR that is no longer open: `pr_not_open`.
-3. **Gate (#110).** The runner works out the gate's recommendation for the current report (FACTORY_DESIGN.md §6.3): `auto_merge` only when every rule holds (actual tier `standard`; outcome `pass`; no modified assertions; no execution-policy changes; the report's head is HEAD; its contract is the authorized one; advisory findings within `gate-max-advisories`, not counting the `assertion:` and `policy:` ones; the diff from the report's merge base within `gate-max-diff-lines` and `gate-max-diff-files`; the run's attempts, interrupted ones included, within `gate-max-attempts`), otherwise `ping` with one reason per failed rule. A diff that can't be measured fails both diff rules. It is recorded on the run (`gate_recommendation`, `gate_reasons_json`, always the latest) and as a `gate` event, before anything is pushed. A result unchanged since the latest event, for the same attempt, report revision and head, adds no event. Each refresh works it out again from the current report, so once the manual checks resolve to `pass`, an earlier `ping` can become `auto_merge`. Report-only: nothing is ever merged.
+3. **Gate (#110).** The runner works out the gate's recommendation for the current report (FACTORY_DESIGN.md §6.3): `auto_merge` only when every rule holds (actual tier `standard`; outcome `pass`; no modified assertions; no execution-policy changes; the report's head is HEAD; its contract is the authorized one; advisory findings within `gate-max-advisories`, not counting the `assertion:` and `policy:` ones; the diff from the report's merge base within `gate-max-diff-lines` and `gate-max-diff-files`; the run's attempts, interrupted ones included, within `gate-max-attempts`; and, for a run `continue` took back after its PR opened, rule `reentry`, which always fails: "re-entered after its PR opened", with the count, latest trigger and attempt, so a re-entered run is always `ping`, next to the `attempts` reason when it is over the limit, #97), otherwise `ping` with one reason per failed rule. A run never re-entered has the ten rules without `reentry`. A diff that can't be measured fails both diff rules. It is recorded on the run (`gate_recommendation`, `gate_reasons_json`, always the latest) and as a `gate` event, before anything is pushed. A result unchanged since the latest event, for the same attempt, report revision and head, adds no event. Each refresh works it out again from the current report, so once the manual checks resolve to `pass`, an earlier `ping` can become `auto_merge`. Report-only: nothing is ever merged.
 4. **Create or update.** With no open PR, creating needs `--title` (`usage`) and the deadline not passed (otherwise the run escalates: `run_deadline`). The runner pushes HEAD to `refs/heads/{branch}` and nothing else, never forced, then runs `gh pr create --base {target_ref} --head {branch}`, or updates the PR with `gh api -X PATCH repos/{repo}/pulls/{number}` (not `gh pr edit`, which also queries classic Projects and fails where they are deprecated). On a GitHub remote the push goes over https as the agent, whatever protocol `origin` uses; a local remote is pushed as configured. Project `pre-push` hooks still run.
 5. **Record.** The PR number goes on the run, with a `state_change` event (entity `pr`), and a `validated` run moves to `pr_open`.
 
@@ -472,6 +488,7 @@ Updating an existing PR is bookkeeping: it works past the deadline, and for an `
 - **Records.** Each is a `manual_outcome` event with the outcome, note, recorder, head and contract. The same outcome again is a no-op; a different one replaces it until the report resolves.
 - **Agent-assisted (#103).** `--assisted` marks an outcome the human decided from the agent's walk-through (`validate-work`'s **Carrying Out a Manual Check**). Each `--attachment` names one of the agent's files, which must exist and lie under `{artifact_dir}/manual/{evidence_id}/` (else `bad_attachment`); it is stored relative to the artifact dir. `--attachment` without `--assisted` is a usage error. The recorder is still the human: the OS user, or `--recorder`. A record is a no-op only when the outcome, the assisted mark and the attachment list are all unchanged. The event and the revision's `manual_outcomes` carry `assisted: true` and `attachments`; unassisted records carry neither, as before.
 - **Before it resolves.** The result's `recorded` lists every outcome recorded so far for the report (with `recorder`, `note`, `assisted` and `attachments`). `status` shows them too (`.result.manual`: `pending` and `recorded`, null when the current report isn't pending), and `pr` shows each in the PR's report section as recorded, with the others still awaiting a human. So a run's checks can be worked through one at a time.
+- **After a re-entry (#97).** Outcomes are bound to the head, so on the new head every manual check awaits a human again. `status` (`.result.manual.redo`) and the PR's report section list each one recorded on an earlier head, as "awaiting a human again: {outcome} at {head} (attempt {n}), the head moved".
 - **Record every check of a run with the same runner version.** An older runner writes the final revision without the assisted fields.
 - **Resolution.** When every manual item is `pass`, or any is `fail`, the runner writes the next revision, `attempts/{n}/report.r{k}.json`: `revision`, `supersedes`, the new `outcome`, the manual evidence marked `passed` or `failed`, and `manual_outcomes`. Earlier revisions, `report.json` included, are never changed, and the attempt's outcome follows. A `fail` adds a blocking finding `manual:{evidence_id}` with the note and escalates the run.
 - `refresh_pr: true` in the result means the run's open PR shows an out-of-date report section: run `pr` again. Since #103 it is set after any new record, not only when the report resolves.
@@ -487,6 +504,8 @@ Updating an existing PR is bookkeeping: it works past the deadline, and for an `
   - merged otherwise (a changes-requested review, or commits pushed after the validated head) → `changes_requested`;
   - closed unmerged after a `CHANGES_REQUESTED` review → `rejected`;
   - closed unmerged otherwise, no PR, or `--abandon` → `abandoned`.
+
+  **Re-entry (#97).** Closing records a re-entered run that merged (one `continue` took back to implementing after its PR opened) as `changes_requested`, even with no such review and the head the validated one: the PR as first validated and recommended wasn't merged as is, and the false auto-merge rate must count it. The event then lists `reentries`: `{trigger, gate_recommendation, attempt, head_sha, at}` for each. A re-entered run closed unmerged is `rejected` or `abandoned` as above.
 
   `.result.closed` stays `merged` or `abandoned`, the action on the run's state change; `.result.operator_action` is the richer record. Runs closed before #110 hold `merged`, the older form of `merged_as_is`.
 
@@ -746,9 +765,10 @@ Crash tests (`scripts/test-factory.sh`, and the first-release acceptance run, #6
 | `record-review.verdict_stored` | `review.json` stored, attempt `finalizing` | attempt `finalizing` | `next` is `resume`; `resume` → `refinalize`; `record-review` with its `file` |
 | `record-review.report_written` | the final `report.json` written, attempt still `finalizing` | the same | the same |
 | `record-review.committed` | the attempt complete and the run moved on (validated, back to implementing, or escalated), before output | the host saw no result | `next` follows the run state; `record-review` again is a no-op |
-| `continue.committed` | the run back in `implementing`, before output | the host saw no result | `next` is `implement`, with `fix`; `continue` again changes nothing |
+| `continue.committed` | the run back in `implementing` (a re-entry recorded, for a run with a PR, #97), before output | the host saw no result | `next` is `implement`, with `fix` (and its `trigger` after a re-entry); `continue` again changes nothing and records no second re-entry |
 | `pr.gate_recorded` | the gate's recommendation recorded on the run, before anything is pushed or the PR is created or updated (#110) | `gate_recommendation` set, one `gate` event, no PR yet | `pr` again: the same result adds no event, then the PR shows it |
 | `pr.created` | `gh pr create` succeeded, number not recorded | an open PR, run `validated` without `pr_number` | `pr` again → `recovered` |
+| `pr.updated` | an existing PR's body patched (a refresh, after a re-entry for example, #97), the update not yet recorded | the PR shows the new report, run still `validated` after a re-entry | `pr` again → `updated`, run `pr_open`, the same PR |
 | `pr.recorded` | the number recorded, before output | run `pr_open` | `pr` again → `updated` |
 
 Child processes inherit the variable, so a project's tests should clear it; Escapement's `scripts/run-tests.sh` does.

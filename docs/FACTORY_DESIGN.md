@@ -4,7 +4,7 @@
 >
 > Captured: 2026-11-15
 > Revised: 2026-11-15 (r3.2, after three independent design reviews and a follow-up — see §13)
-> Status: Design settled for first release; build in progress (status in §10, updated 2026-11-16)
+> Status: Design settled for first release; build in progress (status in §10, updated 2026-11-19)
 > Builds on: `docs/MANIFEST_SYSTEM_DESIGN_V2.md`, existing skills (`setup-work`, `do-work`, `commit-changes`, `create-pr`, `review-pr`, `archive-work`)
 
 ---
@@ -117,6 +117,7 @@ One run through the first release. This table only gathers what §3.6, §4.1, §
 1. **Bounded fix loop** — on `fail`, implementer iterates on findings instead of stopping. **Done** (#92, §6.2).
 2. **Plan critique** — one round, measured from its first run. **Done** (#99, §3.5).
 3. **Gate in report-only mode** — compute and record a recommendation; always ping. **Done** (#110, §6.3).
+4. **Re-entry after the PR is open** — a fix that belongs on the open PR goes through the same run. **Done** (#97, §4.7).
 
 ### 2.3 Later
 
@@ -355,6 +356,7 @@ planned → approved → implementing → validating → validated → pr_open �
                           └── failed ────┘            (fix loop, §6.2)
 any non-terminal → blocked | escalated     (waiting on human)
 escalated → implementing                    (factory continue, §6.2)
+pr_open → implementing                      (factory continue, re-entry, #97)
 closed: merged | rejected | abandoned       (terminal)
 ```
 
@@ -381,7 +383,14 @@ any non-complete → interrupted   (set only by resume, per the rules below)
 - `record-review` is idempotent: re-recording the same verdict (by digest) is a no-op; a different verdict for a `complete` attempt is rejected.
 - **Budgets:** attempt count and run deadline are enforced (§4.1); agent time and tokens are summed from recorded phases and reported, advisory in the first release. Resumption never resets any of them.
 - *As built (#65):* a crash is reproduced with a test-only fault variable that SIGKILLs the runner at a named point (`ESCAPEMENT_FACTORY_FAULT`, [FACTORY_CLI.md](FACTORY_CLI.md#fault-injection-testing-only)), and `scripts/test-factory.sh` crashes the real runner at each boundary above. Two gaps it found are fixed: a check the dead runner had started kept running (its process group is now recorded on the build lock and killed by `resume` or whoever takes the lock over), and `factory authorization` sent a `finalizing` attempt to `review`, which `review-input` refuses. Its `next` is now `resume` for an attempt left mid-way and `validate` after an interrupted one; skills treat a runner that dies without JSON as a crash and resume.
-- In the first release, `failed` stopped the run in `escalated` with a report. *As built (#92):* the fix loop adds `validating → implementing` (the `failed` edge above), taken by the runner itself, and `escalated → implementing`, taken by the operator with `factory continue` (§6.2). A blocked run still only closes, and `validated` and `pr_open` have no way back yet (#97). After an attempt completes, one decision (`manifest/factory/fixloop.ts`) picks the run's next state, and validate, review-input, record-review and resume all apply it, so the "complete, run state not advanced" row of the resume table resolves exactly as the crashed command would have.
+- In the first release, `failed` stopped the run in `escalated` with a report. *As built (#92):* the fix loop adds `validating → implementing` (the `failed` edge above), taken by the runner itself, and `escalated → implementing`, taken by the operator with `factory continue` (§6.2). A blocked run still only closes. After an attempt completes, one decision (`manifest/factory/fixloop.ts`) picks the run's next state, and validate, review-input, record-review and resume all apply it, so the "complete, run state not advanced" row of the resume table resolves exactly as the crashed command would have.
+
+- *As built (#97): re-entry after the PR is open.* A fix that belongs on a run's open PR (a finding from its review, a failed manual check, a change the operator asks for) goes through the same run, under the same contract and authorization, and lands on the same PR:
+  - **The edge** is `pr_open → implementing`, and `escalated → implementing` now also takes an escalated run with a PR. Both are the operator's `factory continue`; a `validated` run still has no way back (its PR is refreshed first). No new command.
+  - **The trigger** is recorded. On a `pr_open` run the operator gives it, `--trigger review_finding` or `operator_request` (the default). On an escalated run with a PR it is derived: `manual_check_failed` when a human recorded a manual check of the latest attempt as failed, else `attempt_failed`.
+  - **A new deadline.** Review and manual checks usually come after the run's deadline (4h on Escapement's own runs), so re-entry sets now plus the budget fixed at first approval, or the operator's `--run-budget`; never the branch's setting, as for every budget (#92). The attempt budget is never reset or raised: a run with no attempts left needs a new run.
+  - **The record** is a `state_change` event with `entity: "reentry"`, in the same transaction: trigger, reason, PR, the attempt and head it left from, the gate's recommendation then, the old and new deadlines. No migration. The gate reads it (rule `reentry`, §6.3), and so does `archive --close` (`changes_requested`, §7.1). `factory authorization` hands it to the implementer as `fix.trigger` and `fix.reason`, with no findings for a review finding or an operator request and the `manual:{id}` findings for a failed manual check.
+  - **The PR.** The next passing or `pending_manual` attempt refreshes the same PR (§4.8). Manual outcomes are bound to the head (§5.5), so the refreshed section lists each manual check recorded on an earlier head as awaiting a human again. create-pr rewrites the narrative on that refresh. A crash after the PR is patched and before the update is recorded (new fault point `pr.updated`) is repaired by running `pr` again: one PR. `continue.committed` crash tests cover both ways back.
 
 ### 4.8 Idempotent PR creation
 
@@ -579,6 +588,8 @@ Contracts name no commands in the first release: every check comes from project 
 
 *As built (#64):* a revision is `attempts/{n}/report.r{k}.json`, with `revision`, `supersedes` and `manual_outcomes` (optional report fields). Any single `fail` resolves the report at once, even with other manual items unrecorded; it adds a blocking finding `manual:{id}` and escalates the run. Recording the same outcome again is a no-op; a different one replaces it until the report resolves. The result says when the open PR needs `factory pr` to refresh its report section. Reference: [FACTORY_CLI.md](FACTORY_CLI.md#record-manual).
 
+*As built (#97):* after a re-entry (§4.7) the run's head moves, so every manual check is done again on the new head; the PR section lists those recorded on an earlier head as awaiting a human again, with that outcome and head.
+
 *As built (#103):* the agent can carry out a manual check's steps, and the human still decides it. The plugin bundles Playwright's MCP server (`@playwright/mcp@0.0.84`, declared in `.claude-plugin/plugin.json`): Playwright's own Chromium, an isolated profile, headless unless `ESCAPEMENT_BROWSER_HEADLESS=false`, output outside the worktree, and only `localhost` and `127.0.0.1` origins. That origin list is a guard rail, not a security boundary, and doesn't affect redirects. On request, `validate-work` reads the evidence's `instructions`, does the setup they name, carries out each step in the browser or the shell, and reports what it saw at each "Check:". It saves screenshots and `observations.md` under `{artifact_dir}/manual/{evidence_id}/`, hands back steps it can't do, and asks the operator for the outcome. `record-manual --assisted --attachment …` records it as the operator's, with the files, and the PR section marks it agent-assisted. Outcomes recorded before the report resolves are shown by `record-manual`, `status` and the PR section, so checks can be worked through one at a time; the report itself still resolves only as above. `archive-work` copies the attachments. Browser tests as real `test` evidence are #104.
 
 ---
@@ -616,7 +627,7 @@ On `fail`, the implementer receives findings only, fixes, commits, and re-valida
 - **The handoff.** While the run is back in `implementing`, `factory authorization` carries `fix`: the attempt, its outcome, its blocking findings, the error's cause and the report path. `next` stays `implement`. `do-work` fixes exactly those findings, commits, and validates a new attempt. It escalates itself when a fix would change the contract (that needs `approve` again), the project's checks or test configuration, or an assertion the reviewer won't accept.
 - **The operator's way back.** `factory continue '<run_id>' --reason …` takes an `escalated` run whose latest attempt was a `fail` or `error` (any cause: the operator judges whether the environment is fixed) back to `implementing`. Same contract, digest and authorization; the deadline and the attempt budget are never reset, and a passed deadline refuses. `do-work` offers it in plain words, with "abandon" and "start over", and runs the commands itself. A `blocked` run isn't continued: the manifest tracks what blocks work.
 - **A rejected manual procedure escalates at once (#99).** A reviewer's `judgment:{id}` finding carries the judged item's `evidence_type`. When it is `manual` (`procedure_adequate: no`), the run escalates as `needs_operator` with attempts to spare: the instructions are in the approved contract, so no attempt can fix them, and only a re-approved contract can. `do-work` offers only abandon and start over. A `judgment:` finding on test or command evidence (`supports_criterion` `no` or `partial`) still loops, since a better test is the implementer's to write, and so does one recorded before findings carried `evidence_type`.
-- **The PR** opens only after a `pass` or `pending_manual` attempt, as before, and its report lists every attempt with its outcome when there was more than one. Re-entering implementation after the PR is open, including after a failed manual check, is #97.
+- **The PR** opens only after a `pass` or `pending_manual` attempt, as before, and its report lists every attempt with its outcome when there was more than one. Re-entering implementation after the PR is open, including after a failed manual check, came with #97 (§4.7).
 - **Review of r1 (#92's own first run).** Its fresh reviewer found that `continue` accepted a run escalated from `pr_open` by a failed manual check (`record-manual` sets that attempt's outcome to `fail`), so `continue` now refuses a run with a PR (`has_pr`). The attempt budget is fixed at first approval, like the deadline (`factory_runs.max_attempts`), so a commit to the branch's settings can't raise it. A runner error mid-validation now writes the attempt's report too.
 - **Crash safety.** New fault points `record-review.committed` and `continue.committed`. `scripts/test-factory.sh` kills the runner after a failed attempt moved the run back, during the next attempt's checks, after a review sent it back and after `continue`, and checks that `resume` and `next` carry on with nothing reset.
 - **Narrowed verify between attempts:** a contract may name a faster `narrow_verify` (only the tests relevant to the criteria) so fix attempts get quick feedback. It never replaces a required check: the attempt that can produce `pass` always runs every `required-checks` command in full. Deferred from the first release (#60): there, validation runs once per attempt and `verify` is required by default, so a narrowed command would never run.
@@ -635,6 +646,7 @@ On `fail`, the implementer receives findings only, fixes, commits, and re-valida
 - **Refreshes.** Each refresh works the gate out again from the current report. Once every manual check is recorded `pass`, the report resolves to `pass` and every rule is applied again, so an earlier `ping` can become `auto_merge`; the `ping` stays in the events. A failed manual check gives `ping` for the outcome.
 - **Notification.** `do-work`, `create-pr` and `validate-work` report the recommendation and its reasons for every PR opened or refreshed, and notify the operator whatever it is. Nothing merges: the runner never calls a merge, and the skills never do.
 - **The other half of §7.4.** `factory archive --close` records what the operator then did, in `operator_action` (§7.1).
+- *As built (#97): re-entry.* An eleventh rule, `reentry`, applies only to a run `factory continue` took back after its PR opened, and always fails: "re-entered after its PR opened", with the count, the latest trigger (`review_finding`, `operator_request`, `manual_check_failed`, `attempt_failed`) and the attempt it left from. The PR as first recommended wasn't merged as is, so a re-entered run is always `ping`; with `gate-max-attempts` 1 it also fails `attempts`, and both reasons show. A run never re-entered has the ten rules, unchanged.
 
 **Before enforcing mode (later), additionally required:**
 
@@ -723,6 +735,8 @@ CREATE TABLE factory_events (
 
 *As built (#110):* `factory archive --close` fills `operator_action` from the PR, read as the agent: merged with no `CHANGES_REQUESTED` review and the head still the last validated one → `merged_as_is`; merged otherwise (a change request, or commits pushed after validation) → `changes_requested`; closed unmerged after a change request → `rejected`; closed unmerged otherwise, no PR, or `--abandon` → `abandoned`. Each close also adds an `operator_action` event with the PR's state, who requested changes, the validated and final heads, and the run's latest gate recommendation, which is what the false auto-merge rate compares. The run's state change keeps the plain close action (`merged`, `abandoned`), and runs closed earlier hold `merged`, the older form of `merged_as_is`. What it can't see, and so how it skews §7.4: a review dismissed afterwards (`DISMISSED`) doesn't count; the agent opens the PR and reviews it through review-pr, and GitHub doesn't let a PR's author request changes on their own PR, so the agent's review is `COMMENTED` and its change requests show only if the head moves; an "Update branch" merge from the base moves the head, so it reads as `changes_requested`. Reverts and attributed defects (§7.2) are still recorded later.
 
+*As built (#97):* a re-entered run that merged is `changes_requested` too, even with no changes-requested review and its head the validated one: re-entry validates the final head again, so without this a wrong first `auto_merge` recommendation would read as `merged_as_is` and drop out of the false auto-merge rate. The event lists each re-entry (trigger, the gate's recommendation then, the attempt and head it left from). Closed unmerged, a re-entered run is `rejected` or `abandoned` as any other.
+
 ### 7.2 Event conventions
 
 - `critique_finding`: `{finding, severity, accepted, plan_change, tokens}` — measures critic value directly, not only via later validation failures.
@@ -735,7 +749,7 @@ Failure phase by work type and tier; attempts and cost to convergence; critic fi
 
 ### 7.4 Promotion to enforcing mode (later)
 
-Gate–operator agreement is not sufficient. The key metric is the **false auto-merge rate**: auto-merge recommendations followed by changes requested, rejection, revert, or an attributed defect.
+Gate–operator agreement is not sufficient. The key metric is the **false auto-merge rate**: auto-merge recommendations followed by changes requested, rejection, revert, or an attributed defect. A re-entry after the PR opened (#97) counts as changes requested: the recommendation it left from is in its `reentry` event.
 
 Before evaluating any promotion cohort, a short pre-registration note must fix: the cohort (project, work type, policy version), observation window after merge, acceptable false auto-merge rate and how uncertainty is handled at small sample sizes, and how a sample of auto-merge-eligible runs is independently audited. Writing that note is a later-tier task; with a single operator, cohorts will be small for a long time, and that is acceptable.
 
@@ -799,13 +813,14 @@ All keys optional. Missing `static`/`verify` → `blocked` ("not configured"). `
 | `do-work` | fix loop (§6.2) | next |
 | `setup-work` + `plan-critic` agent | critique loop (§3.5) | next (as built: #99) |
 | gate + `manifest-sync` | report-only recommendation; operator action and merge SHA recording | next (as built: #110, the gate and the operator action; merge SHA recording still next) |
+| `factory continue` + `do-work`, `create-pr`, `validate-work` | re-entry after the PR is open (§4.7) | next (as built: #97) |
 | `PreToolUse` exec hook | optional enforcement of `factory exec` | first (as built: on during runs, opt out per project) |
 
 ---
 
 ## 10. Build Order
 
-Status as of 2026-11-18; tracked in #66.
+Status as of 2026-11-19; tracked in #66.
 
 1. **#57** — context-path detection. **Done** (PR #68). Found alongside it and also done: **#67**, the manifest skills run their CLI through a plugin-root wrapper, `scripts/manifest.sh` (PR #69).
 2. **#58 Shared manifest location + versioned schema** — one per-user manifest database independent of plugin and project location; `PRAGMA user_version` and ordered migrations replacing `ensureSchema` (§2.5). **Done.**
@@ -826,7 +841,8 @@ Status as of 2026-11-18; tracked in #66.
 11. **#99 Plan critique**, one round. **Done.** The `plan-critic` agent (a prompt plus `critique.schema.json`) critiques the plan and contract in `setup-work` before approval; unresolved findings reach the operator with both positions; dispositions are recorded in the scratchpad and, with `record-critique`, on the run as `critique_finding` events. In the fix loop, a rejected manual procedure now escalates at once (§3.5, §6.2).
 12. **#103 Agent-assisted manual checks.** **Done.** The plugin bundles the Playwright MCP server; `validate-work` carries out a manual check's steps on request and the operator decides; `record-manual --assisted --attachment`; recorded outcomes are visible before the report resolves (§5.5).
 13. **#110 Gate, report-only.** **Done.** `factory pr` recommends `auto_merge` or `ping` for the report the PR shows, with one reason per failed §6.3 rule, records it on the run and as a `gate` event before the PR shows it, and works it out again on every refresh; four new limit settings (§8); `archive --close` records the operator's action (§7.1); the skills notify the operator whatever the recommendation, and nothing merges. A crash test at the new boundary (`pr.gate_recorded`).
-14. **Later:** merge-result validation, enforcing gate, async escalation, hidden scenarios, test-first, outer loop.
+14. **#97 Re-entry after the PR is open.** **Done.** `factory continue` takes a `pr_open` run (`--trigger review_finding | operator_request`) or an escalated run with a PR (`manual_check_failed`, `attempt_failed`, derived) back to implementing, with a new deadline from the approved budget; each re-entry is recorded (no migration); the gate pings (rule `reentry`), `archive --close` records `changes_requested`, `factory authorization` hands over the trigger and reason, the refreshed PR lists the manual checks to redo; do-work offers it, create-pr rewrites the narrative; crash tests at `continue.committed` and the new `pr.updated`.
+15. **Later:** merge-result validation, enforcing gate, async escalation, hidden scenarios, test-first, outer loop.
 
 ---
 
