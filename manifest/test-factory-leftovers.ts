@@ -2,10 +2,16 @@
 // #117 reviews, each tested here so the existing suites keep their
 // assertions as they were.
 import { spawnSync } from "node:child_process";
+import { mkdirSync, realpathSync } from "node:fs";
+import { join } from "node:path";
+import { backfillMergeShas } from "./factory/archive.ts";
 import { gh } from "./factory/github.ts";
-import { assert, cleanup, stubGh } from "./factory/testkit.ts";
+import { currentOwner } from "./factory/owner.ts";
+import { FactoryError } from "./factory/util.ts";
+import { assert, cleanup, makeRepo, memDb, seedRun, sh, stubGh, tempDir } from "./factory/testkit.ts";
 
 const TOKEN = "ghp_test_agent_token_120";
+const owner = currentOwner("test");
 
 function stubEnterpriseToken() {
   console.log("The gh stub and GITHUB_ENTERPRISE_TOKEN (item 8)\n");
@@ -24,8 +30,100 @@ function stubEnterpriseToken() {
   assert(call.githubEnterpriseToken === null && call.token === TOKEN, "gh drops GITHUB_ENTERPRISE_TOKEN so the stub never sees it");
 }
 
+async function backfillStops() {
+  console.log("\nbackfill-merge-shas stopped by a gh failure (item 9)\n");
+  const db = await memDb();
+  const stub = stubGh();
+  const env = { ...process.env, PATH: stub.path, ESCAPEMENT_AGENT_GH_TOKEN: "t0ken" };
+  const root = realpathSync(makeRepo({ branch: "main" }));
+  const bare = join(tempDir(), "acme", "w.git");
+  mkdirSync(bare, { recursive: true });
+  sh("git", ["init", "-q", "--bare", bare], tempDir());
+  sh("git", ["remote", "add", "origin", bare], root);
+  const closed = (runId: string, pr_number: number) =>
+    seedRun(db, runId, {
+      repo: "acme/w", worktree_path: "/nonexistent/gone", state: "closed", ended_at: new Date().toISOString(), pr_number, operator_action: "merged_as_is",
+    });
+  const addPr = (number: number, state: "MERGED" | "OPEN", oid: string | null) => {
+    const prs = stub.state().prs;
+    prs.push({
+      number, url: `https://github.com/acme/w/pull/${number}`, title: "t", body: "", headRefName: "x", baseRefName: "main", owner: "acme",
+      state, mergedAt: state === "MERGED" ? new Date().toISOString() : null, mergeCommit: oid ? { oid } : null,
+    });
+    stub.setState({ prs });
+  };
+  const sha = (runId: string) => (db.prepare("SELECT merge_sha FROM factory_runs WHERE run_id = ?").get(runId) as { merge_sha: string | null }).merge_sha;
+  const shaEvents = () =>
+    (db.prepare("SELECT detail_json FROM factory_events WHERE kind = 'state_change'").all() as { detail_json: string }[])
+      .map((e) => JSON.parse(e.detail_json))
+      .filter((d) => d.entity === "merge_sha").length;
+
+  // In lookup order: one skipped (its PR is still open), two filled, then
+  // a PR gh can't find, and one more after it.
+  closed("acme-w#21-r1", 621);
+  closed("acme-w#22-r1", 622);
+  closed("acme-w#23-r1", 623);
+  closed("acme-w#24-r1", 624);
+  closed("acme-w#25-r1", 625);
+  addPr(621, "OPEN", null);
+  addPr(622, "MERGED", "2".repeat(40));
+  addPr(623, "MERGED", "3".repeat(40));
+  addPr(625, "MERGED", "5".repeat(40));
+
+  let caught: unknown = null;
+  try {
+    backfillMergeShas(db, { worktree: root, owner, env });
+  } catch (err) {
+    caught = err;
+  }
+  const e = caught instanceof FactoryError ? caught : null;
+  const d = (e?.detail ?? {}) as {
+    filled?: { run_id: string; merge_sha: string }[];
+    skipped?: { run_id: string; reason: string }[];
+    failed?: { run_id: string; pr_number: number };
+    waiting?: { run_id: string; pr_number: number }[];
+  };
+  assert(
+    e !== null &&
+      e.code === "gh_failed" &&
+      sha("acme-w#22-r1") === "2".repeat(40) &&
+      sha("acme-w#23-r1") === "3".repeat(40) &&
+      shaEvents() === 2 &&
+      (d.filled ?? []).map((f) => f.run_id).join() === "acme-w#22-r1,acme-w#23-r1" &&
+      /Filled 2 before it \(kept\)/.test(e.message),
+    "backfill-merge-shas keeps the fills made before a gh failure and lists them as filled in the error",
+  );
+  assert(
+    e !== null &&
+      d.failed?.run_id === "acme-w#24-r1" &&
+      d.failed?.pr_number === 624 &&
+      (d.waiting ?? []).map((w) => `${w.run_id}:${w.pr_number}`).join() === "acme-w#24-r1:624,acme-w#25-r1:625" &&
+      (d.skipped ?? []).map((k) => k.run_id).join() === "acme-w#21-r1" &&
+      sha("acme-w#25-r1") === null &&
+      e.message.includes("stopped at acme-w#24-r1 (PR #624)") &&
+      e.message.includes("still waiting: acme-w#24-r1 (PR #624), acme-w#25-r1 (PR #625)") &&
+      e.message.includes("skipped 1") &&
+      e.message.includes("no pull request 624"),
+    "backfill-merge-shas reports the failed run, every run still waiting and the runs it skipped",
+  );
+
+  addPr(624, "MERGED", "4".repeat(40));
+  const before = stub.calls().length;
+  const again = backfillMergeShas(db, { worktree: root, owner, env });
+  const looked = stub.calls().slice(before).map((c) => c.args[2]).join();
+  assert(
+    again.filled.map((f) => f.run_id).join() === "acme-w#24-r1,acme-w#25-r1" &&
+      sha("acme-w#24-r1") === "4".repeat(40) &&
+      sha("acme-w#25-r1") === "5".repeat(40) &&
+      looked === "621,624,625" &&
+      shaEvents() === 4,
+    "backfill-merge-shas run again after a failure fills the rest and repeats nothing",
+  );
+}
+
 async function run() {
   stubEnterpriseToken();
+  await backfillStops();
 }
 
 run()

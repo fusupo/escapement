@@ -222,6 +222,13 @@ export type BackfillResult = {
  * operator_action event recorded at close is left as it was. A PR that
  * isn't merged, or reports no merge commit, is skipped with the reason.
  * Idempotent: a run with a merge SHA is never looked at again.
+ *
+ * A gh lookup that fails stops the sweep at that run (#120). Each fill
+ * commits on its own, so the ones already made are kept; the error keeps
+ * gh's code and message and adds what the sweep didn't reach, in its
+ * message and as `detail`: `filled` and `skipped` so far (shaped as in the
+ * result), the `failed` run, and every run still `waiting` (the failed one
+ * and each after it). Running it again looks up only those.
  */
 export function backfillMergeShas(
   db: Database,
@@ -244,8 +251,14 @@ export function backfillMergeShas(
   assertTokenHost(remote);
   const env = opts.env ?? process.env;
   const token = agentToken(env);
-  for (const row of rows) {
-    const pr = ghJson<PrView>(["pr", "view", String(row.pr_number), "-R", remote.ghRepo, "--json", "state,mergedAt,mergeCommit"], { token, env });
+  for (const [i, row] of rows.entries()) {
+    let pr: PrView;
+    try {
+      pr = ghJson<PrView>(["pr", "view", String(row.pr_number), "-R", remote.ghRepo, "--json", "state,mergedAt,mergeCommit"], { token, env });
+    } catch (err) {
+      if (!(err instanceof FactoryError)) throw err;
+      throw backfillStopped(err, result, row, rows.slice(i));
+    }
     const merged = pr.state === "MERGED" || Boolean(pr.mergedAt);
     const sha = merged ? mergeShaOf(pr) : null;
     if (!merged) {
@@ -272,4 +285,24 @@ export function backfillMergeShas(
     if (wrote) result.filled.push({ run_id: row.run_id, pr_number: row.pr_number, merge_sha: sha });
   }
   return result;
+}
+
+/** The error a failed lookup stops the backfill with: gh's own, plus what the sweep did and didn't reach. */
+function backfillStopped(
+  err: FactoryError,
+  done: BackfillResult,
+  failed: { run_id: string; pr_number: number },
+  waiting: { run_id: string; pr_number: number }[],
+): FactoryError {
+  const list = waiting.map((w) => `${w.run_id} (PR #${w.pr_number})`).join(", ");
+  const message =
+    `${err.message}; backfill stopped at ${failed.run_id} (PR #${failed.pr_number}). ` +
+    `Filled ${done.filled.length} before it (kept), skipped ${done.skipped.length}; still waiting: ${list}. ` +
+    `Run backfill-merge-shas again once gh works: it looks up only the runs still waiting.`;
+  return new FactoryError(err.code, message, err.kind, {
+    filled: done.filled,
+    skipped: done.skipped,
+    failed: { run_id: failed.run_id, pr_number: failed.pr_number },
+    waiting: waiting.map((w) => ({ run_id: w.run_id, pr_number: w.pr_number })),
+  });
 }
