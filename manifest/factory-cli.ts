@@ -419,10 +419,12 @@ function describeMatch(r: AuthorizationMatch): string {
     ...(r.fix
       ? [
           `  fix:       attempt ${r.fix.attempt} ${r.fix.outcome}${r.fix.error ? ` (${r.fix.error.cause}: ${r.fix.error.reason})` : ""}`,
+          ...(r.fix.trigger ? [`    re-entry: ${r.fix.trigger}: ${r.fix.reason}`] : []),
           ...r.fix.blocking_findings.map((f) => `    - ${f.id}: ${f.detail}`),
           ...(r.fix.report_path ? [`    report: ${r.fix.report_path}`] : []),
         ]
       : []),
+    ...(r.reentry ? [`  re-entered: ${r.reentry.count}x, latest ${r.reentry.trigger} after attempt ${r.reentry.attempt}`] : []),
   ].join("\n");
 }
 
