@@ -4,6 +4,7 @@ import { FactoryError, blocked } from "./util.ts";
 import { tx, getRun, transitionRun, recordEvent, type RunState } from "./state.ts";
 import { withLocks, worktreeLock } from "./locks.ts";
 import { agentToken, assertTokenHost, ghJson, remoteOf } from "./github.ts";
+import { mainRepoRoot, repoName } from "./context.ts";
 import type { Owner } from "./owner.ts";
 import { reentries, type Reentry } from "./reentry.ts";
 
@@ -192,4 +193,83 @@ export async function archiveRun(
       state: updated.state,
     };
   });
+}
+
+// ── backfill-merge-shas (#117) ───────────────────────────────────────
+
+/** Close actions that mean the PR merged: #110's two, and the plain `merged` runs closed before #110 hold. */
+const MERGED_ACTIONS = ["merged_as_is", "changes_requested", "merged"] as const;
+
+export type BackfillResult = {
+  /** The repository whose runs were looked at, from the checkout the command ran in. */
+  repo: string;
+  filled: { run_id: string; pr_number: number; merge_sha: string }[];
+  skipped: { run_id: string; pr_number: number; reason: string }[];
+};
+
+/**
+ * `factory backfill-merge-shas [run_id]`: fill in `merge_sha` for runs
+ * closed as merged before `archive --close` recorded it (#117).
+ *
+ * The repository is the checkout the command runs in (`worktree`, from the
+ * cwd or --project-root), never a run's own `worktree_path`: an old run's
+ * worktree is usually gone. Its runs that are closed, merged
+ * (`operator_action` merged_as_is, changes_requested or the older merged),
+ * have a PR and no merge SHA are looked up; `runId` narrows that to one.
+ * origin's host is checked before any gh call, which carries the agent
+ * token. A merged PR with a 40-hex merge commit gets its `merge_sha` and a
+ * `state_change` event (entity `merge_sha`, source `backfill`); the
+ * operator_action event recorded at close is left as it was. A PR that
+ * isn't merged, or reports no merge commit, is skipped with the reason.
+ * Idempotent: a run with a merge SHA is never looked at again.
+ */
+export function backfillMergeShas(
+  db: Database,
+  opts: { worktree: string; runId?: string; owner: Owner; env?: NodeJS.ProcessEnv },
+): BackfillResult {
+  const repo = repoName(mainRepoRoot(opts.worktree));
+  const rows = db
+    .prepare(
+      `SELECT run_id, pr_number FROM factory_runs
+       WHERE repo = ? AND state = 'closed' AND pr_number IS NOT NULL AND merge_sha IS NULL
+         AND operator_action IN (${MERGED_ACTIONS.map(() => "?").join(", ")})
+         ${opts.runId ? "AND run_id = ?" : ""}
+       ORDER BY started_at, run_id`,
+    )
+    .all(repo, ...MERGED_ACTIONS, ...(opts.runId ? [opts.runId] : [])) as { run_id: string; pr_number: number }[];
+  const result: BackfillResult = { repo, filled: [], skipped: [] };
+  if (rows.length === 0) return result;
+  const remote = remoteOf(opts.worktree, repo);
+  // Every lookup carries the agent token: never to a host but github.com (#87).
+  assertTokenHost(remote);
+  const env = opts.env ?? process.env;
+  const token = agentToken(env);
+  for (const row of rows) {
+    const pr = ghJson<PrView>(["pr", "view", String(row.pr_number), "-R", remote.ghRepo, "--json", "state,mergedAt,mergeCommit"], { token, env });
+    const merged = pr.state === "MERGED" || Boolean(pr.mergedAt);
+    const sha = merged ? mergeShaOf(pr) : null;
+    if (!merged) {
+      result.skipped.push({ run_id: row.run_id, pr_number: row.pr_number, reason: `PR #${row.pr_number} is ${pr.state.toLowerCase()}, not merged` });
+      continue;
+    }
+    if (!sha) {
+      result.skipped.push({ run_id: row.run_id, pr_number: row.pr_number, reason: `PR #${row.pr_number} reports no merge commit` });
+      continue;
+    }
+    const wrote = tx(db, () => {
+      const changes = db.prepare("UPDATE factory_runs SET merge_sha = ? WHERE run_id = ? AND merge_sha IS NULL").run(sha, row.run_id).changes;
+      if (changes === 0) return false;
+      recordEvent(db, row.run_id, "state_change", {
+        entity: "merge_sha",
+        to: sha,
+        previous: null,
+        source: "backfill",
+        pr_number: row.pr_number,
+        owner: opts.owner,
+      });
+      return true;
+    });
+    if (wrote) result.filled.push({ run_id: row.run_id, pr_number: row.pr_number, merge_sha: sha });
+  }
+  return result;
 }
