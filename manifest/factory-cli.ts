@@ -33,6 +33,9 @@ import { resolve, dirname } from "node:path";
  *   {"ok": true,  "command": "...", "result": {...}}
  *   {"ok": false, "command": "...", "error": {"code": "...", "kind": "error"|"blocked", "message": "..."}}
  *
+ * An error may also carry `detail`, facts a caller routes on (such as
+ * not_github's `cause`); it is present only when the error sets it.
+ *
  * Exit status: 0 ok, 1 error, 2 blocked. `exec` exits with the command's
  * own status, or 124 when the runner killed it. `validate` exits 0 when
  * it recorded an attempt, and `record-review` when it recorded a verdict,
@@ -700,7 +703,11 @@ async function main(argv: string[]): Promise<number> {
       err instanceof FactoryError ? err : new FactoryError("internal", err instanceof Error ? err.message : String(err));
     if (jsonRequested) {
       process.stdout.write(
-        JSON.stringify({ ok: false, command, error: { code: fe.code, kind: fe.kind, message: fe.message } }) + "\n",
+        JSON.stringify({
+          ok: false,
+          command,
+          error: { code: fe.code, kind: fe.kind, message: fe.message, ...(fe.detail ? { detail: fe.detail } : {}) },
+        }) + "\n",
       );
     } else {
       console.error(`factory: ${fe.message}`);

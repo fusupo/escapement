@@ -443,7 +443,12 @@ ESCAPEMENT_AGENT_EMAIL=agent@example.com      # optional
 - Like an ssh key, the file is refused (`agent_env_permissions`) while group or others can read it: `chmod 600` it.
 - The identity is the user's, not a project's, so the runner never reads a project's `.env`.
 
-- The token reaches `gh` as `GH_TOKEN` (`GITHUB_TOKEN` is dropped), and `git push` through a credential helper that reads the variable, only ever for github.com: a push to any other host is refused with `not_github` (`pr` and `push` alike). It never appears in argv, URLs, logs, events or JSON output; errors redact it.
+- The token reaches `gh` as `GH_TOKEN` (`GITHUB_TOKEN` and the Enterprise tokens are dropped), and `git push` through a credential helper that reads the variable, only ever for github.com. It never appears in argv, URLs, logs, events or JSON output; errors redact it. Four guards keep it there (#87):
+  - **The host is checked before any gh call.** `pr` checks origin and the push URL before its PR lookup, and `archive --close` checks origin before reading the PR, so an origin off github.com is `not_github` before `gh` runs.
+  - **gh is pinned to github.com** (`GH_HOST=github.com`), whatever the environment or gh's own config names. That covers `agent`'s `gh api user`, which has no origin to check.
+  - **The credential helper is scoped** to `https://github.com` (`credential.https://github.com.helper`), after clearing every helper configured before. A URL git rewrites to another host gets no token from it.
+  - **The push URL is resolved as git will** before the push. For a GitHub origin, `https://github.com/{repo}.git` after `insteadOf` and `pushInsteadOf` must still be `https://github.com/…` or a local path (a mirror or a test's bare repo). A local origin is pushed by name, to every push URL it has, so each one in `git remote get-url --push --all origin` (its `pushurl`s included) must stay local. Anything else, an ssh rewrite such as `git@github.com:` or a user-less `host:path` included, is `not_github` and nothing is pushed (`pr` and `push` alike).
+- `not_github` says why in `error.detail` (see [JSON output](#json-output)): `{"cause": "origin_host", "host": …}` when origin isn't on github.com, `{"cause": "push_url", "resolved_url": …}` when git rewrites the push URL away from it. The resolved URL never carries userinfo.
 - Without it, `pr`, `push` and `archive --close` are blocked with `no_agent_token`. The runner never falls back to the operator's own `gh` login; a plain skill may (see [push](#push)).
 - Keep the token out of any file a project commits.
 - `agent` prints the commit identity (`{name, email, login, source}`, `source` being `env` or `github`). Skills commit with it, under an authorization and on the plain path alike: `git -c user.name=… -c user.email=… commit`.
@@ -457,8 +462,8 @@ ESCAPEMENT_AGENT_EMAIL=agent@example.com      # optional
 
 - HEAD goes to `refs/heads/{branch}` and nothing else, never forced, through the same path as `pr`'s push: to `https://github.com/{repo}.git` with the agent token from a credential helper, or as configured on a local remote. Project `pre-push` hooks still run. Afterwards `refs/remotes/origin/{branch}` points at the pushed commit and the branch tracks it (upstream `origin/{branch}`).
 - Refused (`push_base_branch`): the project's base branch (`base-branch` setting, else `develop` when origin has it, else `main`), origin's default branch (`refs/remotes/origin/HEAD`, when known), `main` and `master`. A detached HEAD is `detached_head`. It takes no arguments (`usage`).
-- **The agent token goes to github.com only.** An origin on any other host (GitLab, a self-hosted server, GitHub Enterprise) is refused with `not_github` before the token is read. A local remote never gets the token.
-- Without the agent token it is `no_agent_token` and nothing is pushed. The runner never falls back; the skill decides. On `no_agent_token` or `not_github`, Escapement's skills push with the operator's `git push` and say so in one line. On `agent_env_permissions`, `push_failed` or `no_remote` they report and stop, never retrying as the operator.
+- **The agent token goes to github.com only.** An origin on any other host (GitLab, a self-hosted server, GitHub Enterprise), and a push URL that git rewrites away from `https://github.com` (`insteadOf`, `pushInsteadOf`, a local origin's `pushurl`, ssh), are refused with `not_github` before the token is read, with the cause in `error.detail` (`origin_host` or `push_url`). A local remote never gets the token.
+- Without the agent token it is `no_agent_token` and nothing is pushed. The runner never falls back; the skill decides. Escapement's skills run `factory.sh --check` first: when it fails (the runner isn't installed), on `no_agent_token`, or on `not_github`, they push with the operator's `git push` and say so in one line that names the cause. For `push_url` that line names the rewrite and the resolved URL, never that origin is off github.com. On `agent_env_permissions`, `push_failed` or `no_remote` they report and stop, never retrying as the operator.
 
 ### pr
 
@@ -692,7 +697,10 @@ With `--json`, every command prints exactly one JSON object on stdout.
 ```json
 {"ok": true, "command": "start", "result": { ... }}
 {"ok": false, "command": "exec", "error": {"code": "run_deadline", "kind": "blocked", "message": "..."}}
+{"ok": false, "command": "push", "error": {"code": "not_github", "kind": "blocked", "message": "...", "detail": {"cause": "push_url", "resolved_url": "ssh://git@elsewhere.example/acme/w.git"}}}
 ```
+
+An error carries `detail` only when it has facts a caller routes on; today only `not_github` does (`cause` `origin_host` with `host`, or `push_url` with `resolved_url`, #87).
 
 `result` by command:
 - **start:** the run row (fields below) plus `artifact_source` (`flag`, `context-path` or `in-repo`)
@@ -746,7 +754,7 @@ Error codes:
 
 | kind | codes |
 |---|---|
-| `blocked` (exit 2) | from start `on_target_branch`; `run_deadline`, `not_authorized`, `run_halted`, `run_closed`, `lock_timeout`, `attempt_budget`; from validate also `attempt_open`, `bad_setting`, `contract_mismatch`, `not_configured`, `dirty_tree`, `no_target`, `no_merge_base`; from review-input and record-review also `contract_mismatch`, `not_issued`, `invalid_verdict`, `incomplete_verdict`, `verdict_conflict`; from pr `not_validated`, `no_report`, `stale_report`, `head_moved`, `pr_conflict`, `pr_not_open`, `no_agent_token`; from record-critique `critique_conflict`; from record-manual `no_report`, `not_pending_manual`, `already_resolved`, `stale_report`, `stale_contract`, `unknown_evidence`; from archive `pr_open`, `no_agent_token`; from agent `no_agent_token`; from pr and push `not_github`; from push `push_base_branch`, `no_agent_token`; wherever the agent identity is read, `agent_env_permissions` |
+| `blocked` (exit 2) | from start `on_target_branch`; `run_deadline`, `not_authorized`, `run_halted`, `run_closed`, `lock_timeout`, `attempt_budget`; from validate also `attempt_open`, `bad_setting`, `contract_mismatch`, `not_configured`, `dirty_tree`, `no_target`, `no_merge_base`; from review-input and record-review also `contract_mismatch`, `not_issued`, `invalid_verdict`, `incomplete_verdict`, `verdict_conflict`; from pr `not_validated`, `no_report`, `stale_report`, `head_moved`, `pr_conflict`, `pr_not_open`, `no_agent_token`; from record-critique `critique_conflict`; from record-manual `no_report`, `not_pending_manual`, `already_resolved`, `stale_report`, `stale_contract`, `unknown_evidence`; from archive `pr_open`, `no_agent_token`, `not_github`; from agent `no_agent_token`; from pr, push and archive `not_github` (with `error.detail.cause`); from push `push_base_branch`, `no_agent_token`; wherever the agent identity is read, `agent_env_permissions` |
 | `error` (exit 1) | `usage`, `no_such_run`, `run_exists`, `wrong_state`, `illegal_transition`, `no_contract`, `bad_contract`, `bad_critique`, `bad_setting`, `no_active_authorization`, `bad_duration`, `bad_work_item`, `bad_project_root`, `not_a_repo`, `detached_head`, `git_failed`, `no_such_attempt`, `revision_changed`, `snapshot_failed`, `unreadable`, `bad_pattern`, `gh_missing`, `gh_failed`, `push_failed`, `no_remote`, `internal` |
 
 ## Fault injection (testing only)

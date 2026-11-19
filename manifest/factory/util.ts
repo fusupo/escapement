@@ -19,14 +19,20 @@ export class FactoryError extends Error {
     readonly code: string,
     message: string,
     readonly kind: ErrorKind = "error",
+    /**
+     * Machine-readable facts a caller routes on, beyond the code (#87:
+     * `not_github`'s cause). The CLI reports it as `error.detail`, and only
+     * when it is set, so no other error changes shape.
+     */
+    readonly detail?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "FactoryError";
   }
 }
 
-export function blocked(code: string, message: string): FactoryError {
-  return new FactoryError(code, message, "blocked");
+export function blocked(code: string, message: string, detail?: Record<string, unknown>): FactoryError {
+  return new FactoryError(code, message, "blocked", detail);
 }
 
 /** Current time as an ISO-8601 UTC string with millisecond precision. */

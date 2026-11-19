@@ -551,6 +551,7 @@ Only when Phase 2 found a run. Its artifacts stay where they are (the factory da
      ```
      **Leave open:** `factory archive '{run_id}' --path "$DEST"`. **Close:** add `--abandon`.
    - **Refused `no_agent_token`:** reading the PR's state needs the agent's GitHub token. Record the path without `--close`, and tell the operator to close the run later with `factory archive '{run_id}' --path "$DEST" --close`.
+   - **Refused `not_github`:** reading the PR's state needs the agent's token, which is only ever sent to github.com, and origin is now on another host (the message names it). Record the path without `--close`, and tell the operator why: the run can be closed with `--close` once origin is back on github.com, or with `--abandon`.
 
 ### Phase 7: Report Result
 
@@ -737,10 +738,11 @@ No PR found for this work.
 
 ---
 
-**Version:** 2.6.0
-**Last Updated:** 2026-11-18
+**Version:** 2.6.1
+**Last Updated:** 2026-11-19
 **Maintained By:** Escapement
 **Changelog:**
+- v2.6.1: Phase 6.5 handles `not_github` from `archive --close` (origin off github.com) like `no_agent_token`: record the path without `--close` and say why (#87)
 - v2.6.0: Phase 6.5 reports the run's `operator_action` (`merged_as_is`, `changes_requested`, `rejected` or `abandoned`), which `factory archive --close` now records; `.result.closed` is unchanged (#110)
 - v2.5.2: Phase 6.5 also copies the run's plan critique (`critique.json`) when it has one (#101)
 - v2.5.1: Phase 6.5 also copies the attachments of agent-assisted manual checks (`manual/{evidence_id}/`) (#103)

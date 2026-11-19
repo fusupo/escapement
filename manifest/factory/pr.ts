@@ -9,7 +9,7 @@ import { currentReport } from "./attempts.ts";
 import { manualProgress } from "./manual.ts";
 import { identityHolds } from "./revision.ts";
 import { withLocks, worktreeLock } from "./locks.ts";
-import { agentToken, gh, ghJson, pushBranch, remoteOf } from "./github.ts";
+import { agentToken, assertPushTarget, gh, ghJson, pushBranch, remoteOf } from "./github.ts";
 import { renderSection, withSection, type ReportView, type CriterionView, type AttemptSummary } from "./report-section.ts";
 import { evaluateGate, gatherFacts, gateLimits, recordGate, type GateResult } from "./gate.ts";
 import { loadSettings } from "./settings.ts";
@@ -113,8 +113,12 @@ export async function openPr(
     if (!identity.ok) throw blocked("head_moved", `${identity.detail}; validate again before opening the PR`);
 
     const env = opts.env ?? process.env;
-    const token = agentToken(env);
+    // Where the token would go, before any gh call carries it (#87): origin
+    // off github.com, or a push URL git rewrites away from it, is not_github
+    // before the lookup, the gate and the push.
     const remote = remoteOf(run.worktree_path, run.repo);
+    assertPushTarget(run.worktree_path, remote, run.repo);
+    const token = agentToken(env);
     const owner = run.repo.split("/")[0].toLowerCase();
     const open = ghJson<GhPr[]>(
       ["pr", "list", "-R", remote.ghRepo, "--head", run.branch, "--state", "open", "--json", "number,url,body,headRefName,headRepositoryOwner"],
@@ -174,7 +178,6 @@ export async function openPr(
       // The REST API, not `gh pr edit`: pr edit also queries classic Projects
       // over GraphQL and fails wherever that API is deprecated (#65).
       const args = ["api", "-X", "PATCH", `repos/${run.repo}/pulls/${existing.number}`, "-F", `body=@${bodyPath}`];
-      if (remote.host && remote.host !== "github.com") args.push("--hostname", remote.host);
       if (opts.title?.trim()) args.push("-f", `title=${opts.title.trim()}`);
       gh(args, { token, env });
       number = existing.number;

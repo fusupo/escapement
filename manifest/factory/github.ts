@@ -99,17 +99,22 @@ function redact(text: string, token: string): string {
 
 /**
  * Run `gh` as the agent. Prompts and update checks are off; a failure is
- * `gh_failed` with gh's stderr (token redacted).
+ * `gh_failed` with gh's stderr (token redacted). gh is pinned to github.com
+ * (GH_HOST), whatever host the caller's environment or gh's own config
+ * names, and no Enterprise token rides along (#87): the agent token is a
+ * github.com credential. Callers with an origin check its host first
+ * (assertTokenHost / assertPushTarget).
  */
 export function gh(args: string[], opts: { token: string; cwd?: string; env?: NodeJS.ProcessEnv }): string {
   const env = {
     ...(opts.env ?? process.env),
     GH_TOKEN: opts.token,
+    GH_HOST: GITHUB_HOST,
     GH_PROMPT_DISABLED: "1",
     GH_NO_UPDATE_NOTIFIER: "1",
     NO_COLOR: "1",
   };
-  delete (env as Record<string, string | undefined>).GITHUB_TOKEN;
+  for (const k of ["GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"]) delete (env as Record<string, string | undefined>)[k];
   try {
     return execFileSync("gh", args, { cwd: opts.cwd, env, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   } catch (err) {
@@ -159,6 +164,40 @@ export type Remote = {
   ghRepo: string;
 };
 
+/**
+ * The host a git URL reaches, the way git reads it (#87), or null for a
+ * local one:
+ * - a URL with a scheme (`https://`, `ssh://`, `git://`, …) has the host of
+ *   its authority, without user or port; `file://` is local when its host
+ *   is empty or `localhost`;
+ * - a string with no scheme and a `:` before the first `/` is scp-style,
+ *   `[user@]host:path`, and has that host whether or not a user is given
+ *   (a remote helper's `transport::address` reads as host `transport`, so
+ *   it is never taken for local);
+ * - anything else is a local path.
+ */
+export function urlHost(url: string): string | null {
+  const scheme = url.match(/^([A-Za-z][A-Za-z0-9+.-]*):\/\/([^/]*)/);
+  if (scheme) {
+    const authority = scheme[2].replace(/^[^@]*@/, "");
+    const host = (authority.startsWith("[") ? authority.slice(0, authority.indexOf("]") + 1) : authority.replace(/:\d*$/, "")).toLowerCase();
+    if (scheme[1].toLowerCase() === "file") return host === "" || host === "localhost" ? null : host;
+    return host || null;
+  }
+  const colon = url.indexOf(":");
+  const slash = url.indexOf("/");
+  if (colon > 0 && (slash === -1 || colon < slash)) {
+    const host = url.slice(0, colon).replace(/^[^@]*@/, "").toLowerCase();
+    return host || null;
+  }
+  return null;
+}
+
+/** The URL without its userinfo, so a `user:password@` never reaches a message or a report. */
+export function redactUrl(url: string): string {
+  return url.replace(/^([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^@/]*@/, "$1");
+}
+
 /** Where `origin` points. A local path or file:// remote has no host (tests, mirrors). */
 export function remoteOf(worktree: string, repo: string): Remote {
   let url: string;
@@ -167,9 +206,7 @@ export function remoteOf(worktree: string, repo: string): Remote {
   } catch {
     throw new FactoryError("no_remote", `the repository at ${worktree} has no origin remote`);
   }
-  const scp = url.match(/^[\w.-]+@([^:/]+):/);
-  const web = url.match(/^(?:https?|ssh|git):\/\/(?:[^@/]+@)?([^/:]+)/);
-  const host = scp?.[1] ?? web?.[1] ?? null;
+  const host = urlHost(url);
   return { url, host, ghRepo: !host || host === "github.com" ? repo : `${host}/${repo}` };
 }
 
@@ -180,15 +217,113 @@ export const GITHUB_HOST = "github.com";
  * The agent token is a github.com credential: a remote on any other host
  * (GitLab, a self-hosted server, GitHub Enterprise) is refused before the
  * token is used (`not_github`, #80). A local remote has no host and never
- * gets the token.
+ * gets the token. The refusal's detail says the cause is origin's host.
  */
 export function assertTokenHost(remote: Remote): void {
   if (remote.host && remote.host !== GITHUB_HOST) {
     throw blocked(
       "not_github",
       `origin is on ${remote.host}, not ${GITHUB_HOST}; the agent token is only ever sent to ${GITHUB_HOST}`,
+      { cause: "origin_host", host: remote.host },
     );
   }
+}
+
+/**
+ * The URL git pushes to when told to push to `url` (#87). git rewrites a
+ * URL with the longest `url.<base>.insteadOf` prefix that matches it, and a
+ * push URL with the longest `url.<base>.pushInsteadOf` instead when one
+ * matches (the original URL, not the insteadOf result); each applies once.
+ * Every config scope counts, as it does for the push, so this reads the
+ * config in the worktree. `pushurl` doesn't apply: both pushes that use it
+ * name a URL, not a remote.
+ */
+export function resolvePushUrl(worktree: string, url: string): string {
+  let raw = "";
+  try {
+    raw = execFileSync("git", ["config", "-z", "--get-regexp", "^url\\..*\\.(push)?insteadof$"], {
+      cwd: worktree,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch {
+    return url; // exit 1: no rewrite configured
+  }
+  const best = { insteadof: null as { base: string; prefix: string } | null, pushinsteadof: null as { base: string; prefix: string } | null };
+  for (const entry of raw.split("\0")) {
+    const nl = entry.indexOf("\n");
+    if (nl === -1) continue;
+    const key = entry.slice(0, nl);
+    const prefix = entry.slice(nl + 1);
+    const m = key.match(/^url\.(.*)\.(pushinsteadof|insteadof)$/i);
+    if (!m || !prefix || !url.startsWith(prefix)) continue;
+    const kind = m[2].toLowerCase() as "insteadof" | "pushinsteadof";
+    const current = best[kind];
+    if (!current || prefix.length > current.prefix.length) best[kind] = { base: m[1], prefix };
+  }
+  const rule = best.pushinsteadof ?? best.insteadof;
+  return rule ? rule.base + url.slice(rule.prefix.length) : url;
+}
+
+/** `https://github.com/…`, the one place the agent's credential helper answers. */
+function isGitHubHttps(url: string): boolean {
+  const authority = url.match(/^https:\/\/(?:[^@/]*@)?([^/]*)\//i)?.[1];
+  return authority?.toLowerCase() === GITHUB_HOST;
+}
+
+/**
+ * Before a push with the agent token, check where git will really send it
+ * (#87). origin's host comes first (`assertTokenHost`, cause `origin_host`).
+ * Then the push URL, resolved as git will:
+ * - origin on github.com is pushed at `https://github.com/{repo}.git`; after
+ *   insteadOf / pushInsteadOf it must still be `https://github.com/…`, or a
+ *   local path (a mirror or a test's bare repo, which no credential reaches);
+ * - a local origin is pushed by name, so its pushurl, pushInsteadOf and
+ *   insteadOf all apply (`git remote get-url --push --all origin`), and
+ *   every URL it pushes to must stay local: that push carries no token, and
+ *   would otherwise go out as whoever's credentials the other host takes.
+ * Anything else, an ssh rewrite included, is `not_github` with cause
+ * `push_url` and the resolved URL (without userinfo). Nothing is pushed.
+ */
+export function assertPushTarget(worktree: string, remote: Remote, repo: string): void {
+  assertTokenHost(remote);
+  let resolved: string;
+  if (remote.host) {
+    resolved = resolvePushUrl(worktree, `https://${remote.host}/${repo}.git`);
+    if (isGitHubHttps(resolved) || urlHost(resolved) === null) return;
+  } else {
+    // `git push origin` pushes to every push URL (each pushurl, else each
+    // url), so every one must stay local, not just the first.
+    const urls = git(["remote", "get-url", "--push", "--all", "origin"], worktree).split("\n").filter(Boolean);
+    const away = urls.find((u) => urlHost(u) !== null);
+    if (away === undefined) return;
+    resolved = away;
+  }
+  const shown = redactUrl(resolved);
+  throw blocked(
+    "not_github",
+    `the push URL resolves to ${shown}, not https://${GITHUB_HOST}: git's insteadOf, pushInsteadOf or pushurl rewrites it; the agent token is only ever sent to https://${GITHUB_HOST}, and nothing is pushed elsewhere`,
+    { cause: "push_url", resolved_url: shown },
+  );
+}
+
+/**
+ * The `-c` arguments that give git the agent token, for `https://github.com`
+ * only (#87). The empty values first clear every helper configured before
+ * (the operator's own, generic or for github.com), so the helper that
+ * remains reads the token from the environment and answers no other host:
+ * a URL that git rewrites to another host (insteadOf, pushInsteadOf) gets
+ * no token from it.
+ */
+export function tokenHelperArgs(): string[] {
+  return [
+    "-c",
+    "credential.helper=",
+    "-c",
+    `credential.https://${GITHUB_HOST}.helper=`,
+    "-c",
+    `credential.https://${GITHUB_HOST}.helper=!f() { echo username=x-access-token; echo "password=$${TOKEN_VAR}"; }; f`,
+  ];
 }
 
 /**
@@ -196,23 +331,17 @@ export function assertTokenHost(remote: Remote): void {
  * authorization excludes force_push and push_other_branches). On github.com
  * the push goes to `https://github.com/{repo}.git` with the agent token
  * from a credential helper that reads the environment variable, whatever
- * protocol origin uses, so it is the agent that pushes. Any other host is
- * refused first (`not_github`). A local remote is pushed to as configured.
+ * protocol origin uses, so it is the agent that pushes. Any other host, and
+ * a push URL that git would rewrite away from github.com, is refused first
+ * (`not_github`, assertPushTarget). A local remote is pushed to as
+ * configured, and only while its push URL stays local.
  */
 export function pushBranch(opts: { worktree: string; remote: Remote; repo: string; branch: string; token: string }): void {
-  assertTokenHost(opts.remote);
+  assertPushTarget(opts.worktree, opts.remote, opts.repo);
   const refspec = `HEAD:refs/heads/${opts.branch}`;
   const env = { ...process.env, [TOKEN_VAR]: opts.token, GIT_TERMINAL_PROMPT: "0" };
   const args = opts.remote.host
-    ? [
-        "-c",
-        "credential.helper=",
-        "-c",
-        `credential.helper=!f() { echo username=x-access-token; echo "password=$${TOKEN_VAR}"; }; f`,
-        "push",
-        `https://${opts.remote.host}/${opts.repo}.git`,
-        refspec,
-      ]
+    ? [...tokenHelperArgs(), "push", `https://${opts.remote.host}/${opts.repo}.git`, refspec]
     : ["push", "origin", refspec];
   try {
     execFileSync("git", args, { cwd: opts.worktree, env, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
@@ -252,9 +381,10 @@ export function pushAsAgent(opts: { worktree: string; env?: NodeJS.ProcessEnv })
   }
   const repo = repoName(mainRepoRoot(w));
   const remote = remoteOf(w, repo);
-  // Before the token is read: off github.com the caller's fallback must not
-  // depend on whether a token happens to be configured.
-  assertTokenHost(remote);
+  // Before the token is read: off github.com, or with a push URL rewritten
+  // away from it, the caller's fallback must not depend on whether a token
+  // happens to be configured.
+  assertPushTarget(w, remote, repo);
   const token = agentToken(opts.env);
   const sha = git(["rev-parse", "HEAD"], w);
   pushBranch({ worktree: w, remote, repo, branch, token });

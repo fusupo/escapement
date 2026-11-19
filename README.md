@@ -214,7 +214,7 @@ The runner needs nothing new: the project's `verify` runs the unit tests and the
 Escapement keeps its automated work visibly separate from yours: on GitHub, it acts as an AI agent account.
 
 - **Issues, PRs, comments and reviews** go through the GitHub MCP tools, so connect the GitHub MCP server with the agent account's credentials. Skills never use the `gh` CLI, which is logged in as you.
-- **Pushes** go through `factory push`, with the agent's token, which is only ever sent to github.com. In a project hosted elsewhere, pushes stay yours.
+- **Pushes** go through `factory push`, with the agent's token, which is only ever sent to github.com: the runner checks the host before any `gh` call and resolves the push URL as git will, so an `insteadOf` or ssh rewrite can't lead the token elsewhere. In a project hosted elsewhere, or when your git config rewrites the push URL, pushes stay yours, and the skill says why.
 - **Commits** carry the agent's name and email (`factory agent`).
 
 Configure the agent identity once, in `~/.config/escapement/agent.env` (`chmod 600`), or export the variables:
@@ -539,9 +539,15 @@ fusupo
 
 ## Version
 
-**Current:** 4.6.0
+**Current:** 4.6.1
 
 **Changelog:**
+- 4.6.1 (2026-11-19): The agent token can't be led off github.com (#87)
+  - **Host before gh.** `factory pr` and `archive --close` check origin's host before any `gh` call that carries the token, and `gh` is pinned to github.com (`GH_HOST`)
+  - **Scoped credential helper.** The push's helper answers only for `https://github.com`
+  - **The push URL, resolved as git will.** `insteadOf`, `pushInsteadOf` and a local origin's `pushurl` are applied before the push; a URL that leaves github.com (ssh included) is `not_github` and nothing is pushed. A user-less `host:path` origin is now read as a host
+  - **`not_github` says why** in `error.detail.cause`: `origin_host` or `push_url` (with the resolved URL, no userinfo)
+  - **Skills.** `create-pr` 1.6.0 and `do-work` 1.7.0 run `factory.sh --check` before pushing and fall back to your push with a notice that names the cause (runner not installed, no agent token, origin off github.com, or a rewritten push URL); `archive-work` 2.6.1 handles `not_github` from `archive --close`
 - 4.6.0 (2026-11-19): Re-entry after the PR is open (#97)
   - **`factory continue` takes a run with a PR back.** A `pr_open` run goes back to implementing on your request, with `--trigger review_finding` or `operator_request` (the default). An escalated run with a PR, after a failed manual check or a failed attempt, goes back too, its trigger worked out by the runner (`manual_check_failed`, `attempt_failed`). Same contract and authorization; the fix lands on the same PR
   - **A new deadline.** Review and manual checks usually come after the deadline, so a re-entry sets now plus the budget fixed at approval (or `--run-budget`), never the branch's setting. The attempt budget isn't reset
