@@ -534,9 +534,11 @@ fusupo
 
 ## Version
 
-**Current:** 4.4.1
+**Current:** 4.4.2
 
 **Changelog:**
+- 4.4.2 (2026-11-18): archive-work copies a run's plan critique (#101)
+  - **Fix.** Since #99, `factory record-critique` writes the plan critique to the run's `critique.json`, but `archive-work` left it out of the archive. Phase 6.5 now copies it into `archive/runs/{run_id}/` when the run has one (`archive-work` 2.5.2). [docs/CONTEXT_PATH.md](docs/CONTEXT_PATH.md) lists what an archived run holds, the manual-check attachments from #103 included
 - 4.4.1 (2026-11-18): One readiness document for the plan critic (#109)
   - **Fix.** On the factory path, `setup-work` wrote the manifest's cut-down readiness copy and the critic's full `factory check` result to the same file, so the critic could lose `browser_tests`, `tier` and `required_checks`. Now one document, check's full result plus setup-work's still-open questions, is brought up to date after the Q&A, mirrored into the manifest and given to the critic (`setup-work` 1.4.1)
 - 4.4.0 (2026-11-18): Browser tests as contract evidence (#104)
