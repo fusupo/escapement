@@ -5,6 +5,7 @@ import { tx, getRun, transitionRun, recordEvent, type RunState } from "./state.t
 import { withLocks, worktreeLock } from "./locks.ts";
 import { agentToken, ghJson, remoteOf } from "./github.ts";
 import type { Owner } from "./owner.ts";
+import { reentries, type Reentry } from "./reentry.ts";
 
 /**
  * `factory archive <run_id> --path <dir> [--close] [--abandon]`: record
@@ -32,6 +33,13 @@ import type { Owner } from "./owner.ts";
  * moves; and an "Update branch" merge from the base, which moves the head
  * and so reads as changes_requested. A head that can't be compared (no
  * validated attempt) counts as moved.
+ * A re-entered run that merged (one `factory continue` took back to
+ * implementing after its PR opened, #97) is `changes_requested` too, even
+ * with no such review and its head the validated one: the PR as first
+ * validated and recommended wasn't merged as is, so the §7.4 record must
+ * count it. The event lists each re-entry (trigger, the gate's
+ * recommendation then, the attempt and head it left from). A re-entered
+ * run closed unmerged is rejected or abandoned as any other.
  *
  * The close action passed to the run's state change stays merged or
  * abandoned, as before. The artifact dir stays where it is (the database
@@ -51,14 +59,19 @@ type PrView = {
 };
 
 /** What the operator did, from the PR as GitHub reports it and the head the run last validated. */
-export function operatorAction(pr: PrView, validatedHead: string | null): { action: OperatorAction; changesRequestedBy: string[] } {
+export function operatorAction(
+  pr: PrView,
+  validatedHead: string | null,
+  reentered: readonly Pick<Reentry, "trigger">[] = [],
+): { action: OperatorAction; changesRequestedBy: string[] } {
   const changesRequestedBy = [
     ...new Set((pr.reviews ?? []).filter((v) => v.state === "CHANGES_REQUESTED").map((v) => v.author?.login ?? "unknown")),
   ];
   const merged = pr.state === "MERGED" || Boolean(pr.mergedAt);
   if (merged) {
     const headKept = validatedHead !== null && !!pr.headRefOid && pr.headRefOid === validatedHead;
-    return { action: changesRequestedBy.length === 0 && headKept ? "merged_as_is" : "changes_requested", changesRequestedBy };
+    const asIs = changesRequestedBy.length === 0 && headKept && reentered.length === 0;
+    return { action: asIs ? "merged_as_is" : "changes_requested", changesRequestedBy };
   }
   return { action: changesRequestedBy.length ? "rejected" : "abandoned", changesRequestedBy };
 }
@@ -112,7 +125,7 @@ export async function archiveRun(
         if (pr.state === "MERGED" || pr.mergedAt) action = "merged";
         else if (pr.state === "CLOSED") action = "abandoned";
         else throw blocked("pr_open", `PR #${run.pr_number} is still open; merge or close it first, or pass --abandon`);
-        detail = { ...operatorAction(pr, validatedHead(db, runId)), finalHead: pr.headRefOid ?? null };
+        detail = { ...operatorAction(pr, validatedHead(db, runId), reentries(db, runId)), finalHead: pr.headRefOid ?? null };
       }
       if (!detail) detail = { action: "abandoned", changesRequestedBy: [], finalHead: null };
     }
@@ -135,6 +148,13 @@ export async function archiveRun(
         validated_head: validatedHead(db, runId),
         final_head: detail.finalHead,
         gate_recommendation: run.gate_recommendation ?? null,
+        reentries: reentries(db, runId).map((r) => ({
+          trigger: r.trigger,
+          gate_recommendation: r.gate_recommendation,
+          attempt: r.attempt,
+          head_sha: r.head_sha,
+          at: r.at ?? null,
+        })),
         owner: opts.owner,
       });
       return getRun(db, runId);
