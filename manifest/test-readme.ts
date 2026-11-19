@@ -81,7 +81,14 @@ export function checkReadme(
     if (lower.includes(name)) out.push({ rule: "retired", detail: `retired name "${name}"` });
   }
   for (const target of relativeLinks(text)) {
-    const path = decodeURI(target.replace(/[#?].*$/, ""));
+    let path: string;
+    try {
+      path = decodeURI(target.replace(/[#?].*$/, ""));
+    } catch (e) {
+      if (!(e instanceof URIError)) throw e;
+      out.push({ rule: "link", detail: `broken link ${target} (malformed escape)` });
+      continue;
+    }
     if (!path) continue;
     if (!opts.exists(resolve(opts.readmeDir, path))) out.push({ rule: "link", detail: `broken link ${target}` });
   }
@@ -149,6 +156,12 @@ function run(): void {
 
   const link = checkFixture("broken-link.md");
   assert(only(link, "link") && link[0].detail.includes("docs/NOPE.md"), "rejects a broken relative link");
+
+  const badEscape = checkFixture("bad-escape.md");
+  assert(
+    only(badEscape, "link") && badEscape[0].detail.includes("docs/100%.md"),
+    "rejects a malformed percent-escape in a relative link as a link violation",
+  );
 
   const three = checkFixture("three-diagrams.md");
   assert(only(three, "mermaid"), "rejects a README with fewer than four mermaid diagrams");

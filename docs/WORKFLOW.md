@@ -1,6 +1,6 @@
 # Escapement Workflow Guide
 
-This document explains how Escapement's components work together to create a structured development workflow.
+This document explains how Escapement's skills work together to create a structured development workflow. Each stage is a skill you invoke in plain words ("Start working on issue #42") or explicitly (`/escapement:do-work`). For installing the plugin and the full list of skills, see the [README](../README.md).
 
 ## Overview
 
@@ -40,7 +40,7 @@ The `setup-work` skill automatically:
    - Questions/blockers flagged upfront
 4. Creates feature branch: `{issue_number}-{description}`
 
-On projects set up for the factory (required checks configured in `## Escapement Settings`), it also checks readiness, proposes a risk tier and adds a Validation Contract to the scratchpad. A fresh-context `plan-critic` then checks the plan and contract once; the planner answers its findings, and any it rejects that matter are shown to you with both positions at approval (`## Plan Critique` in the scratchpad). Plan approval then offers **Approve + authorize run**, which checks out the branch and starts and approves a factory run for that contract (`docs/FACTORY_CLI.md`). Plain approval works as before.
+On projects set up for the factory (required checks configured in `## Escapement Settings`), it also checks readiness, proposes a risk tier and adds a Validation Contract to the scratchpad. A fresh-context `plan-critic` then checks the plan and contract once; the planner answers its findings, and any it rejects that matter are shown to you with both positions at approval (`## Plan Critique` in the scratchpad). Plan approval then offers **Approve + authorize run**, which checks out the branch and starts and approves a factory run for that contract (see [FACTORY_CLI.md](FACTORY_CLI.md)). Plain approval works as before.
 
 **Output:**
 - `SCRATCHPAD_42.md` - Your implementation roadmap
@@ -72,28 +72,30 @@ Don't start coding until the scratchpad makes sense. A good scratchpad should be
 
 **Trigger:**
 ```
-/start-work
+"Start working on issue #42"
 ```
 
 **What happens:**
-The `start-work` command:
+The `do-work` skill:
 1. Loads `SCRATCHPAD_{num}.md`
 2. Displays current checklist
 3. Switches to feature branch (if needed)
 4. Works through each unchecked task:
    - Implement changes
-   - Use `/commit` for each atomic change
+   - Commit each atomic change with `commit-changes`
    - Update scratchpad with progress notes
    - Check off completed items
 
 **Commit workflow:**
 ```
-/commit
+"Commit these changes"
 ```
+The `commit-changes` skill:
 - Analyzes staged/unstaged changes
 - Reads project's CLAUDE.md for module emojis
 - Creates conventional commit with appropriate emojis
 - Follows project-specific conventions
+- Commits as the AI agent when an agent identity is configured, otherwise as you (see the README's [GitHub as the AI Agent](../README.md#github-as-the-ai-agent))
 
 **Example commit:**
 ```
@@ -104,11 +106,11 @@ Enables secure user login and session management.
 ```
 
 **Continuous sync:**
-- Push changes every 2-3 commits
+- Push changes every 2-3 commits (`do-work` offers to, and pushes the branch as the agent)
 - Keep scratchpad updated with notes
 - If blocked, add to Questions/Blockers section
 
-**Authorized factory run:** when plan approval was **Approve + authorize run**, `do-work` asks no questions. It works through the tasks with builds and tests through `factory exec`, and commits each one as the AI agent. Then it validates (`validate-work`: the runner's checks, a fresh-context reviewer, the recorded verdict) and opens the PR (`create-pr` through `factory pr`, as the agent's GitHub account, with the validation report). When an attempt fails on something it can fix, such as a failing test or a reviewer's blocking finding, the run goes back to implementing on its own: it fixes those findings and validates again, within `max-attempts` (the fix loop, since 4.1.0). If something stops it, it escalates the run, notifies you and stops. After a failed attempt, `do-work` then offers to fix it and continue the same run, abandon it, or start over. Your next touch is reviewing and merging the PR. This needs the agent's token as `ESCAPEMENT_AGENT_GH_TOKEN`, in `~/.config/escapement/agent.env` or the environment (`docs/FACTORY_CLI.md`).
+**Authorized factory run:** when plan approval was **Approve + authorize run**, `do-work` asks no questions. It works through the tasks with builds and tests through `factory exec`, and commits each one as the AI agent. Then it validates (`validate-work`: the runner's checks, a fresh-context reviewer, the recorded verdict) and opens the PR (`create-pr` through `factory pr`, as the agent's GitHub account, with the validation report). When an attempt fails on something it can fix, such as a failing test or a reviewer's blocking finding, the run goes back to implementing on its own: it fixes those findings and validates again, within `max-attempts` (the fix loop, since 4.1.0). If something stops it, it escalates the run, notifies you and stops. After a failed attempt, `do-work` then offers to fix it and continue the same run, abandon it, or start over. Your next touch is reviewing and merging the PR. This needs the agent's token as `ESCAPEMENT_AGENT_GH_TOKEN`, in `~/.config/escapement/agent.env` or the environment. The runner's commands, states and settings are in [FACTORY_CLI.md](FACTORY_CLI.md).
 
 ---
 
@@ -117,7 +119,7 @@ Enables secure user login and session management.
 **When:** Issue is too big or approach needs reconceptualization
 
 **Action:**
-- Archive scratchpad to `docs/dev/cc-archive/`
+- Archive the scratchpad with `archive-work` ("Archive this work"). It goes to the project's context path, `{context-path}/{branch}/archive/`, or to `docs/dev/cc-archive/` in the repo only when no context path is set (see [CONTEXT_PATH.md](CONTEXT_PATH.md))
 - Create new issue(s) with better scope
 - Start fresh with new approach
 
@@ -127,11 +129,11 @@ Enables secure user login and session management.
 
 **Trigger:**
 ```
-/open-pr
+"Create a PR"
 ```
 
 **What happens:**
-The `open-pr` command:
+The `create-pr` skill:
 1. Analyzes branch commits and changes
 2. Extracts issue reference from branch name
 3. Retrieves issue details for context
@@ -145,6 +147,7 @@ The `open-pr` command:
    - Target branch (from CLAUDE.md or default)
    - Draft status if work-in-progress
    - Issue linking (auto-close on merge)
+6. Pushes the branch and opens the PR as the AI agent when an agent identity is configured. Under an authorized factory run it goes through `factory pr`, with the validation report in the description ([FACTORY_CLI.md](FACTORY_CLI.md))
 
 **Output:**
 - Well-structured PR ready for review
@@ -157,11 +160,11 @@ The `open-pr` command:
 
 **Trigger:**
 ```
-/pr-review <pr-number>
+"Review PR #123"
 ```
 
 **What happens:**
-The `pr-review` command provides:
+The `review-pr` skill provides:
 1. **Issue Hierarchy Detection:**
    - Identifies parent epic/initiative
    - Finds sibling issues in same epic
@@ -195,20 +198,26 @@ Avoids suggesting improvements already planned in backlog. Focuses on THIS piece
 
 **Trigger:**
 ```
-/archive-dev
+"Archive this work"
 ```
 
 **What happens:**
-- Moves `SCRATCHPAD_{num}.md` to archive location
-- Commits archive
+The `archive-work` skill:
+- Moves `SCRATCHPAD_{num}.md` and the session logs to the project's context path, `{context-path}/{branch}/archive/`, with a README summary, and adds a row to `{context-path}/INDEX.md`
+- Without a context path, archives in the repo under `docs/dev/cc-archive/` instead, and offers to commit it
+- Closes the branch's factory run, if it has one
 - Workspace stays clean for next task
+
+See [CONTEXT_PATH.md](CONTEXT_PATH.md) for setting the context path.
 
 ---
 
-## Supporting Commands
+## Supporting Skills
 
-### `/prime-session`
+### `prime-session`
 **Purpose:** Orient to current project
+
+**Trigger:** "Orient me", "What is this project"
 
 **What it does:**
 - Reviews project's CLAUDE.md
@@ -220,8 +229,10 @@ Avoids suggesting improvements already planned in backlog. Focuses on THIS piece
 - Switching between projects
 - Need refresh on project structure
 
-### `/commit`
+### `commit-changes`
 **Purpose:** Create conventional commits
+
+**Trigger:** "Commit these changes"
 
 **What it does:**
 - Analyzes git status and changes
@@ -253,13 +264,9 @@ Avoids suggesting improvements already planned in backlog. Focuses on THIS piece
 
 ## Multi-Project Usage
 
-Escapement works across all your projects simultaneously:
+Escapement is a Claude Code plugin: install it once (see the README's [Installation](../README.md#installation)) and it works across all your projects:
 
 ```bash
-# Global install (once)
-~/.escapement/          # Generic workflow base
-~/.claude/            # Symlinks to muleteer
-
 # Per-project customization
 ~/projects/project-a/
 ├── CLAUDE.md         # Project A's conventions
@@ -273,7 +280,7 @@ Escapement works across all your projects simultaneously:
 ```
 
 **How it works:**
-- Commands detect current git repo
+- Skills detect current git repo
 - Read that project's CLAUDE.md for settings
 - Apply project-specific conventions automatically
 - Each project maintains its own workflow state
@@ -314,14 +321,8 @@ Escapement works across all your projects simultaneously:
 
 ## Troubleshooting
 
-### "Skill not found"
-```bash
-cd ~/.escapement
-./install.sh
-```
-
-### "Command not working"
-Check symlinks: `ls -la ~/.claude/commands/`
+### Skills not found, or the plugin isn't loading
+See the README's [Troubleshooting](../README.md#troubleshooting): check the plugin manifest, the skill directories and the `--plugin-dir` you started Claude Code with.
 
 ### "Wrong module emojis"
 Update project's `CLAUDE.md` with correct modules
@@ -356,16 +357,7 @@ Create `CLAUDE.md` in your project:
 
 ### Extending Escapement
 
-Add custom commands:
-1. Create `~/.escapement/commands/your-command.md`
-2. Run `~/.escapement/install.sh`
-3. Use `/your-command` in any project
-
-Add custom skills:
-1. Create `~/.escapement/skills/your-skill/SKILL.md`
-2. Add frontmatter with tools needed
-3. Run `~/.escapement/install.sh`
-4. Invoke automatically or explicitly
+Skills and agents live in the plugin's `skills/` and `agents/` directories. The steps are in the README: [Adding a New Skill](../README.md#adding-a-new-skill) and [Adding a New Agent](../README.md#adding-a-new-agent). Per-project conventions go in each project's CLAUDE.md (see [CUSTOMIZATION.md](CUSTOMIZATION.md)).
 
 ## Summary
 
