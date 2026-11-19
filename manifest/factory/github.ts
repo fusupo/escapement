@@ -279,9 +279,9 @@ function isGitHubHttps(url: string): boolean {
  *   insteadOf / pushInsteadOf it must still be `https://github.com/…`, or a
  *   local path (a mirror or a test's bare repo, which no credential reaches);
  * - a local origin is pushed by name, so its pushurl, pushInsteadOf and
- *   insteadOf all apply (`git remote get-url --push origin`), and the result
- *   must stay local: that push carries no token, and would otherwise go out
- *   as whoever's credentials the other host takes.
+ *   insteadOf all apply (`git remote get-url --push --all origin`), and
+ *   every URL it pushes to must stay local: that push carries no token, and
+ *   would otherwise go out as whoever's credentials the other host takes.
  * Anything else, an ssh rewrite included, is `not_github` with cause
  * `push_url` and the resolved URL (without userinfo). Nothing is pushed.
  */
@@ -292,8 +292,12 @@ export function assertPushTarget(worktree: string, remote: Remote, repo: string)
     resolved = resolvePushUrl(worktree, `https://${remote.host}/${repo}.git`);
     if (isGitHubHttps(resolved) || urlHost(resolved) === null) return;
   } else {
-    resolved = git(["remote", "get-url", "--push", "origin"], worktree);
-    if (urlHost(resolved) === null) return;
+    // `git push origin` pushes to every push URL (each pushurl, else each
+    // url), so every one must stay local, not just the first.
+    const urls = git(["remote", "get-url", "--push", "--all", "origin"], worktree).split("\n").filter(Boolean);
+    const away = urls.find((u) => urlHost(u) !== null);
+    if (away === undefined) return;
+    resolved = away;
   }
   const shown = redactUrl(resolved);
   throw blocked(

@@ -299,6 +299,18 @@ async function run() {
           sh("git", ["config", `url.ssh://elsewhere.invalid${away}.pushInsteadOf`, local], w);
           return codeOf(runPush(w, "87-e")).code === "not_github" && refs(away) === "" && refs(local) === "";
         })();
+        // git pushes to every push URL, so a second one that leaves the
+        // machine is refused too, not just the first.
+        const viaSecondPushurl = (() => {
+          const w = realpathSync(makeRepo({ branch: "87-e" }));
+          const local = newBare();
+          const mirror = newBare();
+          const away = newBare();
+          sh("git", ["remote", "add", "origin", local], w);
+          sh("git", ["config", "--add", "remote.origin.pushurl", mirror], w);
+          sh("git", ["config", "--add", "remote.origin.pushurl", `ssh://elsewhere.invalid${away}`], w);
+          return codeOf(runPush(w, "87-e")).code === "not_github" && refs(away) === "" && refs(mirror) === "" && refs(local) === "";
+        })();
         const stillLocal = (() => {
           const w = realpathSync(makeRepo({ branch: "87-e" }));
           const local = newBare();
@@ -308,7 +320,7 @@ async function run() {
           return codeOf(runPush(w, "87-e")).code === "ok" && refs(mirror) !== "";
         })();
         assert(
-          viaPushurl && viaPushInsteadOf && stillLocal,
+          viaPushurl && viaPushInsteadOf && viaSecondPushurl && stillLocal,
           "a local origin whose pushurl or pushInsteadOf leaves the machine is refused with not_github and nothing is pushed",
         );
       }
