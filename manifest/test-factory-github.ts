@@ -1,7 +1,22 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { realpathSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
-import { join } from "node:path";
-import { agentToken, agentIdentity, gh, remoteOf, pushBranch, pushAsAgent, tokenHelperArgs, TOKEN_VAR, agentEnvPath, parseAgentEnv } from "./factory/github.ts";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  agentToken,
+  agentIdentity,
+  gh,
+  remoteOf,
+  pushBranch,
+  pushAsAgent,
+  tokenHelperArgs,
+  resolvePushUrl,
+  urlHost,
+  redactUrl,
+  TOKEN_VAR,
+  agentEnvPath,
+  parseAgentEnv,
+} from "./factory/github.ts";
 import { assert, throws, cleanup, makeRepo, tempDir, sh, stubGh } from "./factory/testkit.ts";
 
 const TOKEN = "ghp_test_agent_token_123";
@@ -143,6 +158,204 @@ async function run() {
       forGitHub.includes(`password=${TOKEN}`) && !forOther.includes(TOKEN) && !forOther.includes("password="),
       "the credential helper answers for https://github.com and for no other host",
     );
+  }
+
+  console.log("\nThe push URL, resolved as git will (#87)\n");
+  {
+    // An ssh "server" that is a local bare repo: git runs GIT_SSH_COMMAND
+    // with the host and `git-receive-pack '<path>'`, and the stub runs that
+    // last argument here. So a push that leaves github.com lands in `away`
+    // instead of the network (the .invalid host can't resolve anyway), and
+    // "nothing reaches the rewritten host" can be checked.
+    const stubDir = tempDir();
+    const sshStub = join(stubDir, "ssh");
+    writeFileSync(sshStub, '#!/bin/sh\nfor last; do :; done\nexec sh -c "$last"\n');
+    chmodSync(sshStub, 0o755);
+    const saved = { cmd: process.env.GIT_SSH_COMMAND, variant: process.env.GIT_SSH_VARIANT };
+    process.env.GIT_SSH_COMMAND = sshStub;
+    process.env.GIT_SSH_VARIANT = "simple";
+    const newBare = (): string => {
+      const b = join(tempDir(), "away.git");
+      sh("git", ["init", "-q", "--bare", b], tempDir());
+      return b;
+    };
+    const refs = (bare: string) => sh("git", ["for-each-ref"], bare);
+    const codeOf = (fn: () => unknown): { code: string; detail?: Record<string, unknown>; message: string } => {
+      try {
+        fn();
+        return { code: "ok", message: "" };
+      } catch (err) {
+        const e = err as { code?: string; detail?: Record<string, unknown>; message?: string };
+        return { code: e.code ?? "thrown", detail: e.detail, message: String(e.message ?? err) };
+      }
+    };
+    const settings = "## Escapement Settings\n\n- **base-branch**: develop\n";
+    const ghRepo = (branch: string) => realpathSync(makeRepo({ branch, origin: "git@github.com:acme/w.git", claudeMd: settings }));
+    const runPush = (w: string, branch: string) => () =>
+      pushBranch({ worktree: w, remote: remoteOf(w, "acme/w"), repo: "acme/w", branch, token: TOKEN });
+    const agentEnv = { XDG_CONFIG_HOME: tempDir(), [TOKEN_VAR]: TOKEN };
+
+    try {
+      {
+        const w = ghRepo("87-a");
+        const away = newBare();
+        sh("git", ["config", `url.ssh://elsewhere.invalid${away}.insteadOf`, "https://github.com/acme/w.git"], w);
+        const r = codeOf(runPush(w, "87-a"));
+        assert(
+          r.code === "not_github" && refs(away) === "",
+          "an insteadOf rewrite away from github.com is refused with not_github and nothing reaches the rewritten host, by the run's push",
+        );
+      }
+      {
+        const w = ghRepo("87-b");
+        const away = newBare();
+        sh("git", ["config", `url.ssh://elsewhere.invalid${away}.insteadOf`, "https://github.com/acme/w.git"], w);
+        const withToken = codeOf(() => pushAsAgent({ worktree: w, env: agentEnv }));
+        const withoutToken = codeOf(() => pushAsAgent({ worktree: w, env: { XDG_CONFIG_HOME: tempDir() } }));
+        assert(
+          withToken.code === "not_github" && withoutToken.code === "not_github" && refs(away) === "",
+          "an insteadOf rewrite away from github.com is refused with not_github and nothing reaches the rewritten host, by factory push",
+        );
+      }
+      {
+        const w = ghRepo("87-c");
+        const away = newBare();
+        sh("git", ["config", `url.ssh://elsewhere.invalid${away}.pushInsteadOf`, "https://github.com/acme/w.git"], w);
+        const run = codeOf(runPush(w, "87-c"));
+        const plain = codeOf(() => pushAsAgent({ worktree: w, env: agentEnv }));
+        assert(
+          run.code === "not_github" && plain.code === "not_github" && refs(away) === "",
+          "a pushInsteadOf rewrite away from github.com is refused with not_github and nothing reaches the rewritten host",
+        );
+      }
+      {
+        // GitHub over ssh pushes with the operator's key, never the agent's
+        // https helper, so it is refused like any other host.
+        const results = ["git@github.com:", "ssh://git@github.com/", "elsewhere.example:"].map((base) => {
+          const w = ghRepo("87-d");
+          sh("git", ["config", `url.${base}.insteadOf`, "https://github.com/"], w);
+          return codeOf(runPush(w, "87-d")).code === "not_github" && codeOf(() => pushAsAgent({ worktree: w, env: agentEnv })).code === "not_github";
+        });
+        assert(results.every(Boolean), "ssh rewrites of the push URL (git@github.com:, ssh://github.com/ and a user-less host:path) are refused with not_github");
+      }
+      {
+        // A local origin is pushed by name, so its pushurl and pushInsteadOf apply.
+        const viaPushurl = (() => {
+          const w = realpathSync(makeRepo({ branch: "87-e" }));
+          const local = newBare();
+          const away = newBare();
+          sh("git", ["remote", "add", "origin", local], w);
+          sh("git", ["config", "remote.origin.pushurl", `ssh://elsewhere.invalid${away}`], w);
+          return codeOf(runPush(w, "87-e")).code === "not_github" && refs(away) === "" && refs(local) === "";
+        })();
+        const viaPushInsteadOf = (() => {
+          const w = realpathSync(makeRepo({ branch: "87-e" }));
+          const local = newBare();
+          const away = newBare();
+          sh("git", ["remote", "add", "origin", local], w);
+          sh("git", ["config", `url.ssh://elsewhere.invalid${away}.pushInsteadOf`, local], w);
+          return codeOf(runPush(w, "87-e")).code === "not_github" && refs(away) === "" && refs(local) === "";
+        })();
+        const stillLocal = (() => {
+          const w = realpathSync(makeRepo({ branch: "87-e" }));
+          const local = newBare();
+          const mirror = newBare();
+          sh("git", ["remote", "add", "origin", local], w);
+          sh("git", ["config", "remote.origin.pushurl", mirror], w);
+          return codeOf(runPush(w, "87-e")).code === "ok" && refs(mirror) !== "";
+        })();
+        assert(
+          viaPushurl && viaPushInsteadOf && stillLocal,
+          "a local origin whose pushurl or pushInsteadOf leaves the machine is refused with not_github and nothing is pushed",
+        );
+      }
+      {
+        const w = realpathSync(makeRepo({ branch: "87-f", origin: "elsewhere.example:acme/w.git" }));
+        const host = remoteOf(w, "acme/w").host;
+        const r = codeOf(() => pushAsAgent({ worktree: w, env: agentEnv }));
+        assert(
+          host === "elsewhere.example" && r.code === "not_github" && r.detail?.cause === "origin_host",
+          "a user-less scp-style origin (host:path) has its host and is refused as off github.com",
+        );
+      }
+      {
+        const off = realpathSync(makeRepo({ branch: "87-g", origin: "https://gitlab.com/acme/w.git" }));
+        const byOrigin = codeOf(runPush(off, "87-g"));
+        const w = ghRepo("87-g");
+        sh("git", ["config", "url.https://user:s3cret-pw@elsewhere.invalid/.insteadOf", "https://github.com/"], w);
+        const byRewrite = codeOf(runPush(w, "87-g"));
+        assert(
+          byOrigin.code === "not_github" &&
+            byOrigin.detail?.cause === "origin_host" &&
+            byOrigin.detail?.host === "gitlab.com" &&
+            byRewrite.code === "not_github" &&
+            byRewrite.detail?.cause === "push_url" &&
+            byRewrite.detail?.resolved_url === "https://elsewhere.invalid/acme/w.git" &&
+            byRewrite.message.includes("https://elsewhere.invalid/acme/w.git") &&
+            !byRewrite.message.includes("origin is on") &&
+            !JSON.stringify(byRewrite).includes("s3cret") &&
+            !JSON.stringify(byRewrite).includes(TOKEN),
+          "not_github tells an origin off github.com from a rewritten push URL, with the resolved URL and no credentials",
+        );
+      }
+      {
+        const w = ghRepo("87-h");
+        const away = newBare();
+        sh("git", ["config", `url.ssh://elsewhere.invalid${away}.insteadOf`, "https://github.com/acme/w.git"], w);
+        const factorySh = join(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "factory.sh");
+        const cli = (args: string[]) => {
+          const res = spawnSync("bash", [factorySh, "--json", ...args], {
+            cwd: w,
+            env: { ...process.env, ...agentEnv, XDG_DATA_HOME: tempDir() },
+            encoding: "utf-8",
+          });
+          return JSON.parse(res.stdout) as { ok: boolean; error?: { code: string; detail?: Record<string, unknown> } };
+        };
+        const pushed = cli(["push"]);
+        const usage = cli(["start"]);
+        assert(
+          pushed.ok === false &&
+            pushed.error?.code === "not_github" &&
+            pushed.error.detail?.cause === "push_url" &&
+            pushed.error.detail?.resolved_url === `ssh://elsewhere.invalid${away}` &&
+            usage.ok === false &&
+            usage.error?.code === "usage" &&
+            !("detail" in (usage.error ?? {})) &&
+            refs(away) === "",
+          "the factory CLI reports the not_github cause in error.detail and adds no detail to other errors",
+        );
+      }
+      {
+        // The resolver agrees with git's own expansion of a configured remote.
+        const w = ghRepo("87-i");
+        sh("git", ["config", "url.ssh://a.invalid/.insteadOf", "https://github.com/"], w);
+        sh("git", ["config", "url.ssh://b.invalid/acme/.insteadOf", "https://github.com/acme/"], w);
+        sh("git", ["config", "url./srv/mirror/.pushInsteadOf", "https://github.com/acme/w"], w);
+        sh("git", ["remote", "add", "probe", "https://github.com/acme/w.git"], w);
+        sh("git", ["remote", "add", "probe2", "https://github.com/other/x.git"], w);
+        const agrees =
+          resolvePushUrl(w, "https://github.com/acme/w.git") === sh("git", ["remote", "get-url", "--push", "probe"], w) &&
+          resolvePushUrl(w, "https://github.com/other/x.git") === sh("git", ["remote", "get-url", "--push", "probe2"], w) &&
+          resolvePushUrl(w, "https://github.com/other/x.git") === sh("git", ["ls-remote", "--get-url", "https://github.com/other/x.git"], w);
+        assert(agrees, "the push URL resolver agrees with git: longest prefix, pushInsteadOf before insteadOf");
+      }
+      assert(
+        urlHost("git@github.com:a/b") === "github.com" &&
+          urlHost("host.example:a/b") === "host.example" &&
+          urlHost("ssh://git@host.example:2222/a") === "host.example" &&
+          urlHost("file:///srv/a.git") === null &&
+          urlHost("file://localhost/srv/a.git") === null &&
+          urlHost("/srv/a.git") === null &&
+          urlHost("./dir:with-colon/a.git") === null &&
+          redactUrl("https://u:p@h.example/x") === "https://h.example/x",
+        "hosts are read the way git reads them, and userinfo is redacted",
+      );
+    } finally {
+      if (saved.cmd === undefined) delete process.env.GIT_SSH_COMMAND;
+      else process.env.GIT_SSH_COMMAND = saved.cmd;
+      if (saved.variant === undefined) delete process.env.GIT_SSH_VARIANT;
+      else process.env.GIT_SSH_VARIANT = saved.variant;
+    }
   }
 
   console.log("\nfactory push (no run)\n");
