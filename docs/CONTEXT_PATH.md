@@ -80,7 +80,7 @@ myproject-ctx/
 │   │   ├── SCRATCHPAD_42.md
 │   │   ├── SESSION_LOG_1.md
 │   │   ├── README.md
-│   │   └── runs/acme-app#42-r1/   (copy: contract, reports, verdicts, PR body)
+│   │   └── runs/acme-app#42-r1/   (copy: contract, reports, verdicts, PR body, plan critique, manual attachments)
 │   ├── runs/
 │   │   └── acme-app#42-r1/        (factory run artifacts, written by the runner)
 │   ├── scripts/
@@ -100,7 +100,7 @@ Key conventions:
 - `archive/` subdirectory replaces `docs/dev/cc-archive/{timestamp}-{issue}/`
 - `scripts/` for ad hoc scripts that shouldn't be committed to code repo
 - `notes/` for freeform dev notes, research, etc.
-- `runs/{run_id}/` holds a factory run's artifacts (docs/FACTORY_CLI.md). They stay there, since the factory database records their paths; `archive-work` copies the contract, reports, verdicts and PR body into `archive/runs/{run_id}/` and closes the run
+- `runs/{run_id}/` holds a factory run's artifacts (docs/FACTORY_CLI.md). They stay there, since the factory database records their paths; `archive-work` copies the contract, reports, verdicts, PR body, plan critique (`critique.json`) and the attachments of agent-assisted manual checks into `archive/runs/{run_id}/` and closes the run
 - No timestamp prefix on branch directories (the branch name IS the identifier)
 - Timestamp stays on archive artifacts if multiple archives per branch
 
