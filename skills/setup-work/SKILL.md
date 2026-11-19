@@ -392,7 +392,7 @@ DRAFT_DIR=$(mktemp -d)
 bash "$FACTORY" --json check --contract "$DRAFT_DIR/contract.json"
 ```
 
-- `.result` is a readiness document. Add your own readiness questions from Phase 2 to its `questions` (same shape), and make `status` `needs_human` if there are any.
+- `.result` is a readiness document. Write check's full `.result` to `$DRAFT_DIR/readiness.json`, add your own still-open readiness questions from Phase 2 to its `questions` (same shape), and make `status` `needs_human` if there are any. This file is the only readiness document: the manifest mirror (Phase 3.5 step 3d) and the plan critic's brief (Phase 3.55) both use it. Keep every key check returned (`tier`, `required_checks`, `target_ref`, `browser_tests`). Each later run of `check` rewrites it the same way, with only the questions still open.
 - Fill the scratchpad's `## Readiness`: status, the tier and reasons from `.result.tier` (the runner never lowers a proposed tier), required checks, and the open questions.
 - Each open question also goes to Clarifications Needed, for Phase 3.5.
 
@@ -454,9 +454,8 @@ bash "$FACTORY" --json check --contract "$DRAFT_DIR/contract.json"
       - Assumptions (convert to confirmed decisions)
       - **[factory]** The Validation Contract: criteria, evidence, tier, predicted files
 
-   d) **[factory] Re-check and mirror readiness.** If the answers changed the contract, rewrite `$DRAFT_DIR/contract.json` from the scratchpad and run Phase 3.2's `check` again, until it is `ready` or the operator leaves questions open. Then, changed or not, mirror the final readiness into the manifest, whatever the status, so a stale `needs_human` is cleared too:
+   d) **[factory] Re-check and mirror readiness.** If the answers changed the contract, rewrite `$DRAFT_DIR/contract.json` from the scratchpad and run Phase 3.2's `check` again, until it is `ready` or the operator leaves questions open; each run rewrites `$DRAFT_DIR/readiness.json` as in Phase 3.2. Then, re-checked or not, bring `$DRAFT_DIR/readiness.json` up to date in place: drop the questions the operator answered, keep only those still open, set `status` to `ready` when none remain and `needs_human` otherwise, and keep every other key check returned. Mirror that same file into the manifest, never a cut-down copy, whatever the status, so a stale `needs_human` is cleared too:
       ```bash
-      # $DRAFT_DIR/readiness.json: {"version": 1, "status": …, "questions": […]}
       bash "${CLAUDE_PLUGIN_ROOT}/scripts/manifest.sh" readiness {owner/repo} {issue_number} "$DRAFT_DIR/readiness.json"
       ```
       Only when `$MANIFEST_DB` exists (Phase 1). It does nothing when the issue has no work item. Update `## Readiness` with the final status.
@@ -520,7 +519,7 @@ Proceeding to branch creation...
 
 Run it on the factory path once Phase 3.5 is done and the contract passes Phase 3.2's check with no question about the contract's own shape. If the contract itself is invalid there is nothing to critique yet: say so in the plan summary and skip to Phase 3.6.
 
-1. **Write the brief.** In `$DRAFT_DIR` (Phase 3.2), write the issue as fetched in Phase 1 (title, body, comments) to `issue.md`, the light context from Phase 1 (lore entries quoted verbatim, related archives' decisions and lessons, manifest dependencies) to `context.md` (or leave `context` null when there is none), the contract to `contract.json` and Phase 3.2's readiness result to `readiness.json`. Then `brief.json`, with absolute paths (the `{plugin root}` is the directory holding `scripts/factory.sh`):
+1. **Write the brief.** In `$DRAFT_DIR` (Phase 3.2), write the issue as fetched in Phase 1 (title, body, comments) to `issue.md`, the light context from Phase 1 (lore entries quoted verbatim, related archives' decisions and lessons, manifest dependencies) to `context.md` (or leave `context` null when there is none), and the contract to `contract.json`. `readiness.json` is already there: it is Phase 3.2's file, check's full result with `tier`, `required_checks` and `browser_tests`, as step 3d left it, and the brief names it as is, never a cut-down copy. Then `brief.json`, with absolute paths (the `{plugin root}` is the directory holding `scripts/factory.sh`):
    ```json
    {
      "version": 1,
@@ -555,7 +554,7 @@ Run it on the factory path once Phase 3.5 is done and the contract passes Phase 
 
 4. **Apply a tier raise** (`tier_raise`): set the contract's `risk_tier_proposed` to `sensitive` and add the critic's reason to `risk_reasons`. A raise is never a question; the critic can only raise a tier.
 
-5. **One round with the planner.** When the critique has findings, whatever its verdict, resume the scratchpad-planner agent **once** with the critique and the brief's paths. For each finding it either accepts it and changes the plan or contract (say what changed), or rejects it with a reason. Apply its changes to the scratchpad and the contract, and run Phase 3.2's `check` again. The revised plan isn't critiqued again: the round ends here, and so does a later **Revise plan** at Phase 3.6.
+5. **One round with the planner.** When the critique has findings, whatever its verdict, resume the scratchpad-planner agent **once** with the critique and the brief's paths. For each finding it either accepts it and changes the plan or contract (say what changed), or rejects it with a reason. Apply its changes to the scratchpad and the contract, and run Phase 3.2's `check` again, which rewrites `readiness.json`; bring it up to date in place as in step 3d. The revised plan isn't critiqued again: the round ends here, and so does a later **Revise plan** at Phase 3.6.
 
    Record each answer as a disposition, `decided_by: planner`: `{"finding": "F-1", "accepted": true, "plan_change": "…"}` or `{"finding": "F-2", "accepted": false, "reason": "…"}`.
 
@@ -885,10 +884,11 @@ plan mode to design the implementation approach before we proceed?
 
 ---
 
-**Version:** 1.4.0
+**Version:** 1.4.1
 **Last Updated:** 2026-11-18
 **Maintained By:** Escapement
 **Changelog:**
+- v1.4.1: Factory path: one readiness document, `factory check`'s full result plus setup-work's still-open questions, is brought up to date after the Q&A, mirrored into the manifest and given to the plan critic, so `browser_tests`, `tier` and `required_checks` reach the critic; the manifest's cut-down copy no longer overwrites it (#109)
 - v1.4.0: Factory path: `browser_tests` from `factory check` goes to the planner, and in a project with browser tests UI criteria are planned as browser-test evidence, with `manual` kept for what a machine can't judge (#104)
 - v1.3.0: Factory path: Phase 3.55, one round of fresh-context plan critique (the `plan-critic` agent) before approval; unresolved findings shown with both positions at the approval question; dispositions in `## Plan Critique` and on the run with `factory record-critique` (#99)
 - v1.2.1: Fetch the issue with the GitHub MCP tools by name; access problems are checked through the MCP account (#80)
