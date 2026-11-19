@@ -153,7 +153,7 @@ async function run() {
   assert(
     pingsFor(facts({ attempts: 2 }), "attempts", "used 2 attempts, over gate-max-attempts (1)") &&
       evaluateGate(facts({ attempts: 3 }), { ...LIMITS, maxAttempts: 3 }).recommendation === "auto_merge",
-    "more attempts than gate-max-attempts gives ping, interrupted attempts included",
+    "more attempts than gate-max-attempts gives ping, and as many as it allows does not",
   );
 
   {
