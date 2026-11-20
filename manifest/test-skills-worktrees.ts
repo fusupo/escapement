@@ -205,8 +205,31 @@ function readmeProcedure() {
   }
 }
 
+function release() {
+  console.log("\nRelease\n");
+
+  const atLeast = (v: string, min: string) => {
+    const [a, b] = [v, min].map((x) => x.split(".").map(Number));
+    for (let i = 0; i < 3; i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0);
+    return true;
+  };
+  const text = skill("manifest-dispatch");
+  const readme = read("README.md");
+  const version = /^\*\*Version:\*\* (\d+\.\d+\.\d+)$/m.exec(text)?.[1] ?? "0.0.0";
+  const current = /^\*\*Current:\*\* (\d+\.\d+\.\d+)$/m.exec(readme)?.[1] ?? "0.0.0";
+  assert(
+    atLeast(version, "1.1.0") &&
+      /^- v1\.1\.0: .*worktree\.sh.*\(#88\)$/m.test(text) &&
+      atLeast(JSON.parse(read(".claude-plugin/plugin.json")).version, "4.9.0") &&
+      atLeast(current, "4.9.0") &&
+      /^- 4\.9\.0 \(\d{4}-\d{2}-\d{2}\): .*\(#88\)$/m.test(readme),
+    "manifest-dispatch at least 1.1.0, a plugin and README Current of at least 4.9.0, and the changelogs carry a line for #88",
+  );
+}
+
 contextPath();
 dispatch();
 beside();
 readmeProcedure();
+release();
 console.log("\nAll worktree and context-path skill tests passed.");

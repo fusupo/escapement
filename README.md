@@ -544,9 +544,14 @@ fusupo
 
 ## Version
 
-**Current:** 4.8.0
+**Current:** 4.9.0
 
 **Changelog:**
+- 4.9.0 (2026-11-19): worktrees in one tucked-away place, and context-path resolved from the main checkout (#88)
+  - **Context-path from the main checkout.** `scripts/get-context-path.sh --absolute` reads the main checkout's CLAUDE.md and prints an absolute path resolved from the main checkout, as the factory runner (`resolveContextPath`) and `migrate-archives.py` now do too. The seven skills that read context-path use it, so they find the same context directory from any worktree, wherever it lives. Without the flag the script prints what it always did
+  - **`scripts/worktree.sh`.** `add`, `path`, `list` and `remove` keep worktrees in `${XDG_DATA_HOME:-~/.local/share}/escapement/worktrees/{owner}-{repo}/{name}`, and `add` runs `npm ci --prefix manifest` for Escapement itself. `manifest-dispatch` 1.1.0 and the README's factory-on-Escapement procedure use it instead of a directory next to the repository
+  - **Lore import.** Escapement's CLAUDE.md imports its lore by a home-relative path, which works from any worktree. `docs/CONTEXT_PATH.md` says why a relative `@` import doesn't, and that a leading `~` in context-path is not expanded
+  - Skills: archive-work 2.8.1, stash-artifact 1.0.2, manifest-bootstrap 1.0.4, manifest-check 1.0.4, manifest-sync 1.0.5, manifest-dispatch 1.1.0, setup-work 1.4.3
 - 4.8.0 (2026-11-19): archive-work asks fewer questions (#123)
   - **Session tail.** `scripts/session-tail-gate.py` decides whether the session tail is the issue's work: entries on a detached `HEAD` or the base branch before the issue branch, in the same worktree, count, so a session that set up the issue there is included without a question. Another named branch, or anything outside the worktree, still asks
   - **Merged runs.** For a factory run whose PR has merged (read with the GitHub MCP tools) and whose authorization is active, `archive-work` doesn't ask "Ready to archive this work?": it archives, commits and closes the run. Without a run, with the PR open or closed unmerged, the questions are as before
