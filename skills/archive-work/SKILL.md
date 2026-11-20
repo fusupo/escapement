@@ -46,10 +46,10 @@ This skill activates when the user says things like:
 **Read the context-path setting** with the shared parser:
 
 ```bash
-CONTEXT_PATH=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/get-context-path.sh" CLAUDE.md)
+CONTEXT_PATH=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/get-context-path.sh" --absolute)
 ```
 
-It reads only the `## Escapement Settings` section of CLAUDE.md and ignores fenced code blocks, so documentation examples such as this one never match:
+With `--absolute` it reads the main checkout's CLAUDE.md and prints an absolute path resolved from the main checkout, so every worktree of the repository, wherever it lives, gets the same directory: use the path as printed (#88). It reads only the `## Escapement Settings` section and ignores fenced code blocks, so documentation examples such as this one never match:
 
 ```markdown
 ## Escapement Settings
@@ -60,7 +60,7 @@ It reads only the `## Escapement Settings` section of CLAUDE.md and ignores fenc
 Empty output means context-path is not set. Don't grep or sed CLAUDE.md for the setting yourself: the first match is often an example (#57).
 
 **If context-path is set** (non-empty output):
-- Resolve the path relative to project root
+- Use the path as printed: it is already absolute
 - Determine current branch name
 - Target directory: `{context-path}/{branch}/archive/`
 - Create the directory structure if it doesn't exist
@@ -233,7 +233,7 @@ Because each log covers only its own stretch of the session, the metadata Timest
 
    **Context mode:**
    ```bash
-   CONTEXT_PATH=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/get-context-path.sh" CLAUDE.md)
+   CONTEXT_PATH=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/get-context-path.sh" --absolute)
    BRANCH=$(git branch --show-current)
    ARCHIVE_DIR="$CONTEXT_PATH/$BRANCH/archive"
    mkdir -p "$ARCHIVE_DIR"
@@ -766,10 +766,11 @@ No PR found for this work.
 
 ---
 
-**Version:** 2.8.0
+**Version:** 2.8.1
 **Last Updated:** 2026-11-19
 **Maintained By:** Escapement
 **Changelog:**
+- v2.8.1: Read context-path with `get-context-path.sh --absolute`, resolved from the main checkout, so archives land in the same context directory from any worktree (#88)
 - v2.8.0: Phase 1.5 decides the session tail with `scripts/session-tail-gate.py`: detached `HEAD` and base-branch entries before the issue branch, in the same worktree, are the issue's work, so setup's entries no longer trigger the question. Phase 2 reads a `pr_open` run's PR with the GitHub MCP tools (`mcp__github__*`), and Phase 5 doesn't ask for a run whose PR merged and whose authorization is active (#123)
 - v2.7.0: Phase 6.5 reports the run's merge SHA, which `factory archive --close` now records, and then sweeps the repository for reverts of merged runs with `factory reverts`; a failed sweep is reported in one line and never blocks the close (#117)
 - v2.6.1: Phase 6.5 handles `not_github` from `archive --close` (origin off github.com) like `no_agent_token`: record the path without `--close` and say why (#87)
