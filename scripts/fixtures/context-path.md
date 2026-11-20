@@ -12,6 +12,72 @@ VALUE means no setting is found. Everything above the first case is ignored.
 Cases that depend on exact whitespace (CRLF line endings, trailing tabs) are
 built inline in each test instead, since editors tend to strip them.
 
+Worktree cases (#88) come first, above the first case, so the parsers'
+loaders above skip them. Their tests build a real repository and resolve
+context-path from a linked worktree outside the repository's parent
+directory:
+  scripts/get-context-path.sh --absolute   (scripts/test-context-worktree.sh)
+  manifest/factory/context.ts              (manifest/test-context-worktree.ts)
+    resolveContextPath
+  scripts/migrate-archives.py              (scripts/test-context-worktree.py)
+    detect_context_path
+
+Each starts with a line of the form
+
+  === worktree: NAME | expect: VALUE
+
+and its body, up to the next "===" line, is the main checkout's CLAUDE.md.
+The worktree's own CLAUDE.md (the committed one) always sets
+"../wrong-ctx", so a case only passes when the main checkout's file is read.
+In VALUE, {main} is the main checkout's physical path and {parent} its
+parent directory; an empty VALUE means no setting is found. Every case must
+give the same VALUE from the worktree, a subdirectory of it, the main
+checkout and a subdirectory of that.
+
+=== worktree: sibling | expect: {parent}/wt-ctx
+## Escapement Settings
+
+- **context-path**: ../wt-ctx
+
+=== worktree: inside-main-checkout | expect: {main}/.ctx/notes
+## Escapement Settings
+
+- **context-path**: .ctx/notes
+
+=== worktree: dot-segments | expect: {main}/b-ctx
+## Escapement Settings
+
+- **context-path**: ./a/../b-ctx
+
+=== worktree: absolute | expect: /escapement-test-ctx/shared
+## Escapement Settings
+
+- **context-path**: /escapement-test-ctx/./x/../shared
+
+=== worktree: quoted-with-spaces | expect: {parent}/my ctx
+## Escapement Settings
+
+- **context-path**: "../my ctx"
+
+=== worktree: fenced-example-first | expect: {parent}/real-ctx
+# Project
+
+```markdown
+## Escapement Settings
+
+- **context-path**: ../example-ctx
+```
+
+## Escapement Settings
+
+- **context-path**: ../real-ctx
+
+=== worktree: main-has-no-setting | expect: 
+# Project
+
+Nothing configured here, although the worktree's own CLAUDE.md sets one.
+
+
 === case: fenced-example-first | expect: ../real-ctx | warnings: 0
 # Project
 
