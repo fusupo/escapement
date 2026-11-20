@@ -395,6 +395,8 @@ escapement/
 │   ├── factory.sh             # Runs the factory CLI from any project directory
 │   ├── migrate-archives.py    # Migrate in-repo archives to context-path
 │   ├── slice-session-log.sh   # Transcript slicing with a per-session cursor
+│   ├── session-tail-gate.py   # Decides whether a session-log slice is the issue's work
+│   ├── find-session-transcripts.py # Finds every session that worked on an issue (archive-work Phase 1.6)
 │   ├── test-*.sh, test-*.py   # Shell and Python test suites
 │   └── fixtures/              # Test fixtures
 ├── schemas/factory/          # Published JSON Schemas: contract, report, verdict, readiness, critique
@@ -544,9 +546,13 @@ fusupo
 
 ## Version
 
-**Current:** 4.9.0
+**Current:** 4.10.0
 
 **Changelog:**
+- 4.10.0 (2026-11-20): archive-work archives every session that worked on the issue, with no compaction first (#89)
+  - **archive-work 2.9.0, Phase 1.6.** After the current session's tail, `archive-work` finds the other sessions that worked on the issue: a factory run's own session in its worktree, sessions in worktrees since removed, and setup in the main checkout. It slices each from its own cursor, so nothing is repeated, and gates each slice as Phase 1.5 does. Anything the gate can't decide is asked about once. The archive README lists which session each log came from. Subagent transcripts aren't archived
+  - **`scripts/find-session-transcripts.py`.** It finds the transcripts. One is kept when it ran on the issue branch, or in the run's worktree during the run, so a reused worktree path doesn't bring back earlier runs' sessions. Its `prepare` and `finish` are Phase 1.6's two blocks around the question
+  - **`slice-session-log.sh adopt`.** It moves a log the PreCompact hook wrote into another worktree's root into this one under the next free number, so every session log is still written only by the slicer
 - 4.9.0 (2026-11-19): worktrees in one tucked-away place, and context-path resolved from the main checkout (#88)
   - **Context-path from the main checkout.** `scripts/get-context-path.sh --absolute` reads the main checkout's CLAUDE.md and prints an absolute path resolved from the main checkout, as the factory runner (`resolveContextPath`) and `migrate-archives.py` now do too. The seven skills that read context-path use it, so they find the same context directory from any worktree, wherever it lives. Without the flag the script prints what it always did
   - **`scripts/worktree.sh`.** `add`, `path`, `list` and `remove` keep worktrees in `${XDG_DATA_HOME:-~/.local/share}/escapement/worktrees/{owner}-{repo}/{name}`, and `add` runs `npm ci --prefix manifest` for Escapement itself. `manifest-dispatch` 1.1.0 and the README's factory-on-Escapement procedure use it instead of a directory next to the repository

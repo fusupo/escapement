@@ -837,10 +837,11 @@ No PR found for this work.
 
 ---
 
-**Version:** 2.8.1
-**Last Updated:** 2026-11-19
+**Version:** 2.9.0
+**Last Updated:** 2026-11-20
 **Maintained By:** Escapement
 **Changelog:**
+- v2.9.0: Phase 1.6 archives every other session that worked on the issue, with no compaction first: `scripts/find-session-transcripts.py` finds them (the issue branch, or the run's worktree during the run, removed worktrees included), slices each from its cursor and gates it; hook logs in other worktrees are adopted through `slice-session-log.sh adopt` when included; one question for what the gate can't decide; Phase 4's README gets a Sessions table. Subagent transcripts aren't archived (#89)
 - v2.8.1: Read context-path with `get-context-path.sh --absolute`, resolved from the main checkout, so archives land in the same context directory from any worktree (#88)
 - v2.8.0: Phase 1.5 decides the session tail with `scripts/session-tail-gate.py`: detached `HEAD` and base-branch entries before the issue branch, in the same worktree, are the issue's work, so setup's entries no longer trigger the question. Phase 2 reads a `pr_open` run's PR with the GitHub MCP tools (`mcp__github__*`), and Phase 5 doesn't ask for a run whose PR merged and whose authorization is active (#123)
 - v2.7.0: Phase 6.5 reports the run's merge SHA, which `factory archive --close` now records, and then sweeps the repository for reverts of merged runs with `factory reverts`; a failed sweep is reported in one line and never blocks the close (#117)
