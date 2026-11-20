@@ -50,10 +50,19 @@ The hook's job is **preservation** (survive compaction), not **presentation**.
 A Claude Code transcript only grows: compaction appends to it and never truncates it. Copying it whole every time would make each log repeat the entire session. Instead, each `SESSION_LOG_{N}` holds only the stretch of the session that no earlier log covers:
 
 - **At compaction (the hook):** from where the previous log stopped up to now. The stretch includes the previous compaction's summary, so a reader knows what came before.
-- **At archive time (`archive-work` Phase 1.5):** the session's tail since the last log, so an issue's final stretch is archived with that issue instead of with whichever issue the next compaction happens in. If the tail ran on a branch other than the current one, `archive-work` asks before including it. A tail left out goes into the next log.
+- **At archive time (`archive-work` Phase 1.5):** the session's tail since the last log, so an issue's final stretch is archived with that issue instead of with whichever issue the next compaction happens in. `scripts/session-tail-gate.py` decides whether the tail is this issue's work (#123); if not, `archive-work` asks before including it. A tail left out goes into the next log.
 - **A session's first log** starts at the beginning of the session.
 
 Successive logs from one session are contiguous and never overlap: put together, they are the transcript.
+
+**Whose tail it is.** Each transcript entry records its git branch and directory (`cwd`). The tail is included without a question when everything from the first entry on the current branch (the issue branch) onwards is on that branch, and everything before it is on a detached `HEAD` or the base branch (where setup-work often starts) and in this worktree: its root, or a directory below it after a `cd`. The base branch is `factory check`'s `target_ref`, else `develop` when origin has it, else `main`. `archive-work` asks when:
+
+- another named branch appears anywhere;
+- `HEAD` or base-branch entries come after the issue branch started;
+- the issue branch never appears;
+- an earlier entry is outside this worktree. That includes a session that started in the main checkout and then moved into the issue's worktree: the check can't tell that from unrelated work there, so it asks.
+
+On the base branch itself or a detached HEAD, as when archiving from `develop` after a merge, there is no issue branch to anchor on: the tail is included only when every entry is on the current branch. #89 can use the same script for each session that worked on an issue.
 
 **How "where the previous log stopped" is tracked:** one cursor file per session, at `${XDG_STATE_HOME:-~/.local/state}/escapement/session-cursors/{session_id}`, holding the last transcript line written. With no usable cursor (the first log after upgrading Escapement, or a deleted cursor), the log starts at the session's last `compact_boundary` entry (the previous compaction), or at the beginning if the session has never compacted. Cursor files are a few bytes each and are never pruned; deleting them is safe.
 

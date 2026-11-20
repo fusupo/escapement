@@ -98,7 +98,7 @@ escapement/
 
 **PreToolUse hook** `factory-exec-guard.sh` (matcher `Bash`): while a worktree's factory run is implemented under an authorization, refuses the project's `static`/`verify` commands outside `factory exec`. It reads only a marker the runner keeps in the worktree's git dir, so it is inert everywhere else; `exec-hook: off` opts a project out. Tests: `scripts/test-factory-hook.sh`.
 
-**Authorized path:** `commit-changes`, `create-pr` and `do-work` drop their confirmations only when `factory authorization` matches. Everything the factory writes to GitHub (push, PR) goes through the runner as the AI agent's identity (`ESCAPEMENT_AGENT_GH_TOKEN`, from the environment or `~/.config/escapement/agent.env`), never as the operator, and never falls back to the operator. See `docs/FACTORY_CLI.md`. Outside a run the skills act as the agent too (see GitHub as the Agent below).
+**Authorized path:** `commit-changes`, `create-pr` and `do-work` drop their confirmations only when `factory authorization` matches. One exception: `archive-work` skips its Phase 5 question for a run whose PR has merged, on `factory status`'s active authorization and a merged PR read through MCP, not the matcher, which refuses past the run deadline and off the run's branch (#123). Everything the factory writes to GitHub (push, PR) goes through the runner as the AI agent's identity (`ESCAPEMENT_AGENT_GH_TOKEN`, from the environment or `~/.config/escapement/agent.env`), never as the operator, and never falls back to the operator. See `docs/FACTORY_CLI.md`. Outside a run the skills act as the agent too (see GitHub as the Agent below).
 
 ### Agents
 
