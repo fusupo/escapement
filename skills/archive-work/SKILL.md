@@ -83,27 +83,28 @@ The PreCompact hook only writes session logs at compaction, so the conversation 
    - `EMPTY`: nothing new since the last log. Go on to Phase 2.
    - Otherwise it prints `FILE=… START=… END=… LINES=…`. Keep `FILE` and `END`.
 
-2. **Check whose conversation it is.** Transcript entries record the git branch they happened on:
+2. **Check whose conversation it is.** Transcript entries record the git branch and the directory they happened in. `scripts/session-tail-gate.py` decides from them whether the tail is this issue's work (#123):
    ```bash
-   python3 -I - "$FILE" <<'EOF'
-   import collections, json, sys
-   branches, times = collections.Counter(), []
-   for line in open(sys.argv[1], encoding="utf-8"):
-       try:
-           entry = json.loads(line)
-       except json.JSONDecodeError:
-           continue
-       if entry.get("gitBranch"):
-           branches[entry["gitBranch"]] += 1
-       if entry.get("timestamp"):
-           times.append(entry["timestamp"])
-   print(dict(branches), times[0] if times else "-", times[-1] if times else "-")
-   EOF
+   BASE=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/factory.sh" --json check 2>/dev/null |
+     python3 -I -c 'import json, sys; print(json.load(sys.stdin)["result"]["target_ref"] or "")' 2>/dev/null)
+   if [ -z "$BASE" ]; then
+     if git rev-parse --verify --quiet refs/remotes/origin/develop >/dev/null; then BASE=develop; else BASE=main; fi
+   fi
+   python3 -I "${CLAUDE_PLUGIN_ROOT}/scripts/session-tail-gate.py" "$FILE" \
+     --branch "$(git branch --show-current)" --base "$BASE" --root "$(git rev-parse --show-toplevel)"
    ```
+   The base branch is `factory check`'s `target_ref` (the project's `base-branch` setting, else `develop` when origin has it, else `main`), which `check` gives even for a project not set up for the factory. When the runner isn't installed, the block falls back to the same defaults.
 
-3. **Include or leave it:**
-   - **Every branch is the current branch** (`git branch --show-current`): include it without asking. Run `bash "$SLICER" commit "$TRANSCRIPT" "$END"` and report `Captured session tail: {LINES} lines -> {FILE}`.
-   - **Otherwise** (e.g. archiving from `develop` after a merge, or a session that moved on to other work), ask:
+   It prints one JSON line: `decision` (`include` or `ask`), `reason`, `branches` (entries per branch), and the `first` and `last` timestamps. The tail is this issue's work, and `decision` is `include`, when:
+   - every entry from the first one on the current branch (the issue branch) onwards is on it;
+   - every entry before that is on a detached `HEAD` or the base branch, as setup-work's often are;
+   - and those earlier entries are in this worktree: its root or a directory below it, never the main checkout or another worktree.
+
+   Any other named branch, `HEAD` or base-branch entries after the issue branch started, or no entry on the issue branch, gives `ask`. On the base branch itself or a detached HEAD (archiving from `develop` after a merge, say) there is no issue branch to anchor on, so the old rule applies: `include` only when every entry is on the current branch. #89 can run the same script on each session's slice.
+
+3. **Include or leave it,** from the script's `decision`:
+   - **`include`:** include it without asking. Run `bash "$SLICER" commit "$TRANSCRIPT" "$END"` and report `Captured session tail: {LINES} lines -> {FILE}`.
+   - **`ask`** (e.g. archiving from `develop` after a merge, or a session that moved on to other work), ask, with `{branch: count, ...}` from `branches` and `{first}` and `{last}` from the script:
      ```
      AskUserQuestion:
        question: "The session since the last log ({LINES} lines, {size}, {first} to {last}) ran on branches {branch: count, ...}. Include it in this archive?"
@@ -116,6 +117,7 @@ The PreCompact hook only writes session logs at compaction, so the conversation 
      ```
      - **Include:** run `bash "$SLICER" commit "$TRANSCRIPT" "$END"`
      - **Leave:** `rm "$FILE"`. The cursor stays put, so nothing is lost.
+   - **No decision** (the script failed): ask the same question, with "branches unknown" in place of the counts.
 
 The rest of this archive-work run lands in the session's next log.
 
