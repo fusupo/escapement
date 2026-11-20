@@ -119,7 +119,7 @@ flowchart LR
 
 **Review** (`create-pr`, `review-pr`). `create-pr` opens the PR with context from the scratchpad and the commits. `review-pr` reviews it against the project's roadmap. Requested changes go back to `do-work`. You merge.
 
-**Archive** (`archive-work`, hooks). Before Claude Code compacts a session, the PreCompact hook saves the conversation since the last log. After the merge, `archive-work` saves the rest, converts the logs to markdown and moves them with the scratchpad into the archive. With a [context path](#context-path), that is `{context-path}/{branch}/archive/`, listed in `{context-path}/INDEX.md`. It also asks for any non-obvious lessons for the project's `PROJECT_LORE.md`.
+**Archive** (`archive-work`, hooks). Before Claude Code compacts a session, the PreCompact hook saves the conversation since the last log. After the merge, `archive-work` saves the rest, of this session and of every other session that worked on the issue (a factory run's own session included, so compacting first is optional), converts the logs to markdown and moves them with the scratchpad into the archive. With a [context path](#context-path), that is `{context-path}/{branch}/archive/`, listed in `{context-path}/INDEX.md`. It also asks for any non-obvious lessons for the project's `PROJECT_LORE.md`.
 
 ### Layer 2: The Factory
 
@@ -263,9 +263,9 @@ Skills are invoked automatically by Claude Code when relevant, or explicitly wit
 
 ## Hooks
 
-**PreCompact hook** (`archive-session-log.sh`). Before Claude Code compacts a session, automatically or manually, the hook saves the raw transcript. It writes only the conversation since the previous log, to `SESSION_LOG_{N}.jsonl` in the **project root**, so a long session spanning many issues doesn't repeat itself in every log. `archive-work` later saves the session's tail since the last log, converts the `.jsonl` files to markdown (`scripts/convert-session-log.py`) and moves them to the archive. See [Session Archiving](docs/SESSION-ARCHIVING.md#what-a-session-log-covers) for exactly what each log covers. It needs `jq`.
+**PreCompact hook** (`archive-session-log.sh`). Before Claude Code compacts a session, automatically or manually, the hook saves the raw transcript. It writes only the conversation since the previous log, to `SESSION_LOG_{N}.jsonl` in the **project root**, so a long session spanning many issues doesn't repeat itself in every log. `archive-work` later saves the session's tail since the last log, and the unlogged part of every other session that worked on the issue, then converts the `.jsonl` files to markdown (`scripts/convert-session-log.py`) and moves them to the archive. See [Session Archiving](docs/SESSION-ARCHIVING.md#what-a-session-log-covers) for exactly what each log covers. It needs `jq`.
 
-Only the session that runs `archive-work` gets its tail saved. Another session's conversation is kept only up to its last compaction.
+Compacting before archiving is optional (#89). `archive-work` finds the other sessions itself: a factory run's session in its own worktree, sessions in worktrees that have since been removed, and setup in the main checkout. It also brings in the logs the hook wrote into another worktree's root. A session that also worked on another branch is offered, not included without asking. Subagent transcripts aren't archived. See [Session Archiving](docs/SESSION-ARCHIVING.md#other-sessions-that-worked-on-the-issue).
 
 **PreToolUse hook** (`factory-exec-guard.sh`). It keeps a factory run's builds and tests on the shared build lock. It acts only in a worktree whose run is being implemented under an authorization (a marker the runner keeps inside `.git`), and refuses the project's `static` and `verify` commands unless they go through `factory exec`. Everywhere else it exits at once. A project opts out with `exec-hook: off`. See [FACTORY_CLI.md](docs/FACTORY_CLI.md#the-exec-guard).
 
@@ -395,6 +395,8 @@ escapement/
 │   ├── factory.sh             # Runs the factory CLI from any project directory
 │   ├── migrate-archives.py    # Migrate in-repo archives to context-path
 │   ├── slice-session-log.sh   # Transcript slicing with a per-session cursor
+│   ├── session-tail-gate.py   # Decides whether a session-log slice is the issue's work
+│   ├── find-session-transcripts.py # Finds every session that worked on an issue (archive-work Phase 1.6)
 │   ├── test-*.sh, test-*.py   # Shell and Python test suites
 │   └── fixtures/              # Test fixtures
 ├── schemas/factory/          # Published JSON Schemas: contract, report, verdict, readiness, critique
@@ -544,9 +546,13 @@ fusupo
 
 ## Version
 
-**Current:** 4.9.0
+**Current:** 4.10.0
 
 **Changelog:**
+- 4.10.0 (2026-11-20): archive-work archives every session that worked on the issue, with no compaction first (#89)
+  - **archive-work 2.9.0, Phase 1.6.** After the current session's tail, `archive-work` finds the other sessions that worked on the issue: a factory run's own session in its worktree, sessions in worktrees since removed, and setup in the main checkout. It slices each from its own cursor, so nothing is repeated, and gates each slice as Phase 1.5 does. Anything the gate can't decide is asked about once. The archive README lists which session each log came from. Subagent transcripts aren't archived
+  - **`scripts/find-session-transcripts.py`.** It finds the transcripts. One is kept when it ran on the issue branch, or in the run's worktree during the run, so a reused worktree path doesn't bring back earlier runs' sessions. Its `prepare` and `finish` are Phase 1.6's two blocks around the question
+  - **`slice-session-log.sh adopt`.** It moves a log the PreCompact hook wrote into another worktree's root into this one under the next free number, so every session log is still written only by the slicer
 - 4.9.0 (2026-11-19): worktrees in one tucked-away place, and context-path resolved from the main checkout (#88)
   - **Context-path from the main checkout.** `scripts/get-context-path.sh --absolute` reads the main checkout's CLAUDE.md and prints an absolute path resolved from the main checkout, as the factory runner (`resolveContextPath`) and `migrate-archives.py` now do too. The seven skills that read context-path use it, so they find the same context directory from any worktree, wherever it lives. Without the flag the script prints what it always did
   - **`scripts/worktree.sh`.** `add`, `path`, `list` and `remove` keep worktrees in `${XDG_DATA_HOME:-~/.local/share}/escapement/worktrees/{owner}-{repo}/{name}`, and `add` runs `npm ci --prefix manifest` for Escapement itself. `manifest-dispatch` 1.1.0 and the README's factory-on-Escapement procedure use it instead of a directory next to the repository
