@@ -8,7 +8,8 @@
 # non-overlapping. Without a valid cursor, the slice starts at the last
 # compact_boundary, or at line 1 if the session has never compacted.
 #
-# Used by hooks/archive-session-log.sh (PreCompact) and the archive-work skill.
+# Used by hooks/archive-session-log.sh (PreCompact), the archive-work skill
+# and scripts/find-session-transcripts.py.
 #
 # Usage:
 #   slice-session-log.sh find SESSION_ID
@@ -19,6 +20,11 @@
 #       Advances the cursor to END unless --no-advance is given.
 #   slice-session-log.sh commit TRANSCRIPT END
 #       Set the cursor to END (to accept a --no-advance slice).
+#   slice-session-log.sh adopt LOG OUTDIR
+#       Move an existing session log (SESSION_LOG_*.jsonl, such as one the
+#       PreCompact hook wrote into another worktree's root) to the next free
+#       OUTDIR/SESSION_LOG_{N}.jsonl and print "FILE=…". Never touches a
+#       cursor: the log's lines are already behind its session's cursor (#89).
 #
 # On failure: exit 1 with a message on stderr, no log file left behind, and
 # the cursor unchanged.
@@ -125,9 +131,34 @@ cmd_commit() {
     write_cursor "$transcript" "$end" || die "failed to write cursor"
 }
 
+cmd_adopt() {
+    local log="${1:-}" outdir="${2:-}" n=1 output
+    [ -f "$log" ] || die "session log not found: '$log'"
+    [ -d "$outdir" ] || die "output directory not found: '$outdir'"
+    case "$(basename "$log")" in
+        SESSION_LOG_*.jsonl) ;;
+        *) die "not a session log: '$log'" ;;
+    esac
+
+    # Skip numbers taken by .jsonl or converted .md logs, as slice does
+    while [ -e "$outdir/SESSION_LOG_${n}.jsonl" ] || [ -e "$outdir/SESSION_LOG_${n}.md" ]; do
+        n=$((n + 1))
+    done
+    output="$outdir/SESSION_LOG_${n}.jsonl"
+
+    # -n: never overwrite a log that appeared meanwhile. Some mv versions
+    # exit 0 when -n skips the move, so check where the file ended up.
+    mv -n "$log" "$output" 2>/dev/null || true
+    if [ -e "$log" ] || [ ! -f "$output" ]; then
+        die "failed to move $log to $output"
+    fi
+    echo "FILE=$output"
+}
+
 case "${1:-}" in
     find) shift; cmd_find "$@" ;;
     slice) shift; cmd_slice "$@" ;;
     commit) shift; cmd_commit "$@" ;;
-    *) die "usage: $(basename "$0") find SESSION_ID | slice TRANSCRIPT OUTDIR [--no-advance] | commit TRANSCRIPT END" ;;
+    adopt) shift; cmd_adopt "$@" ;;
+    *) die "usage: $(basename "$0") find SESSION_ID | slice TRANSCRIPT OUTDIR [--no-advance] | commit TRANSCRIPT END | adopt LOG OUTDIR" ;;
 esac
