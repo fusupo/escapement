@@ -10,7 +10,7 @@ This hook-based system:
 1. Detects when compaction is about to occur
 2. Writes the part of the session transcript (JSONL) that no earlier log covers to your project root
 3. Allows compaction to proceed normally
-4. The `archive-work` skill later saves the rest of the session and converts the logs to readable markdown
+4. The `archive-work` skill later saves the rest of the session, and of every other session that worked on the issue, and converts the logs to readable markdown
 
 ## Quick Setup
 
@@ -62,7 +62,7 @@ Successive logs from one session are contiguous and never overlap: put together,
 - the issue branch never appears;
 - an earlier entry is outside this worktree. That includes a session that started in the main checkout and then moved into the issue's worktree: the check can't tell that from unrelated work there, so it asks.
 
-On the base branch itself or a detached HEAD, as when archiving from `develop` after a merge, there is no issue branch to anchor on: the tail is included only when every entry is on the current branch. #89 can use the same script for each session that worked on an issue.
+On the base branch itself or a detached HEAD, as when archiving from `develop` after a merge, there is no issue branch to anchor on: the tail is included only when every entry is on the current branch. Phase 1.6 (#89) uses the same script for each other session that worked on the issue: see below.
 
 **How "where the previous log stopped" is tracked:** one cursor file per session, at `${XDG_STATE_HOME:-~/.local/state}/escapement/session-cursors/{session_id}`, holding the last transcript line written. With no usable cursor (the first log after upgrading Escapement, or a deleted cursor), the log starts at the session's last `compact_boundary` entry (the previous compaction), or at the beginning if the session has never compacted. Cursor files are a few bytes each and are never pruned; deleting them is safe.
 
@@ -72,7 +72,20 @@ Things to know:
 - **A log that follows an archive-time tail** opens mid-conversation, where the tail stopped, instead of with a compaction summary.
 - **Partial last line:** if the transcript is mid-write, its incomplete last line is left for the next log.
 - **Resumed sessions:** a session that continues under a new session id starts a new cursor, so its first log starts at the last compaction in its transcript and may repeat part of an earlier log.
-- **Hook logs aren't tied to an issue:** the hook writes to the project root whatever branch you're on, and `archive-work` collects every `SESSION_LOG_*` it finds there.
+- **Hook logs aren't tied to an issue:** the hook writes to the project root whatever branch you're on, and `archive-work` collects every `SESSION_LOG_*` it finds there. Logs in another worktree's root come in only through Phase 1.6, when their session worked on the issue.
+
+### Other Sessions That Worked on the Issue
+
+Phase 1.5 covers only the session running `archive-work`. Other sessions, such as a factory run's own session in its worktree, used to reach the archive only if they were compacted, and then only when their logs sat in the root being archived. `archive-work`'s Phase 1.6 finds them itself, so compacting first is optional (#89). `scripts/find-session-transcripts.py` does the finding:
+
+- **Where it looks.** Claude Code keeps each session's transcript in `~/.claude/projects/{encoded cwd}/{session id}.jsonl` (or under `CLAUDE_CONFIG_DIR`). The encoded cwd is the path with every character that isn't a letter or digit turned into `-`. It looks in the directories of the main checkout, every worktree in `git worktree list`, and the factory run's `worktree_path`. It also looks in those of every worktree `scripts/worktree.sh` keeps, including legacy worktrees whose path starts with the main checkout's path. Transcripts outlive their worktrees, so a removed worktree's sessions are still found.
+- **Which it keeps.** A transcript is the issue's when an entry ran on the issue branch, or in the run's worktree during the run's time (`started_at` to `ended_at`). A worktree path reused by a later run doesn't bring back earlier runs' sessions. The issue branch is the run's branch, else the scratchpad's `**Feature branch:**`, else the current branch.
+- **What it saves.** Each session is sliced like the tail, from its own cursor, so nothing an earlier log or compaction wrote is repeated. Each slice goes through the same gate, with that session's own worktree as its root.
+- **Logs the hook wrote elsewhere.** A `SESSION_LOG_*.jsonl` in another worktree's root that belongs to one of these sessions is gated where it is. Only an included one is moved into this root, by `slice-session-log.sh adopt`, under the next free number.
+- **Asking.** Anything the gate can't decide (another branch, or work outside the session's worktree) is asked about once, listing each with its worktree, size, branches and time span. A declined slice is removed and its cursor stays put, so a later log picks it up. A declined hook log stays where it was.
+- **Not archived:** subagent transcripts (the per-session subdirectories), and hook logs in a worktree that has been removed.
+
+Each log's line in the archive README's Sessions table names the session and worktree it came from.
 
 ### In-Progress Format
 
@@ -92,7 +105,7 @@ Incremental numbering ensures no overwrites.
 
 When you run the `archive-work` skill (typically after PR merge), it:
 
-1. Saves the session tail since the last log as another `SESSION_LOG_{N}.jsonl`
+1. Saves the session tail since the last log as another `SESSION_LOG_{N}.jsonl`, and the unlogged part of every other session that worked on the issue (Phase 1.6)
 2. Detects `SESSION_LOG_*.jsonl` files in the project root
 3. Converts each with `scripts/convert-session-log.py` — metadata table, user/assistant sections, and tool use in `<details>` blocks
 4. Writes `SESSION_LOG_{N}.md` to the archive directory
@@ -186,7 +199,7 @@ XDG_STATE_HOME=/tmp/state /path/to/escapement/scripts/slice-session-log.sh \
 |----------|---------|-------------|
 | `CLAUDE_PROJECT_DIR` | hook | Project directory; session logs are written here |
 | `CLAUDE_CODE_SESSION_ID` | `archive-work` | Identifies the current session's transcript for the tail capture |
-| `CLAUDE_CONFIG_DIR` | `archive-work` | Where Claude Code keeps transcripts (default `~/.claude`) |
+| `CLAUDE_CONFIG_DIR` | `archive-work` | Where Claude Code keeps transcripts (default `~/.claude`), for the tail and for finding other sessions |
 | `XDG_STATE_HOME` | both | Where session cursors are kept (default `~/.local/state`) |
 
 ## Integration with Archive-Work
@@ -196,6 +209,7 @@ The `archive-work` skill handles the full lifecycle:
 1. During active work, raw JSONL session logs accumulate in project root
 2. When you invoke `archive-work`, it:
    - Saves the session tail since the last log (Phase 1.5)
+   - Saves the other sessions that worked on the issue, and brings in their hook logs from other worktrees (Phase 1.6)
    - Converts `SESSION_LOG_*.jsonl` to markdown (Phase 3.5)
    - Moves converted `.md` files to the archive directory
    - Deletes `.jsonl` files from project root

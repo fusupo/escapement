@@ -203,6 +203,7 @@ Avoids suggesting improvements already planned in backlog. Focuses on THIS piece
 
 **What happens:**
 The `archive-work` skill:
+- Saves the conversation no log covers yet, of this session and of every other session that worked on the issue (a factory run's own session, sessions in removed worktrees), so compacting first is optional; a session that also worked on another branch is offered, not included without asking
 - Moves `SCRATCHPAD_{num}.md` and the session logs to the project's context path, `{context-path}/{branch}/archive/`, with a README summary, and adds a row to `{context-path}/INDEX.md`
 - Without a context path, archives in the repo under `docs/dev/cc-archive/` instead, and offers to commit it
 - Closes the branch's factory run, if it has one
