@@ -18,6 +18,7 @@ tools:
   - Grep
   - AskUserQuestion
   - Skill
+  - mcp__github__*
 ---
 
 # Archive Work Skill
@@ -83,27 +84,28 @@ The PreCompact hook only writes session logs at compaction, so the conversation 
    - `EMPTY`: nothing new since the last log. Go on to Phase 2.
    - Otherwise it prints `FILE=… START=… END=… LINES=…`. Keep `FILE` and `END`.
 
-2. **Check whose conversation it is.** Transcript entries record the git branch they happened on:
+2. **Check whose conversation it is.** Transcript entries record the git branch and the directory they happened in. `scripts/session-tail-gate.py` decides from them whether the tail is this issue's work (#123):
    ```bash
-   python3 -I - "$FILE" <<'EOF'
-   import collections, json, sys
-   branches, times = collections.Counter(), []
-   for line in open(sys.argv[1], encoding="utf-8"):
-       try:
-           entry = json.loads(line)
-       except json.JSONDecodeError:
-           continue
-       if entry.get("gitBranch"):
-           branches[entry["gitBranch"]] += 1
-       if entry.get("timestamp"):
-           times.append(entry["timestamp"])
-   print(dict(branches), times[0] if times else "-", times[-1] if times else "-")
-   EOF
+   BASE=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/factory.sh" --json check 2>/dev/null |
+     python3 -I -c 'import json, sys; print(json.load(sys.stdin)["result"]["target_ref"] or "")' 2>/dev/null)
+   if [ -z "$BASE" ]; then
+     if git rev-parse --verify --quiet refs/remotes/origin/develop >/dev/null; then BASE=develop; else BASE=main; fi
+   fi
+   python3 -I "${CLAUDE_PLUGIN_ROOT}/scripts/session-tail-gate.py" "$FILE" \
+     --branch "$(git branch --show-current)" --base "$BASE" --root "$(git rev-parse --show-toplevel)"
    ```
+   The base branch is `factory check`'s `target_ref` (the project's `base-branch` setting, else `develop` when origin has it, else `main`), which `check` gives even for a project not set up for the factory. When the runner isn't installed, the block falls back to the same defaults.
 
-3. **Include or leave it:**
-   - **Every branch is the current branch** (`git branch --show-current`): include it without asking. Run `bash "$SLICER" commit "$TRANSCRIPT" "$END"` and report `Captured session tail: {LINES} lines -> {FILE}`.
-   - **Otherwise** (e.g. archiving from `develop` after a merge, or a session that moved on to other work), ask:
+   It prints one JSON line: `decision` (`include` or `ask`), `reason`, `branches` (entries per branch), and the `first` and `last` timestamps. The tail is this issue's work, and `decision` is `include`, when:
+   - every entry from the first one on the current branch (the issue branch) onwards is on it;
+   - every entry before that is on a detached `HEAD` or the base branch, as setup-work's often are;
+   - and those earlier entries are in this worktree: its root or a directory below it, never the main checkout or another worktree.
+
+   Any other named branch, `HEAD` or base-branch entries after the issue branch started, or no entry on the issue branch, gives `ask`. On the base branch itself or a detached HEAD (archiving from `develop` after a merge, say) there is no issue branch to anchor on, so the old rule applies: `include` only when every entry is on the current branch. #89 can run the same script on each session's slice.
+
+3. **Include or leave it,** from the script's `decision`:
+   - **`include`:** include it without asking. Run `bash "$SLICER" commit "$TRANSCRIPT" "$END"` and report `Captured session tail: {LINES} lines -> {FILE}`.
+   - **`ask`** (e.g. archiving from `develop` after a merge, or a session that moved on to other work), ask, with `{branch: count, ...}` from `branches` and `{first}` and `{last}` from the script:
      ```
      AskUserQuestion:
        question: "The session since the last log ({LINES} lines, {size}, {first} to {last}) ran on branches {branch: count, ...}. Include it in this archive?"
@@ -116,6 +118,7 @@ The PreCompact hook only writes session logs at compaction, so the conversation 
      ```
      - **Include:** run `bash "$SLICER" commit "$TRANSCRIPT" "$END"`
      - **Leave:** `rm "$FILE"`. The cursor stays put, so nothing is lost.
+   - **No decision** (the script failed): ask the same question, with "branches unknown" in place of the counts.
 
 The rest of this archive-work run lands in the session's next log.
 
@@ -149,6 +152,18 @@ The rest of this archive-work run lands in the session's next log.
    bash "$FACTORY" --json status '{run_id}'
    ```
    Note `.result.run.artifact_dir`, `.result.run.state` and `.result.run.pr_number` for Phase 6.5. Single-quote the run ID: it contains `#`. No section, or `status` fails (`no_such_run`), means there's no run to archive.
+
+   **Is the run settled?** (#123) When `.result.run.state` is `pr_open` and `.result.authorization` is not null, read the run's PR as the agent with the GitHub MCP tools, owner and repo from `.result.run.repo` (`owner/repo`):
+   ```
+   mcp__github__pull_request_read:
+     method: get
+     owner: {owner}
+     repo: {repo}
+     pullNumber: {pr_number}
+   ```
+   When it reports the PR merged (`merged` is true, or `merged_at` is set), note `RUN_SETTLED`: the run's outcome is decided, and archiving and closing it are covered by its authorization, so Phase 5 doesn't ask. Anything else leaves it unset: no run, another state, no active authorization, a PR still open or closed unmerged, or a read that fails.
+
+   This reads `status`'s `.result.authorization`, the run's active authorization, which only closing the run, revoking it or a new approval ends. It is not `factory authorization`, the matcher do-work and commit-changes use: that one refuses past the run deadline, which a merge usually comes after, and from any other branch or checkout, where an archive after a merge usually runs. The runner still reads the PR itself when Phase 6.5 closes the run, and records the outcome from that.
 
 **After parallel detection, verify completion:**
 - Check if scratchpad tasks are all complete
@@ -409,6 +424,10 @@ If all of the following are true, skip the retro entirely:
 In that case, there is nothing to reconcile and unlikely genuine lore to capture.
 
 ### Phase 5: Confirm with User
+
+**A settled run (`RUN_SETTLED`, Phase 2 step 5): don't ask.** Its PR has merged and its authorization is active, so archiving and closing it are covered. Show the destination info below and the factory-run preview, say in one line `Not asking: PR #{pr_number} of factory run {run_id} has merged`, and go on as **Yes, archive and commit**: Phase 6, then Phase 6.5 copies the run's artifacts and closes it with `--close`.
+
+**Otherwise ask, as always:** no factory run, a run with no active authorization, a PR still open, a PR closed unmerged, or a PR read that failed.
 
 ```
 AskUserQuestion:
@@ -747,10 +766,11 @@ No PR found for this work.
 
 ---
 
-**Version:** 2.7.0
+**Version:** 2.8.0
 **Last Updated:** 2026-11-19
 **Maintained By:** Escapement
 **Changelog:**
+- v2.8.0: Phase 1.5 decides the session tail with `scripts/session-tail-gate.py`: detached `HEAD` and base-branch entries before the issue branch, in the same worktree, are the issue's work, so setup's entries no longer trigger the question. Phase 2 reads a `pr_open` run's PR with the GitHub MCP tools (`mcp__github__*`), and Phase 5 doesn't ask for a run whose PR merged and whose authorization is active (#123)
 - v2.7.0: Phase 6.5 reports the run's merge SHA, which `factory archive --close` now records, and then sweeps the repository for reverts of merged runs with `factory reverts`; a failed sweep is reported in one line and never blocks the close (#117)
 - v2.6.1: Phase 6.5 handles `not_github` from `archive --close` (origin off github.com) like `no_agent_token`: record the path without `--close` and say why (#87)
 - v2.6.0: Phase 6.5 reports the run's `operator_action` (`merged_as_is`, `changes_requested`, `rejected` or `abandoned`), which `factory archive --close` now records; `.result.closed` is unchanged (#110)

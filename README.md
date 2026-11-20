@@ -539,9 +539,13 @@ fusupo
 
 ## Version
 
-**Current:** 4.7.1
+**Current:** 4.8.0
 
 **Changelog:**
+- 4.8.0 (2026-11-19): archive-work asks fewer questions (#123)
+  - **Session tail.** `scripts/session-tail-gate.py` decides whether the session tail is the issue's work: entries on a detached `HEAD` or the base branch before the issue branch, in the same worktree, count, so a session that set up the issue there is included without a question. Another named branch, or anything outside the worktree, still asks
+  - **Merged runs.** For a factory run whose PR has merged (read with the GitHub MCP tools) and whose authorization is active, `archive-work` doesn't ask "Ready to archive this work?": it archives, commits and closes the run. Without a run, with the PR open or closed unmerged, the questions are as before
+  - **Skills.** `archive-work` 2.8.0
 - 4.7.1 (2026-11-19): Reviewer leftovers (#120)
   - **Push URL.** A remote named after the push URL (`remote."https://github.com/…".pushurl`, else `.url`, in any config scope) is checked before a push too; one that leaves github.com is `not_github` and nothing is pushed
   - **gh guard per function.** A test checks every function that calls `gh` for a host check earlier in the same function, not just the first call in each file
