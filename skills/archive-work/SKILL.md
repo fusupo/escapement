@@ -766,10 +766,11 @@ No PR found for this work.
 
 ---
 
-**Version:** 2.7.0
+**Version:** 2.8.0
 **Last Updated:** 2026-11-19
 **Maintained By:** Escapement
 **Changelog:**
+- v2.8.0: Phase 1.5 decides the session tail with `scripts/session-tail-gate.py`: detached `HEAD` and base-branch entries before the issue branch, in the same worktree, are the issue's work, so setup's entries no longer trigger the question. Phase 2 reads a `pr_open` run's PR with the GitHub MCP tools (`mcp__github__*`), and Phase 5 doesn't ask for a run whose PR merged and whose authorization is active (#123)
 - v2.7.0: Phase 6.5 reports the run's merge SHA, which `factory archive --close` now records, and then sweeps the repository for reverts of merged runs with `factory reverts`; a failed sweep is reported in one line and never blocks the close (#117)
 - v2.6.1: Phase 6.5 handles `not_github` from `archive --close` (origin off github.com) like `no_agent_token`: record the path without `--close` and say why (#87)
 - v2.6.0: Phase 6.5 reports the run's `operator_action` (`merged_as_is`, `changes_requested`, `rejected` or `abandoned`), which `factory archive --close` now records; `.result.closed` is unchanged (#110)

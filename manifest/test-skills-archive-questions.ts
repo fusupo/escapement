@@ -264,8 +264,30 @@ function docs() {
   );
 }
 
+function release() {
+  console.log("\nThe release (#123)\n");
+  // Minimums, not the current versions: a later release moves them (PROJECT_LORE).
+  const atLeast = (v: string, min: string) => {
+    const [a, b] = [v, min].map((x) => x.split(".").map(Number));
+    for (let i = 0; i < 3; i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0);
+    return true;
+  };
+  const readme = read("README.md");
+  const version = /^\*\*Version:\*\* (\d+\.\d+\.\d+)$/m.exec(skill)?.[1] ?? "0.0.0";
+  const current = /^\*\*Current:\*\* (\d+\.\d+\.\d+)$/m.exec(readme)?.[1] ?? "0.0.0";
+  assert(
+    atLeast(version, "2.8.0") &&
+      /^- v2\.8\.0: .*session-tail-gate\.py.*\(#123\)$/m.test(skill) &&
+      atLeast(JSON.parse(read(".claude-plugin/plugin.json")).version, "4.8.0") &&
+      atLeast(current, "4.8.0") &&
+      /^- 4\.8\.0 \(\d{4}-\d{2}-\d{2}\): .*\(#123\)$/m.test(readme),
+    "archive-work at least 2.8.0, a plugin and README Current of at least 4.8.0, and the changelogs carry a line for #123",
+  );
+}
+
 sessionTail();
 gateBlockRuns();
 phase5Skip();
 docs();
+release();
 console.log("\nAll archive-work question tests passed.");

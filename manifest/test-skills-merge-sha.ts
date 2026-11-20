@@ -59,12 +59,12 @@ function run() {
   };
   const current = /^\*\*Current:\*\* (\d+\.\d+\.\d+)$/m.exec(readme)?.[1] ?? "0.0.0";
   assert(
-    skill.includes("**Version:** 2.7.0") &&
+    atLeast(/^\*\*Version:\*\* (\d+\.\d+\.\d+)$/m.exec(skill)?.[1] ?? "0.0.0", "2.7.0") &&
       /^- v2\.7\.0: .*\(#117\)$/m.test(skill) &&
       atLeast(JSON.parse(read(".claude-plugin/plugin.json")).version, "4.7.0") &&
       atLeast(current, "4.7.0") &&
       /^- 4\.7\.0 \(\d{4}-\d{2}-\d{2}\): .*\(#117\)$/m.test(readme),
-    "archive-work 2.7.0, a plugin and README Current of at least 4.7.0, and the README changelog carry a line for #117",
+    "archive-work at least 2.7.0, a plugin and README Current of at least 4.7.0, and the README changelog carry a line for #117",
   );
 
   console.log("\nThe docs (#117)\n");
