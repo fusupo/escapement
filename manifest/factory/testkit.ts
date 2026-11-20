@@ -148,14 +148,23 @@ export type StubState = {
   /** Fail this subcommand without acting. */
   failOn?: string | null;
 };
-export type GhCall = { args: string[]; token: string | null; githubToken: string | null; ghHost: string | null; enterpriseToken: string | null; body?: string };
+export type GhCall = {
+  args: string[];
+  token: string | null;
+  githubToken: string | null;
+  ghHost: string | null;
+  enterpriseToken: string | null;
+  /** GITHUB_ENTERPRISE_TOKEN as the stub saw it (#120): the runner's gh wrapper must drop it, like GH_ENTERPRISE_TOKEN. */
+  githubEnterpriseToken: string | null;
+  body?: string;
+};
 
 /**
  * A fake `gh` on PATH for the factory tests: it serves `api user`,
  * `pr list | create | view` and the PR update the runner makes
  * (`api -X PATCH repos/{repo}/pulls/{n}`, called "edit" for crashAfter and
- * failOn) from a JSON state file, and logs every call (argv and whether
- * GH_TOKEN was set) to a JSONL file. Like a repository where classic
+ * failOn) from a JSON state file, and logs every call (argv, and the
+ * token and host variables it saw) to a JSONL file. Like a repository where classic
  * Projects are deprecated, `pr edit` fails. Nothing leaves the machine.
  */
 export function stubGh(initial: Partial<StubState> = {}) {
@@ -171,7 +180,7 @@ const logPath = ${JSON.stringify(logPath)};
 const args = process.argv.slice(2);
 const st = JSON.parse(fs.readFileSync(statePath, "utf-8"));
 const flag = (n) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : undefined; };
-const entry = { args, token: process.env.GH_TOKEN ?? null, githubToken: process.env.GITHUB_TOKEN ?? null, ghHost: process.env.GH_HOST ?? null, enterpriseToken: process.env.GH_ENTERPRISE_TOKEN ?? null };
+const entry = { args, token: process.env.GH_TOKEN ?? null, githubToken: process.env.GITHUB_TOKEN ?? null, ghHost: process.env.GH_HOST ?? null, enterpriseToken: process.env.GH_ENTERPRISE_TOKEN ?? null, githubEnterpriseToken: process.env.GITHUB_ENTERPRISE_TOKEN ?? null };
 const fields = {};
 args.forEach((a, i) => { if ((a === "-F" || a === "-f") && args[i + 1]) { const [k, ...v] = args[i + 1].split("="); fields[k] = v.join("="); } });
 const bodyFile = flag("--body-file") || (fields.body && fields.body.startsWith("@") ? fields.body.slice(1) : undefined);

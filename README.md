@@ -539,9 +539,15 @@ fusupo
 
 ## Version
 
-**Current:** 4.7.0
+**Current:** 4.7.1
 
 **Changelog:**
+- 4.7.1 (2026-11-19): Reviewer leftovers (#120)
+  - **Push URL.** A remote named after the push URL (`remote."https://github.com/…".pushurl`, else `.url`, in any config scope) is checked before a push too; one that leaves github.com is `not_github` and nothing is pushed
+  - **gh guard per function.** A test checks every function that calls `gh` for a host check earlier in the same function, not just the first call in each file
+  - **Backfill.** `backfill-merge-shas` stopped by a `gh` failure keeps the fills it made and reports the failed run, the runs still waiting and those skipped
+  - **Runner.** `continue --run-budget` on a run without a PR is a `usage` error; the PR section's redo line says whether the head moved or the same head was validated again
+  - **Skills.** `setup-work` 1.4.2 mirrors readiness into the manifest again after the plan critique round (#114); `validate-work` 1.5.1 tightens the manual-check walk-through: Playwright tools for browser steps, a `PLAYWRIGHT_BROWSERS_PATH` diagnosis, Phase 1 ordering, `AskUserQuestion` in its tools (#107)
 - 4.7.0 (2026-11-19): Merge SHAs and reverts for the trust record (#117)
   - **The merge SHA is recorded.** `factory archive --close` stores a merged PR's merge commit on the run and in its `operator_action` event; an abandoned run records none
   - **Backfill.** `factory backfill-merge-shas` fills it in for runs closed as merged before this, from their PRs, as the agent, from the checkout it runs in; idempotent

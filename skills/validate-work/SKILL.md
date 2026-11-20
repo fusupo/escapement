@@ -11,6 +11,7 @@ tools:
   - Task
   - TaskStop
   - PushNotification
+  - AskUserQuestion
 ---
 
 # Validate Work Skill
@@ -47,7 +48,7 @@ bash "$FACTORY" --check && bash "$FACTORY" --json authorization
 ```
 
 - **`--check` fails:** the runner's dependencies aren't installed (`cd manifest && npm ci` in the plugin). Stop.
-- **`.result.matched` is false:** report the reasons and stop. `no_run`: validate-work needs a factory run in this worktree (setup-work's "Approve + authorize run"). `run_halted`: the run is waiting on a human (`factory status '{run_id}'` says why). `contract_changed`: the contract no longer matches its approval; it needs `factory approve` again.
+- **`.result.matched` is false, except for manual checks (below):** report the reasons and stop. A manual check, carried out or recorded, goes ahead without a match. `no_run`: validate-work needs a factory run in this worktree (setup-work's "Approve + authorize run"). `run_halted`: the run is waiting on a human (`factory status '{run_id}'` says why). `contract_changed`: the contract no longer matches its approval; it needs `factory approve` again.
 - **Matched:** note `run_id`, `artifact_dir`, `issue_number`, `next` and `latest_attempt`.
 
 To carry out a manual check, go to **Carrying Out a Manual Check**; to record a manual outcome, go to **Recording a Manual Check**. Both need only a run in this worktree (`.result.run_id`), matched or not: manual outcomes are bookkeeping and work past the deadline, and the runner refuses what it must. When not matched, read `artifact_dir` from `factory status '{run_id}' --json` (`.result.run.artifact_dir`). Otherwise route on `next`:
@@ -144,12 +145,16 @@ The browser is the plugin's bundled Playwright MCP server (`mcp__plugin_escapeme
 2. **Plan the walk-through.** Split the instructions into steps, and note each "Check:" in them. Before starting, tell the operator which steps you will carry out and which you will hand back. A step you can't carry out, because it asks for judgment ("read PLAN.md and judge…"), a device or account you don't have, or anything outside the browser and the shell, is handed back to the operator. Never guess it.
 3. **The directory.** Make `{artifact_dir}/manual/{evidence_id}/` with `bash -c 'mkdir -p …'`. It holds everything you produce for this check. Never write in the worktree: validation needs a clean tree.
 4. **Setup.** Do the setup the instructions name, such as a temp folder or a dev server. Start a long-running process, such as a dev server, in the background with the Bash tool's background option. Note its port or PID and tell the operator. Install nothing and fetch nothing the instructions don't name.
-5. **The steps.** Carry out each step in the browser (navigate, click, type, read the page) or the shell, in order. At each "Check:", report what you saw in a sentence of your own, quoting the page text or command output, not just "ok". When a step is visual, take a screenshot. Take it without a filename (the server writes it outside the worktree and returns its absolute path), then copy it into `{artifact_dir}/manual/{evidence_id}/` as `step-{n}.png` with `bash -c 'cp …'`. A step that fails or can't be done is reported as not done, with what happened. Never guess it, and never retry it differently than written.
-6. **The browser is missing.** If a browser tool fails with an error that the browser `is not installed`, stop the check. Record nothing, stop what you started (step 8), and tell the operator to install it once with the pinned command, then ask again:
-   ```bash
-   npx -y @playwright/mcp@0.0.84 install-browser chrome-for-testing
-   ```
-   Don't pass on the server's own suggestion, which is unpinned.
+5. **The steps.** Carry out each step in the browser (navigate, click, type, read the page) or the shell, in order. Browser steps use the plugin's bundled Playwright tools (`mcp__plugin_escapement_playwright__*`), never a page fetch or `curl`, unless the instructions name the shell for that step: a "Check:" reports what the page shows, not what a fetch returned. At each "Check:", report what you saw in a sentence of your own, quoting the page text or command output, not just "ok". When a step is visual, take a screenshot. Take it without a filename (the server writes it outside the worktree and returns its absolute path), then copy it into `{artifact_dir}/manual/{evidence_id}/` as `step-{n}.png` with `bash -c 'cp …'`. A step that fails or can't be done is reported as not done, with what happened. Never guess it, and never retry it differently than written.
+6. **The browser is missing.** If a browser tool fails with an error that the browser `is not installed`, stop the check. Record nothing, stop what you started (step 8), then find the likely cause before telling the operator what to do:
+   - **`PLAYWRIGHT_BROWSERS_PATH` is set** (`bash -c 'printenv PLAYWRIGHT_BROWSERS_PATH'` prints a path): name it as the likely cause. The server looks for its browser there, so a browser installed elsewhere isn't found. Tell the operator to unset it, or point it at the installed browsers, and ask again. Don't give the install command: the browser may well be installed.
+   - **Otherwise:** tell the operator to install it once with the pinned command, then ask again:
+     ```bash
+     npx -y @playwright/mcp@0.0.84 install-browser chrome-for-testing
+     ```
+     Don't pass on the server's own suggestion, which is unpinned.
+
+   Either way, record nothing.
 7. **Observations.** Write `{artifact_dir}/manual/{evidence_id}/observations.md` with the Write tool. It lists each step, whether it was carried out, what you saw at each "Check:", the screenshot it refers to, and the steps handed back.
 8. **Stop what you started.** Stop every background process from step 4 (TaskStop, or `bash -c 'kill {pid}'`), even when a step failed. Then check that its port is free: `bash -c 'ss -ltn | grep :{port}'` prints nothing. Remove a temp folder you created.
 9. **Ask for the outcome.** Show the observations, the screenshots' paths and the steps handed back, then ask:
@@ -198,7 +203,7 @@ Use `fail` instead of `pass` for a failed check. Single-quote the note (a `'` in
 
 ## Error Handling
 
-- **No run, or not matched:** Phase 1 explains; validate-work changes nothing.
+- **No run, or not matched:** Phase 1 explains; validate-work changes nothing, except for a manual check, which needs only a run.
 - **A runner that dies** (no JSON, exit ≥ 128) during `validate`, `review-input` or `record-review`: Phase 1 again, which resumes from what it left (at most three times).
 - **Lock timeouts** (`lock_timeout`): another factory operation holds the worktree or build lock. Report the holder from `factory status '{run_id}'`; don't retry in a loop.
 - **Past the deadline** (`run_deadline`): the run was escalated. Validation can't start; recording a review in progress and manual outcomes still work.
@@ -221,10 +226,11 @@ Use `fail` instead of `pass` for a failed check. Single-quote the note (a `'` in
 
 ---
 
-**Version:** 1.5.0
+**Version:** 1.5.1
 **Last Updated:** 2026-11-19
 **Maintained By:** Escapement
 **Changelog:**
+- v1.5.1: Manual checks: browser steps use the bundled Playwright tools, never a page fetch or `curl` unless the instructions name the shell; a missing browser names a set `PLAYWRIGHT_BROWSERS_PATH` as the likely cause, else the pinned install command, and records nothing either way; Phase 1 says a missing match stops everything except manual checks; `AskUserQuestion` is in `tools` (#120, from #107)
 - v1.5.0: A failed manual check can be re-entered through do-work: the fix goes onto the same PR and the manual checks are done again on the new head (#97)
 - v1.4.0: After a manual outcome refreshes the PR, report the gate's new recommendation from `.result.gate` and notify the operator whatever it is (PushNotification); a resolved `pass` can turn an earlier `ping` into `auto_merge` (#110)
 - v1.3.0: Carry out a manual check on request: its steps in the plugin's headless browser or the shell, what was seen at each "Check:", screenshots and observations under `{artifact_dir}/manual/{evidence_id}/`, then the operator's outcome recorded with `--assisted` and the attachments; manual checks no longer need a matched authorization (#103)

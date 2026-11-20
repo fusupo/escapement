@@ -30,8 +30,9 @@ export type ReportView = {
    */
   manual_recorded?: ManualView[];
   /**
-   * Checks awaiting a human again (#97): recorded on an earlier head before
-   * a re-entry, passed by `factory pr` so the PR says which to redo.
+   * Checks awaiting a human again (#97): recorded on an earlier attempt,
+   * after the head moved or on the same head validated again, passed by
+   * `factory pr` so the PR says which to redo and why (#120).
    */
   manual_redo?: { evidence_id: string; outcome: string; head_sha: string; attempt: number }[];
 };
@@ -177,8 +178,10 @@ export function renderSection(
         lines.push(`- \`${cell(id)}\`: recorded ${cell(p.outcome)}, ${cell(p.note, 200)} (${cell(p.recorder, 60)}${assistedText(p)}); the report resolves once the other checks are recorded`);
       } else if (redo.has(id)) {
         const r = redo.get(id)!;
+        // Outcomes are bound to the attempt and its head: say which changed (#120).
+        const why = r.head_sha === report.head_sha ? `validated again on the same head (attempt ${report.attempt})` : "the head moved";
         lines.push(
-          `- \`${cell(id)}\`: awaiting a human again: ${cell(r.outcome)} at \`${cell(r.head_sha.slice(0, 7))}\` (attempt ${r.attempt}), the head moved (\`factory record-manual\`)`,
+          `- \`${cell(id)}\`: awaiting a human again: ${cell(r.outcome)} at \`${cell(r.head_sha.slice(0, 7))}\` (attempt ${r.attempt}), ${why} (\`factory record-manual\`)`,
         );
       } else {
         lines.push(`- \`${cell(id)}\`: awaiting a human (\`factory record-manual\`)`);
