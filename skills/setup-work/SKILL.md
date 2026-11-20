@@ -127,7 +127,7 @@ Decide availability only from `check`, never by reading CLAUDE.md yourself: `che
    - Are there linked PRs already?
 
 5. **[factory] Light context (§3.2):**
-   - `CONTEXT_PATH=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/get-context-path.sh" CLAUDE.md)`. The lore file is `{context-path}/PROJECT_LORE.md`, or `PROJECT_LORE.md` in the project root when context-path is empty.
+   - `CONTEXT_PATH=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/get-context-path.sh" --absolute)`. It prints an absolute path resolved from the main checkout, the same from any worktree (#88). The lore file is `{context-path}/PROJECT_LORE.md`, or `PROJECT_LORE.md` in the project root when context-path is empty.
    - **Lore:** pick the entries that bear on the areas this issue touches. Quote them verbatim; don't paraphrase.
    - **Related archives:** in `{context-path}/INDEX.md`, find the issues this one depends on or relates to. Each row names a branch; its archive is `{context-path}/{branch}/archive/README.md` (a manifest work item's `archive_path` points there too). Read its Key Decisions and Lessons Learned. This needs the issue's dependencies, so do it after the issue is fetched.
    - **Manifest work item**, if there is one. Opening the manifest creates it, so first check that it exists, and skip the manifest entirely (here and in Phase 3.5) when it doesn't:
@@ -888,10 +888,11 @@ plan mode to design the implementation approach before we proceed?
 
 ---
 
-**Version:** 1.4.2
+**Version:** 1.4.3
 **Last Updated:** 2026-11-19
 **Maintained By:** Escapement
 **Changelog:**
+- v1.4.3: Read context-path with `get-context-path.sh --absolute`, resolved from the main checkout, so lore and archives are found from any worktree (#88)
 - v1.4.2: Factory path: Phase 3.55 step 5 mirrors the readiness document into the manifest again after the planner's round, as step 3d does, so the manifest never keeps the status from before it; only when the manifest database exists (#120, from #114)
 - v1.4.1: Factory path: one readiness document, `factory check`'s full result plus setup-work's still-open questions, is brought up to date after the Q&A, mirrored into the manifest and given to the plan critic, so `browser_tests`, `tier` and `required_checks` reach the critic; the manifest's cut-down copy no longer overwrites it (#109)
 - v1.4.0: Factory path: `browser_tests` from `factory check` goes to the planner, and in a project with browser tests UI criteria are planned as browser-test evidence, with `manual` kept for what a machine can't judge (#104)

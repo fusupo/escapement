@@ -44,10 +44,10 @@ Verify the environment is ready for dispatch.
 Read the `context-path` setting with the shared parser:
 
 ```bash
-CONTEXT_PATH=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/get-context-path.sh" CLAUDE.md)
+CONTEXT_PATH=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/get-context-path.sh" --absolute)
 ```
 
-It reads only the `## Escapement Settings` section of `CLAUDE.md` and ignores fenced code blocks, so documentation examples never match. Empty output means context-path is not configured. Don't grep CLAUDE.md for the setting yourself (#57).
+With `--absolute` it reads the main checkout's CLAUDE.md and prints an absolute path resolved from the main checkout, so every worktree of the repository, wherever it lives, gets the same directory: use the path as printed (#88). It reads only the `## Escapement Settings` section and ignores fenced code blocks, so documentation examples never match. Empty output means context-path is not configured. Don't grep CLAUDE.md for the setting yourself (#57).
 
 ### 0.2 Verify manifest CLI
 
@@ -162,38 +162,42 @@ For each approved node in the selected parallel groups:
 
 ### 3.1 Compute paths
 
-- **Worktree base**: Same directory as the project root's parent
-- **Worktree path**: `{project-root}/../{repo-name}-worktrees/{branch-name}`
+Worktrees go in one per-user place, never next to the repository (#88). `scripts/worktree.sh` decides the path:
+
+- **Worktree path**: `${XDG_DATA_HOME:-~/.local/share}/escapement/worktrees/{owner}-{repo}/{branch-name}` (a `/` in the name becomes `-`). Print it with `bash "${CLAUDE_PLUGIN_ROOT}/scripts/worktree.sh" path "{branch-name}"`.
 - **Branch name**: Use the convention from the manifest work item, or generate as `{issue_number}-{slugified-name}`
 
 Example for `m#42` named "Fix login flow" in repo `fusupo/escapement`:
-- Worktree: `/home/marc/escapement-worktrees/42-fix-login-flow`
+- Worktree: `~/.local/share/escapement/worktrees/fusupo-escapement/42-fix-login-flow`
 - Branch: `42-fix-login-flow`
+
+A worktree there finds the project's context directory just as the main checkout does: the skills read context-path with `get-context-path.sh --absolute`, which resolves it from the main checkout.
 
 ### 3.2 Create worktree
 
-For each node:
+For each node, from the project root:
 
 ```bash
-# Ensure worktree base directory exists
-mkdir -p "{project-root}/../{repo-name}-worktrees"
-
-# Create worktree with new branch from develop
-git worktree add "{worktree-path}" -b "{branch-name}" origin/develop
+# A new branch from develop; prints the worktree path as its last line
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/worktree.sh" add "{branch-name}" origin/develop -b "{branch-name}"
 ```
 
+Use the last line it prints as `{worktree-path}`. Never create a worktree with `git worktree add` and a path of your own.
+
 **Handle existing worktree/branch:**
-- If worktree already exists at that path, report and skip creation
-- If branch already exists but no worktree, create worktree using existing branch:
+- If the worktree already exists, `worktree.sh add` reports it and prints its path (exit 0): skip creation
+- If branch already exists but no worktree, create the worktree on the existing branch:
   ```bash
-  git worktree add "{worktree-path}" "{branch-name}"
+  bash "${CLAUDE_PLUGIN_ROOT}/scripts/worktree.sh" add "{branch-name}" "{branch-name}"
   ```
 
 ### 3.3 Verify creation
 
 ```bash
-git worktree list
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/worktree.sh" list
 ```
+
+It marks the worktrees it manages with `*`. To remove one (on **Cancel**, say), use `bash "${CLAUDE_PLUGIN_ROOT}/scripts/worktree.sh" remove "{branch-name}"`; git refuses a worktree with uncommitted changes.
 
 Report each created worktree:
 ```
@@ -517,10 +521,11 @@ You can manually start work:
 
 ---
 
-**Version:** 1.0.3
-**Last Updated:** 2026-11-16
+**Version:** 1.1.0
+**Last Updated:** 2026-11-19
 **Maintained By:** Escapement
 **Changelog:**
+- v1.1.0: Create worktrees with `scripts/worktree.sh` in its default per-user location, `${XDG_DATA_HOME:-~/.local/share}/escapement/worktrees/{owner}-{repo}/{branch-name}`, instead of next to the repository; read context-path with `get-context-path.sh --absolute` (#88)
 - v1.0.3: Fetch the issue body with the GitHub MCP tools (`issue_read`), now listed in its tools (#80)
 - v1.0.2: Run the manifest CLI through scripts/manifest.sh from the plugin root, so it works from any project directory (#67)
 - v1.0.1: Read context-path with scripts/get-context-path.sh instead of grep, which also matched documentation examples (#57)

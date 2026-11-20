@@ -9,7 +9,7 @@ Usage:
     python3 migrate-archives.py [--dry-run] [--source DIR] [--context-path DIR]
 
 Examples:
-    # Auto-detect context-path from CLAUDE.md, default source
+    # Auto-detect context-path from the main checkout's CLAUDE.md, default source
     python3 scripts/migrate-archives.py --dry-run
 
     # Explicit paths
@@ -19,6 +19,7 @@ Examples:
 import argparse
 import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -101,9 +102,40 @@ def strip_quotes(s):
     return s
 
 
+def _git(args, cwd):
+    try:
+        out = subprocess.run(
+            ["git", *args], cwd=cwd, capture_output=True, text=True, check=True
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return out or None
+
+
+def main_checkout(project_root):
+    """The main checkout of the repository that holds project_root.
+
+    It is the parent of `git rev-parse --git-common-dir`, so every worktree
+    of a repository shares it (#88). In a bare repository's worktree it is
+    the worktree itself, and outside git it is project_root. Matches
+    scripts/get-context-path.sh --absolute and resolveContextPath in
+    manifest/factory/context.ts.
+    """
+    common = _git(["rev-parse", "--git-common-dir"], project_root)
+    if common is not None:
+        common_dir = (Path(project_root) / common).resolve()
+        if common_dir.name == ".git":
+            return common_dir.parent
+        top = _git(["rev-parse", "--show-toplevel"], project_root)
+        if top is not None:
+            return Path(top).resolve()
+    return Path(project_root).resolve()
+
+
 def detect_context_path(project_root):
-    """Read context-path from the project's CLAUDE.md, resolved against the project root."""
-    claude_md = project_root / "CLAUDE.md"
+    """Read context-path from the main checkout's CLAUDE.md, resolved against the main checkout."""
+    main = main_checkout(project_root)
+    claude_md = main / "CLAUDE.md"
     if not claude_md.exists():
         return None
 
@@ -116,7 +148,7 @@ def detect_context_path(project_root):
     value = parse_context_path(claude_md.read_text(), warn)
     if value is None:
         return None
-    return (project_root / value).resolve()
+    return (main / value).resolve()
 
 
 def derive_branch_name(dirname):

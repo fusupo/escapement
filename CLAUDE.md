@@ -42,7 +42,8 @@ escapement/
 │   └── factory-exec-guard.sh   # PreToolUse hook: a factory run's checks go through `factory exec`
 ├── scripts/             # Reusable utility scripts for skills
 │   ├── convert-session-log.py  # JSONL→markdown session log converter
-│   ├── get-context-path.sh     # Shared context-path parser (section- and fence-aware)
+│   ├── get-context-path.sh     # Shared context-path parser (section- and fence-aware; --absolute resolves from the main checkout)
+│   ├── worktree.sh             # Creates, lists and removes worktrees in one per-user place (never next to the repo)
 │   ├── manifest.sh             # Runs the manifest CLI from any cwd (skills call this, never manifest-cli.ts directly)
 │   ├── factory.sh              # Runs the factory runner CLI from any cwd (docs/FACTORY_CLI.md)
 │   └── slice-session-log.sh    # Writes the transcript part no earlier session log covers
@@ -173,7 +174,7 @@ Projects can redirect development artifacts (session logs, archives) to an exter
 - **context-path**: ../myproject-ctx
 ```
 
-When set, `archive-work`, `stash-artifact` and the manifest skills write to this directory instead of the code repo. The PreCompact hook still writes to the project root, and `archive-work` moves its logs. Only the first `## Escapement Settings` section is read, and fenced blocks such as the example above are ignored. Skills read the setting with `scripts/get-context-path.sh` and never grep for it. See `docs/CONTEXT_PATH.md` for full design details.
+When set, `archive-work`, `stash-artifact` and the manifest skills write to this directory instead of the code repo. A relative value is resolved from the **main checkout** (the parent of `git rev-parse --git-common-dir`), never from the worktree, so every worktree finds the same directory wherever it lives (#88). The PreCompact hook still writes to the project root, and `archive-work` moves its logs. Only the first `## Escapement Settings` section is read, and fenced blocks such as the example above are ignored. Skills read the setting with `scripts/get-context-path.sh --absolute` and never grep for it. Worktrees are created with `scripts/worktree.sh`, in `${XDG_DATA_HOME:-~/.local/share}/escapement/worktrees/{owner}-{repo}/{name}`. See `docs/CONTEXT_PATH.md` for full design details.
 
 ### Scratchpad Files
 
@@ -363,4 +364,4 @@ These make Escapement a factory project itself (#65): `verify` runs every suite 
 
 ## Project Context
 
-@../escapement-ctx/PROJECT_LORE.md
+@~/escapement-ctx/PROJECT_LORE.md

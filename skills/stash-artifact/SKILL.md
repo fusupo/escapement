@@ -42,9 +42,9 @@ This skill activates when the user says things like:
 
 1. **Read CLAUDE.md** for `context-path` setting:
    ```bash
-   CONTEXT_PATH=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/get-context-path.sh" CLAUDE.md)
+   CONTEXT_PATH=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/get-context-path.sh" --absolute)
    ```
-   The parser reads only the `## Escapement Settings` section and ignores fenced code blocks, so documentation examples never match. Empty output means context-path is not configured. Don't grep or sed CLAUDE.md for the setting yourself (#57).
+   With `--absolute` it reads the main checkout's CLAUDE.md and prints an absolute path resolved from the main checkout, so every worktree of the repository, wherever it lives, gets the same directory: use the path as printed (#88). The parser reads only the `## Escapement Settings` section and ignores fenced code blocks, so documentation examples never match. Empty output means context-path is not configured. Don't grep or sed CLAUDE.md for the setting yourself (#57).
 
 2. **If context-path NOT configured:**
    ```
@@ -52,8 +52,8 @@ This skill activates when the user says things like:
      question: "No context-path configured. Where should artifacts be saved?"
      header: "Context Path"
      options:
-       - "Set up ../$(basename $PWD)-ctx"
-         description: "Create sibling context directory with default name"
+       - "Set up ../{project-name}-ctx"
+         description: "Create a context directory with the default name next to the main checkout"
        - "Specify custom path"
          description: "Choose a different location"
        - "Cancel"
@@ -74,7 +74,7 @@ This skill activates when the user says things like:
      ```
 
 3. **If context-path configured:**
-   - Resolve relative to project root
+   - Use the path as printed: it is already absolute
    - Determine current branch
    - Target: `{context-path}/{branch}/`
 
@@ -120,7 +120,7 @@ The artifact can come from several places:
 
 1. **Create target directory:**
    ```bash
-   CONTEXT_PATH=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/get-context-path.sh" CLAUDE.md)
+   CONTEXT_PATH=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/get-context-path.sh" --absolute)
    BRANCH=$(git branch --show-current)
    TYPE="scripts"  # or notes, artifacts
    TARGET_DIR="$CONTEXT_PATH/$BRANCH/$TYPE"
@@ -258,9 +258,10 @@ File already exists: {path}
 
 ---
 
-**Version:** 1.0.1
-**Last Updated:** 2026-11-15
+**Version:** 1.0.2
+**Last Updated:** 2026-11-19
 **Maintained By:** Escapement
 **Changelog:**
+- v1.0.2: Read context-path with `get-context-path.sh --absolute`, resolved from the main checkout, so artifacts land in the same context directory from any worktree (#88)
 - v1.0.1: Read context-path with scripts/get-context-path.sh, which ignores examples in fenced blocks and outside `## Escapement Settings` (#57)
 - v1.0.0: Initial skill for context-path artifact stashing
