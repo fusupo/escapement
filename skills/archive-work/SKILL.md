@@ -101,7 +101,7 @@ The PreCompact hook only writes session logs at compaction, so the conversation 
    - every entry before that is on a detached `HEAD` or the base branch, as setup-work's often are;
    - and those earlier entries are in this worktree: its root or a directory below it, never the main checkout or another worktree.
 
-   Any other named branch, `HEAD` or base-branch entries after the issue branch started, or no entry on the issue branch, gives `ask`. On the base branch itself or a detached HEAD (archiving from `develop` after a merge, say) there is no issue branch to anchor on, so the old rule applies: `include` only when every entry is on the current branch. #89 can run the same script on each session's slice.
+   Any other named branch, `HEAD` or base-branch entries after the issue branch started, or no entry on the issue branch, gives `ask`. On the base branch itself or a detached HEAD (archiving from `develop` after a merge, say) there is no issue branch to anchor on, so the old rule applies: `include` only when every entry is on the current branch. Phase 1.6 runs the same script on the slice of every other session that worked on the issue (#89).
 
 3. **Include or leave it,** from the script's `decision`:
    - **`include`:** include it without asking. Run `bash "$SLICER" commit "$TRANSCRIPT" "$END"` and report `Captured session tail: {LINES} lines -> {FILE}`.
@@ -122,6 +122,66 @@ The PreCompact hook only writes session logs at compaction, so the conversation 
 
 The rest of this archive-work run lands in the session's next log.
 
+### Phase 1.6: Capture Other Sessions
+
+Phase 1.5 saves only this session. Other sessions that worked on the issue, such as a factory run in its own worktree, are only archived if they were compacted, and then only when their logs are in this root. Find and save them too, so compacting first is optional (#89). Run this **after** Phase 1.5 and **before** Phase 2.
+
+`scripts/find-session-transcripts.py` finds them: the Claude Code transcripts of the main checkout, every worktree in `git worktree list`, the run's `worktree_path` and the worktrees `scripts/worktree.sh` keeps, removed ones included. A transcript is the issue's when it ran on the issue branch, or in the run's worktree during the run. It slices each with `slice-session-log.sh` and gates each slice with `session-tail-gate.py`, as Phase 1.5 does. Session logs the PreCompact hook wrote into another worktree's root are gated where they are, and moved here (`slice-session-log.sh adopt`) only when included. Subagent transcripts are never archived: only each session's main conversation.
+
+1. **Block A: find and slice the sessions** without moving any cursor. It reads the run (the scratchpad's `**Run:**` line) and the issue branch (the run's branch, else the scratchpad's `**Feature branch:**`, else the current branch) itself:
+   ```bash
+   PLUGIN="${CLAUDE_PLUGIN_ROOT}"
+   SCRATCHPAD="SCRATCHPAD_{issue_number}.md"
+   BASE=$(bash "$PLUGIN/scripts/factory.sh" --json check 2>/dev/null |
+     python3 -I -c 'import json, sys; print(json.load(sys.stdin)["result"]["target_ref"] or "")' 2>/dev/null)
+   if [ -z "$BASE" ]; then
+     if git rev-parse --verify --quiet refs/remotes/origin/develop >/dev/null; then BASE=develop; else BASE=main; fi
+   fi
+   RUN_ID=$(sed -n 's/^- \*\*Run:\*\* \([^ ]*\).*/\1/p' "$SCRATCHPAD" 2>/dev/null | head -n 1)
+   STATUS=""
+   [ -n "$RUN_ID" ] && STATUS=$(bash "$PLUGIN/scripts/factory.sh" --json status "$RUN_ID" 2>/dev/null)
+   field() {
+     printf '%s' "$STATUS" | python3 -I -c 'import json, sys; print(json.load(sys.stdin)["result"]["run"].get(sys.argv[1]) or "")' "$1" 2>/dev/null
+   }
+   ISSUE_BRANCH=$(field branch)
+   [ -n "$ISSUE_BRANCH" ] || ISSUE_BRANCH=$(sed -n 's/^- \*\*Feature branch:\*\* \([^ ]*\).*/\1/p' "$SCRATCHPAD" 2>/dev/null | head -n 1)
+   [ -n "$ISSUE_BRANCH" ] || ISSUE_BRANCH=$(git branch --show-current)
+   if [ -z "$ISSUE_BRANCH" ] || [ "$ISSUE_BRANCH" = "$BASE" ]; then
+     echo "Other sessions not searched: no issue branch"
+   else
+     set -- --branch "$ISSUE_BRANCH" --base "$BASE" --exclude-session "${CLAUDE_CODE_SESSION_ID:-}"
+     MANAGED=$(bash "$PLUGIN/scripts/worktree.sh" path _ 2>/dev/null) && set -- "$@" --managed-base "$(dirname "$MANAGED")"
+     WT=$(field worktree_path); [ -n "$WT" ] && set -- "$@" --extra-worktree "$WT"
+     SINCE=$(field started_at); [ -n "$SINCE" ] && set -- "$@" --since "$SINCE"
+     UNTIL=$(field ended_at); [ -n "$UNTIL" ] && set -- "$@" --until "$UNTIL"
+     python3 -I "$PLUGIN/scripts/find-session-transcripts.py" prepare "$@"
+   fi
+   ```
+   - `Other sessions not searched: no issue branch`: there is no branch to look for (archiving on the base branch with no run and no `**Feature branch:**`). Go on to Phase 2.
+   - Otherwise it prints the pending list, also kept in the git dir as `escapement-session-pending.json` for block B. Each entry has a `key`, its `kind` (`slice`, or `hook_log` for a log in another worktree), the `root` it ran in, `lines`, `size`, `first` and `last` timestamps, `branches` (entries per branch) and the gate's `decision`. Slices are already written as `SESSION_LOG_{N}.jsonl` here, numbered after any existing log.
+   - Anything under `errors` (a slice that failed): report it in one line each and go on. That session's cursor hasn't moved, so nothing is lost.
+
+2. **Ask once about the undecided ones.** Entries whose `decision` is `include` are this issue's work and need no question. If any entry's `decision` is `ask` (another branch, base-branch work after the issue branch, or a directory outside its worktree), ask about all of them in one `AskUserQuestion` call, one question per entry, up to four per call:
+   ```
+   AskUserQuestion:
+     questions:   # one per `ask` entry
+       - question: "{Session | Hook log} {key} ({root}, {lines} lines, {size}, {first} to {last}) ran on branches {branch: count, ...}. Include it in this archive?"
+         header: "{key}"
+         multiSelect: false
+         options:
+           - label: "Include in this archive"
+             description: "Archive it with this work"
+           - label: "Leave for a later log"
+             description: "A slice is removed and its cursor stays put; a hook log stays in its worktree"
+   ```
+   With more than four, ask the rest the same way in further calls. With no `ask` entry, don't ask.
+
+3. **Block B: keep what was included.** Always run it, even with nothing selected: it is what commits the cursors of the `include` entries:
+   ```bash
+   python3 -I "${CLAUDE_PLUGIN_ROOT}/scripts/find-session-transcripts.py" finish --include '{keys the operator included, comma-separated}'
+   ```
+   It commits the cursor of each kept slice, removes each declined slice (its cursor stays, so a later log picks it up), adopts each kept hook log into this root under the next free number, and leaves each declined hook log where it is. It prints one line per entry, such as `SESSION_LOG_4 <- session 3ed564b9 (/home/me/run-wt, lines 1-1631)` or `declined: session 1a2b3c4d (…), left for a later log`. Keep those lines for Phase 4's Sessions table and Phase 7.
+
 ### Phase 2: Detect Artifacts (Parallel)
 
 **Execute these searches in parallel** for faster detection:
@@ -133,7 +193,7 @@ The rest of this archive-work run lands in the session's next log.
 2. **Find Session Logs:**
    - `Glob: SESSION_LOG_*.jsonl` in project root (current format — raw JSONL transcripts)
    - `Glob: SESSION_LOG_*.md` in project root (legacy format — pre-converted markdown)
-   - These are created by the PreCompact hook at each compaction, and by Phase 1.5 for the session tail
+   - These are created by the PreCompact hook at each compaction, by Phase 1.5 for the session tail, and by Phase 1.6 for the other sessions that worked on the issue (slices and adopted hook logs)
    - Each covers only the conversation since the previous log, not the whole session
    - Associate with scratchpad (same issue context)
 
@@ -268,6 +328,13 @@ Because each log covers only its own stretch of the session, the metadata Timest
 
    ## Lessons Learned
    {Any notable insights from Work Log}
+
+   ## Sessions
+   {One row per session log, from Phase 1.5 and Phase 1.6's lines; leave out when there are none}
+
+   | Log | Session | Worktree | Lines |
+   |---|---|---|---|
+   | SESSION_LOG_{N} | {session id, first 8} | {root} | {START}-{END}, or "hook log" |
    ```
 
 3. **Move Files:**
@@ -593,6 +660,10 @@ Files archived (to context directory):
    - SCRATCHPAD_{issue_number}.md
    - SESSION_LOG_*.md (if any existed)
    - README.md (summary generated)
+
+Sessions (Phase 1.6, if any):
+   - SESSION_LOG_{N} <- session {id} ({root}, lines {START}-{END} | hook log)
+   - declined: {session or hook log} ({root}), left for a later log
 
 Factory run (if any):
    - {run_id}: closed ({merged|abandoned}; operator action: {operator_action}; merge: {merge_sha}), or left open
