@@ -90,6 +90,28 @@ export function projectContext(projectRoot: string | undefined, cwd: string = pr
   return { worktreePath, mainRoot, repo: repoName(mainRoot), branch: currentBranch(worktreePath) };
 }
 
+/**
+ * The context directory of the repository that holds `worktreePath`, as an
+ * absolute path, or null when its main checkout's CLAUDE.md sets no
+ * context-path. The setting is read from the main checkout's CLAUDE.md and
+ * resolved against the main checkout, never the worktree, so every worktree
+ * finds the same directory wherever it lives (#88). Outside git the
+ * directory itself stands in for the main checkout.
+ * `scripts/get-context-path.sh --absolute` does the same for the skills,
+ * and `detect_context_path` in `scripts/migrate-archives.py` for that script.
+ */
+export function resolveContextPath(worktreePath: string): string | null {
+  let mainRoot: string;
+  try {
+    mainRoot = mainRepoRoot(worktreePath);
+  } catch {
+    mainRoot = worktreePath;
+  }
+  const claudeMd = join(mainRoot, "CLAUDE.md");
+  const contextPath = existsSync(claudeMd) ? parseContextPath(readFileSync(claudeMd, "utf-8")) : null;
+  return contextPath ? resolve(mainRoot, contextPath) : null;
+}
+
 export type ArtifactSource = "flag" | "context-path" | "in-repo";
 
 /**
@@ -111,10 +133,9 @@ export function resolveArtifactDir(opts: {
   if (opts.artifactDir) {
     return { dir: resolve(opts.cwd ?? process.cwd(), opts.artifactDir, runId), source: "flag" };
   }
-  const claudeMd = join(ctx.mainRoot, "CLAUDE.md");
-  const contextPath = existsSync(claudeMd) ? parseContextPath(readFileSync(claudeMd, "utf-8")) : null;
-  if (contextPath) {
-    return { dir: resolve(ctx.mainRoot, contextPath, ctx.branch, "runs", runId), source: "context-path" };
+  const contextDir = resolveContextPath(ctx.worktreePath);
+  if (contextDir) {
+    return { dir: resolve(contextDir, ctx.branch, "runs", runId), source: "context-path" };
   }
   ensureExcluded(ctx.mainRoot, "/.escapement/");
   return { dir: resolve(ctx.mainRoot, ".escapement", "runs", ctx.branch, runId), source: "in-repo" };
