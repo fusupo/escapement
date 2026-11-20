@@ -441,7 +441,7 @@ interface DispatchPlan {
 
 **Process for each node in a parallel group**:
 
-1. Create a git worktree: `git worktree add "../sr-work-${node_id}" develop-ts`
+1. Create a git worktree with `scripts/worktree.sh add "sr-work-${node_id}" develop-ts`, which puts it in the per-user worktree location, never next to the repository (#88)
 2. Create a feature branch in the worktree
 3. Generate or invoke `setup-work` to create a scratchpad
 4. Launch a Claude session with:
@@ -503,7 +503,7 @@ Files you must NOT touch (owned by parallel agents):
 3. File set reconciliation: compare predicted vs actual files from the merged PR
 4. Recompute frontier: new nodes may now be unblocked
 5. If newly unblocked nodes exist, report them and optionally trigger a new dispatch cycle
-6. Clean up worktree: `git worktree remove "../sr-work-${node_id}"`
+6. Clean up worktree: `scripts/worktree.sh remove "sr-work-${node_id}"`
 
 ---
 

@@ -331,7 +331,7 @@ The factory keys are read by the runner, which applies the same section and fenc
 
 ### Context Path
 
-By default, development artifacts (session logs, archives) live inside your code repo. For larger projects this causes search pollution, repo bloat and noisy diffs. `context-path` redirects them to a directory outside the repo, usually a sibling:
+By default, development artifacts (session logs, archives) live inside your code repo. For larger projects this causes search pollution, repo bloat and noisy diffs. `context-path` redirects them to a directory outside the repo, usually a sibling of the main checkout. A relative value is resolved from the main checkout, never from a worktree, so every worktree of the repository finds the same directory wherever it lives (#88):
 
 - **`archive-work`** archives scratchpads and session logs to `{context-path}/{branch}/archive/` instead of `docs/dev/cc-archive/`, and keeps `{context-path}/INDEX.md`, a chronological table of all archived work across branches.
 - **`stash-artifact`** saves ad hoc scripts and notes to `{context-path}/{branch}/scripts/` or `{context-path}/{branch}/notes/`.
@@ -339,6 +339,8 @@ By default, development artifacts (session logs, archives) live inside your code
 - **`setup-work`** reads `{context-path}/PROJECT_LORE.md` and related archives as context.
 
 The PreCompact hook always writes `SESSION_LOG_{N}.jsonl` to the project root, alongside the scratchpad, and `archive-work` moves the logs at archive time. The manifest database is never under context-path (see [Layer 3](#layer-3-the-manifest)).
+
+Worktrees don't go next to the repository either: `scripts/worktree.sh` (and `manifest-dispatch`, which uses it) creates them in one per-user place, `${XDG_DATA_HOME:-~/.local/share}/escapement/worktrees/{owner}-{repo}/{name}`.
 
 The context directory is plain markdown that can be git-tracked and works well with tools like Obsidian. See [docs/CONTEXT_PATH.md](docs/CONTEXT_PATH.md) for the full design.
 
@@ -387,7 +389,8 @@ escapement/
 ├── scripts/
 │   ├── run-tests.sh           # Runs every test suite (Escapement's own verify)
 │   ├── convert-session-log.py # JSONL→markdown session log converter
-│   ├── get-context-path.sh    # Shared context-path parser for skills
+│   ├── get-context-path.sh    # Shared context-path parser for skills (--absolute: resolved from the main checkout)
+│   ├── worktree.sh            # Worktrees in one per-user place, never next to the repo
 │   ├── manifest.sh            # Runs the manifest CLI from any project directory
 │   ├── factory.sh             # Runs the factory CLI from any project directory
 │   ├── migrate-archives.py    # Migrate in-repo archives to context-path
@@ -427,12 +430,14 @@ Never run suites in parallel. `manifest/test-readme.ts` keeps this README honest
 
 ### Running the Factory on Escapement
 
-Escapement is a factory project itself. A run on Escapement loads the plugin from a pinned checkout, never from the checkout being changed, so the run's own edits to skills or the runner can't change them mid-run:
+Escapement is a factory project itself. A run on Escapement loads the plugin from a pinned checkout, never from the checkout being changed, so the run's own edits to skills or the runner can't change them mid-run. Create both with `scripts/worktree.sh`, which puts them in the default worktree location, `${XDG_DATA_HOME:-~/.local/share}/escapement/worktrees/fusupo-escapement/`, and runs `npm ci --prefix manifest` in each:
 
 ```bash
-git worktree add --detach ../escapement-plugin develop
-claude --plugin-dir ../escapement-plugin
+bash scripts/worktree.sh add --detach escapement-plugin develop
+claude --plugin-dir "$(bash scripts/worktree.sh path escapement-plugin)"
 ```
+
+The run itself happens in another worktree made the same way (`bash scripts/worktree.sh add {branch} origin/develop -b {branch}`). Move the pin only deliberately, between steps.
 
 ### Adding a New Skill
 

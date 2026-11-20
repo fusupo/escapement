@@ -37,7 +37,7 @@ A run never needs a row in `work_items`.
 2. The project's context-path, read from the main checkout's CLAUDE.md: `{context-path}/{branch}/runs/{run_id}/`
 3. Otherwise, in the main checkout: `.escapement/runs/{branch}/{run_id}/`. `start` adds `/.escapement/` to the repository's `.git/info/exclude`, so the tree stays clean.
 
-The main checkout is used even when the run is in a linked worktree, so artifacts survive `git worktree remove`.
+The main checkout is used even when the run is in a linked worktree, so artifacts survive `git worktree remove`. A relative context-path is resolved from the main checkout too (`resolveContextPath`), the same rule as the skills' `get-context-path.sh --absolute`, so the run's worktree can live anywhere (#88).
 
 A run directory holds:
 

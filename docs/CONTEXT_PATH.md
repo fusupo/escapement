@@ -35,16 +35,18 @@ Projects opt in by adding an `Escapement Settings` section:
 - **context-path**: ../myproject-ctx
 ```
 
-The path is relative to the project root. Typical values:
-- `../myproject-ctx` (sibling directory, most common)
-- `~/dev-context/myproject` (absolute path to shared context location)
+A relative path is resolved against the **main checkout** of the repository (see [Worktrees](#worktrees)). Typical values:
+- `../myproject-ctx` (sibling of the main checkout, most common)
+- `/home/me/dev-context/myproject` (absolute path to a shared context location)
+
+A leading `~` is not expanded: `~/dev-context/myproject` would be read as a relative path. Write the absolute path instead.
 
 #### How the setting is read
 
 Everything that needs the setting reads it with the same rules:
-- `scripts/get-context-path.sh` for skills
-- `parseContextPath` in `manifest/init.ts`
-- `parse_context_path` in `scripts/migrate-archives.py`
+- `scripts/get-context-path.sh` for skills (`--absolute` also resolves it, below)
+- `parseContextPath` in `manifest/init.ts` (`resolveContextPath` in `manifest/factory/context.ts` resolves it for the runner)
+- `parse_context_path` in `scripts/migrate-archives.py` (`detect_context_path` resolves it)
 
 The rules are:
 
@@ -54,16 +56,34 @@ The rules are:
 - A `context-path` line outside the section is ignored, and a warning goes to stderr.
 - If there is no setting, the parser prints nothing, and in-repo mode applies.
 
-Skills run the parser like this:
+Skills run the parser like this, and use the path as printed:
 
 ```bash
-CONTEXT_PATH=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/get-context-path.sh" CLAUDE.md)
+CONTEXT_PATH=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/get-context-path.sh" --absolute)
 ```
+
+With `--absolute`, the script reads the main checkout's CLAUDE.md and prints an absolute path resolved from the main checkout. Without it, it prints the value as written from `./CLAUDE.md` (or a file it is given).
 
 The shared cases in `scripts/fixtures/context-path.md` describe the expected behavior, and all three implementations are tested against them:
 - `scripts/test-get-context-path.sh`
 - `manifest/test-init.ts`
 - `scripts/test-migrate-archives.py`
+
+The fixture's worktree cases run against a real repository with a linked worktree outside the repository's parent directory: `scripts/test-context-worktree.sh`, `manifest/test-context-worktree.ts` and `scripts/test-context-worktree.py`.
+
+#### Worktrees
+
+A relative context-path is resolved from the **main checkout**: the parent of `git rev-parse --git-common-dir`. In a bare repository's worktree, the worktree itself stands in, and outside git, the current directory. All three resolvers (the script with `--absolute`, the runner, and `migrate-archives.py`) follow this rule, so a skill, a factory run and the migration script find the same context directory from the main checkout, any subdirectory, or any worktree wherever it lives (#88). The setting is read from the main checkout's CLAUDE.md, so a branch's own copy can't send a worktree somewhere else.
+
+Worktrees therefore don't have to sit next to the repository. Escapement creates them in one per-user place with `scripts/worktree.sh`:
+
+```
+${XDG_DATA_HOME:-~/.local/share}/escapement/worktrees/{owner}-{repo}/{name}
+```
+
+`{owner}-{repo}` comes from the main checkout's origin URL, or is the main checkout's directory name. `worktree.sh add|path|list|remove` creates, prints, lists and removes them; `manifest-dispatch` uses it. When the worktree is Escapement itself, `add` also runs `npm ci --prefix manifest`.
+
+**Imports in CLAUDE.md.** Claude Code resolves an `@` import relative to the file that holds it, and each worktree has its own copy of CLAUDE.md. A relative import of a context file, such as `@../myproject-ctx/PROJECT_LORE.md`, only works from a worktree next to the main checkout. Import it by an absolute or home-relative path instead (`@~/myproject-ctx/PROJECT_LORE.md`), as Escapement's own CLAUDE.md does.
 
 ### 2. Context Directory Structure
 

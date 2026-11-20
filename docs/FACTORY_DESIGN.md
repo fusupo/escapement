@@ -274,6 +274,8 @@ Nothing the runner produces is written into the worktree, so validation can requ
 
 *As built (#59):* `--artifact-dir {dir}` puts a run in `{dir}/{run_id}/`. Without it and without a context-path, artifacts go in the main checkout at `.escapement/runs/{branch}/{run_id}/`, the same in-repo convention `archive-work` follows. `factory start` adds `/.escapement/` to `.git/info/exclude`, so the tree stays clean and the artifacts survive `git worktree remove`.
 
+*As built (#88):* the context-path is read from the main checkout's CLAUDE.md and resolved against the main checkout by `resolveContextPath`, which the skills match with `scripts/get-context-path.sh --absolute`. A run's worktree can therefore live anywhere; Escapement creates worktrees with `scripts/worktree.sh`, in `${XDG_DATA_HOME:-~/.local/share}/escapement/worktrees/{owner}-{repo}/{name}`.
+
 Existing worktree artifacts (`SCRATCHPAD_*.md`, `SESSION_LOG_*`, `AGENT_CONSTRAINTS.md`) are excluded via the worktree's `.git/info/exclude` — added by `setup-work`, no change to the project's `.gitignore`.
 
 ### 4.3 Identity and preconditions
