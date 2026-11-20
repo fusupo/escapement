@@ -18,6 +18,7 @@ tools:
   - Grep
   - AskUserQuestion
   - Skill
+  - mcp__github__*
 ---
 
 # Archive Work Skill
@@ -151,6 +152,18 @@ The rest of this archive-work run lands in the session's next log.
    bash "$FACTORY" --json status '{run_id}'
    ```
    Note `.result.run.artifact_dir`, `.result.run.state` and `.result.run.pr_number` for Phase 6.5. Single-quote the run ID: it contains `#`. No section, or `status` fails (`no_such_run`), means there's no run to archive.
+
+   **Is the run settled?** (#123) When `.result.run.state` is `pr_open` and `.result.authorization` is not null, read the run's PR as the agent with the GitHub MCP tools, owner and repo from `.result.run.repo` (`owner/repo`):
+   ```
+   mcp__github__pull_request_read:
+     method: get
+     owner: {owner}
+     repo: {repo}
+     pullNumber: {pr_number}
+   ```
+   When it reports the PR merged (`merged` is true, or `merged_at` is set), note `RUN_SETTLED`: the run's outcome is decided, and archiving and closing it are covered by its authorization, so Phase 5 doesn't ask. Anything else leaves it unset: no run, another state, no active authorization, a PR still open or closed unmerged, or a read that fails.
+
+   This reads `status`'s `.result.authorization`, the run's active authorization, which only closing the run, revoking it or a new approval ends. It is not `factory authorization`, the matcher do-work and commit-changes use: that one refuses past the run deadline, which a merge usually comes after, and from any other branch or checkout, where an archive after a merge usually runs. The runner still reads the PR itself when Phase 6.5 closes the run, and records the outcome from that.
 
 **After parallel detection, verify completion:**
 - Check if scratchpad tasks are all complete
@@ -411,6 +424,10 @@ If all of the following are true, skip the retro entirely:
 In that case, there is nothing to reconcile and unlikely genuine lore to capture.
 
 ### Phase 5: Confirm with User
+
+**A settled run (`RUN_SETTLED`, Phase 2 step 5): don't ask.** Its PR has merged and its authorization is active, so archiving and closing it are covered. Show the destination info below and the factory-run preview, say in one line `Not asking: PR #{pr_number} of factory run {run_id} has merged`, and go on as **Yes, archive and commit**: Phase 6, then Phase 6.5 copies the run's artifacts and closes it with `--close`.
+
+**Otherwise ask, as always:** no factory run, a run with no active authorization, a PR still open, a PR closed unmerged, or a PR read that failed.
 
 ```
 AskUserQuestion:
