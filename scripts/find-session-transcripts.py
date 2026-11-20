@@ -91,6 +91,8 @@ SLICE_LINE = re.compile(r"^FILE=(.*) START=(\d+) END=(\d+) LINES=(\d+)$")
 
 def load_gate_rules():
     """norm and in_worktree from session-tail-gate.py, so both scripts share one rule."""
+    # No __pycache__ next to the scripts: it would dirty the checkout.
+    sys.dont_write_bytecode = True
     spec = importlib.util.spec_from_file_location("session_tail_gate", os.path.join(HERE, "session-tail-gate.py"))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
