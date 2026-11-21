@@ -19,6 +19,9 @@ Options for find and prepare:
                          (repeatable)
   --managed-base DIR     the directory scripts/worktree.sh keeps this
                          repository's worktrees in
+  --runs-json FILE|-     `factory.sh --json status --all`'s output, from a
+                         file or stdin: every recorded run's worktree_path
+                         for this repository is one of its worktrees (#129)
   --since TS --until TS  the run's started_at and ended_at
   --claude-dir DIR       default ${CLAUDE_CONFIG_DIR:-~/.claude}
   --outdir DIR           where slices go (default: the current directory)
@@ -30,13 +33,22 @@ Where transcripts are looked for: Claude Code keeps a session's transcript
 in {claude-dir}/projects/{encoded cwd}/{session id}.jsonl, where the encoded
 cwd is the path with every character that isn't a letter or digit turned
 into "-" (so "/.local" becomes "--local"). A name over 200 characters is
-cut and given a suffix, so a long name is matched by its first 200. The
-directories searched are those of the main checkout, every worktree in `git
-worktree list`, and every --extra-worktree, plus every directory whose name
-starts with the encoded --managed-base or main checkout path and a "-":
-transcripts outlive their worktrees, and legacy worktrees' paths start with
-the main checkout's path. Only the *.jsonl files directly inside are read;
-subagent transcripts, in subdirectories, are never archived.
+cut and given a suffix, so a long name is matched by its first 200.
+
+Only this repository's directories are searched (#129). Its worktrees are
+the main checkout, every worktree in `git worktree list` (prunable ones
+included), every --extra-worktree, and every recorded run's worktree_path
+for this repository (--runs-json): transcripts outlive their worktrees. The
+directories searched are those worktrees' own, plus every directory whose
+name starts with the encoded --managed-base and a "-", for removed managed
+worktrees. Because the encoding is lossy ("/" and "-" both become "-"), a
+name can't tell this repository's worktrees from a sibling repository's
+(`worktrees/o-r/foo` and `worktrees/o-r-foo` encode the same), so a
+transcript is kept only when its first recorded cwd is at or below one of
+those worktrees or --managed-base. A removed worktree nothing records (a
+pruned, pre-#88 sibling) is no longer found. Only the *.jsonl files
+directly inside are read; subagent transcripts, in subdirectories, are
+never archived.
 
 Which are kept: a transcript is the issue's when an entry ran on the issue
 branch (gitBranch == B), or when an entry ran in an issue worktree (a listed
@@ -156,6 +168,30 @@ def worktrees():
     return items
 
 
+def repo_name(main):
+    """owner/name from main's origin URL, else main's basename.
+
+    The same rule as repoName in manifest/factory/context.ts, which names
+    the runs' repo: keep the two in step.
+    """
+    r = subprocess.run(["git", "-C", main, "config", "--get", "remote.origin.url"], capture_output=True, text=True)
+    url = r.stdout.strip() if r.returncode == 0 else ""
+    m = re.search(r"[:/]([^/:]+)/([^/]+?)(?:\.git)?/?$", url) if url else None
+    return f"{m.group(1)}/{m.group(2)}" if m else os.path.basename(os.path.normpath(main))
+
+
+def recorded_worktrees(source, repo):
+    """worktree_path of every run of `repo` in `factory status --all` JSON (a path or "-")."""
+    if not source:
+        return []
+    try:
+        text = sys.stdin.read() if source == "-" else open(source, encoding="utf-8").read()
+        runs = (json.loads(text).get("result") or {}).get("runs") or []
+    except (OSError, ValueError, AttributeError):
+        return []
+    return [r["worktree_path"] for r in runs if isinstance(r, dict) and r.get("repo") == repo and r.get("worktree_path")]
+
+
 def pending_default():
     path = git("rev-parse", "--git-path", PENDING_NAME)
     return os.path.abspath(path)
@@ -272,11 +308,14 @@ def find(args):
     here = norm(git("rev-parse", "--show-toplevel"))
     extra = [p for p in args.extra_worktree if p]
     issue_roots = [w["path"] for w in listed[1:] if w["branch"] == args.branch] + extra
-    known = [w["path"] for w in listed] + extra
+    recorded = recorded_worktrees(args.runs_json, repo_name(main))
+    known = [w["path"] for w in listed] + extra + recorded
+    # A kept transcript must have started in one of these (#129)
+    allowed = known + ([args.managed_base] if args.managed_base else [])
 
     exact = set(known)
     exact |= {os.path.realpath(p) for p in known if os.path.exists(p)}
-    prefixes = [main, args.managed_base]
+    prefixes = [args.managed_base]
     projects = os.path.join(args.claude_dir, "projects")
 
     sessions = []
@@ -291,6 +330,8 @@ def find(args):
             if not info:
                 continue
             cwd = info.pop("first_cwd")
+            if not cwd or not any(at_or_below(cwd, r) for r in allowed):
+                continue
             sessions.append({
                 "session_id": session_id,
                 "transcript": transcript,
@@ -463,6 +504,7 @@ def main():
         p.add_argument("--exclude-session", default="")
         p.add_argument("--extra-worktree", action="append", default=[])
         p.add_argument("--managed-base", default="")
+        p.add_argument("--runs-json", default="")
         p.add_argument("--since", default="")
         p.add_argument("--until", default="")
         p.add_argument("--claude-dir", default=os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"))
