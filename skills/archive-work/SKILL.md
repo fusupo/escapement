@@ -126,7 +126,7 @@ The rest of this archive-work run lands in the session's next log.
 
 Phase 1.5 saves only this session. Other sessions that worked on the issue, such as a factory run in its own worktree, are only archived if they were compacted, and then only when their logs are in this root. Find and save them too, so compacting first is optional (#89). Run this **after** Phase 1.5 and **before** Phase 2.
 
-`scripts/find-session-transcripts.py` finds them: the Claude Code transcripts of the main checkout, every worktree in `git worktree list`, the run's `worktree_path` and the worktrees `scripts/worktree.sh` keeps, removed ones included. A transcript is the issue's when it ran on the issue branch, or in the run's worktree during the run. It slices each with `slice-session-log.sh` and gates each slice with `session-tail-gate.py`, as Phase 1.5 does. Session logs the PreCompact hook wrote into another worktree's root are gated where they are, and moved here (`slice-session-log.sh adopt`) only when included. Subagent transcripts are never archived: only each session's main conversation.
+`scripts/find-session-transcripts.py` finds them: the Claude Code transcripts of this repository's worktrees only, the main checkout, every worktree in `git worktree list`, every factory run recorded for this repository (`factory status --all`) and the worktrees `scripts/worktree.sh` keeps, removed ones included. A transcript counts only when it started in one of them, so a sibling repository whose path starts the same way is left out (#129). It is the issue's when it ran on the issue branch, or in the run's worktree during the run. It slices each with `slice-session-log.sh` and gates each slice with `session-tail-gate.py`, as Phase 1.5 does. Session logs the PreCompact hook wrote into another worktree's root are gated where they are, and moved here (`slice-session-log.sh adopt`) only when included. Subagent transcripts are never archived: only each session's main conversation.
 
 1. **Block A: find and slice the sessions** without moving any cursor. It reads the run (the scratchpad's `**Run:**` line) and the issue branch (the run's branch, else the scratchpad's `**Feature branch:**`, else the current branch) itself:
    ```bash
@@ -154,11 +154,12 @@ Phase 1.5 saves only this session. Other sessions that worked on the issue, such
      WT=$(field worktree_path); [ -n "$WT" ] && set -- "$@" --extra-worktree "$WT"
      SINCE=$(field started_at); [ -n "$SINCE" ] && set -- "$@" --since "$SINCE"
      UNTIL=$(field ended_at); [ -n "$UNTIL" ] && set -- "$@" --until "$UNTIL"
-     python3 -I "$PLUGIN/scripts/find-session-transcripts.py" prepare "$@"
+     ALL=$(bash "$PLUGIN/scripts/factory.sh" --json status --all 2>/dev/null)
+     printf '%s' "$ALL" | python3 -I "$PLUGIN/scripts/find-session-transcripts.py" prepare "$@" --runs-json -
    fi
    ```
    - `Other sessions not searched: no issue branch`: there is no branch to look for (archiving on the base branch with no run and no `**Feature branch:**`). Go on to Phase 2.
-   - Otherwise it prints the pending list, also kept in the git dir as `escapement-session-pending.json` for block B. Each entry has a `key`, its `kind` (`slice`, or `hook_log` for a log in another worktree), the `root` it ran in, `lines`, `size`, `first` and `last` timestamps, `branches` (entries per branch) and the gate's `decision`. Slices are already written as `SESSION_LOG_{N}.jsonl` here, numbered after any existing log.
+   - Otherwise it prints the pending list, also kept in the git dir as `escapement-session-pending.json` for block B. Each entry has a `key`, its `kind` (`slice`, or `hook_log` for a log in another worktree), the `root` it ran in, `lines`, `size`, `first` and `last` timestamps, `branches` (entries per branch) and the gate's `decision`. Slices wait in the git dir (`escapement-session-stage`), not in this root: block B numbers them together with the hook logs, in order. A leftover from an unfinished earlier block A is cleared first, but only files that are provably its slices; anything else is left in place with a `left in place: …` warning, so a newer log is never removed (#129).
    - Anything under `errors` (a slice that failed): report it in one line each and go on. That session's cursor hasn't moved, so nothing is lost.
 
 2. **Ask once about the undecided ones.** Entries whose `decision` is `include` are this issue's work and need no question. If any entry's `decision` is `ask` (another branch, base-branch work after the issue branch, or a directory outside its worktree), ask about all of them in one `AskUserQuestion` call, one question per entry, up to four per call:
@@ -180,7 +181,7 @@ Phase 1.5 saves only this session. Other sessions that worked on the issue, such
    ```bash
    python3 -I "${CLAUDE_PLUGIN_ROOT}/scripts/find-session-transcripts.py" finish --include '{keys the operator included, comma-separated}'
    ```
-   It commits the cursor of each kept slice, removes each declined slice (its cursor stays, so a later log picks it up), adopts each kept hook log into this root under the next free number, and leaves each declined hook log where it is. It prints one line per entry, such as `SESSION_LOG_4 <- session 3ed564b9 (/home/me/run-wt, lines 1-1631)` or `declined: session 1a2b3c4d (…), left for a later log`. Keep those lines for Phase 4's Sessions table and Phase 7.
+   It brings each kept slice and hook log into this root through `slice-session-log.sh adopt`, under the next free number, in order: sessions by their first timestamp, and within a session its hook logs before its slice (#129). A slice's cursor is committed only once the slice is here. It removes each declined slice (its cursor stays, so a later log picks it up), and leaves each declined hook log where it is. It prints one line per entry, such as `SESSION_LOG_4 <- session 3ed564b9 (/home/me/run-wt, lines 1-1631)` or `declined: session 1a2b3c4d (…), left for a later log`. Keep those lines for Phase 4's Sessions table and Phase 7.
 
 ### Phase 2: Detect Artifacts (Parallel)
 
@@ -837,10 +838,11 @@ No PR found for this work.
 
 ---
 
-**Version:** 2.9.0
-**Last Updated:** 2026-11-20
+**Version:** 2.9.1
+**Last Updated:** 2026-11-21
 **Maintained By:** Escapement
 **Changelog:**
+- v2.9.1: Phase 1.6 searches only this repository's worktrees: block A passes the runs recorded for it (`factory status --all`), and a transcript counts only when it started in one of them. Slices wait in the git dir and block B numbers a session's logs in order, hook logs first. A stale block A's leftovers are removed only when provably its slices (#129)
 - v2.9.0: Phase 1.6 archives every other session that worked on the issue, with no compaction first: `scripts/find-session-transcripts.py` finds them (the issue branch, or the run's worktree during the run, removed worktrees included), slices each from its cursor and gates it; hook logs in other worktrees are adopted through `slice-session-log.sh adopt` when included; one question for what the gate can't decide; Phase 4's README gets a Sessions table. Subagent transcripts aren't archived (#89)
 - v2.8.1: Read context-path with `get-context-path.sh --absolute`, resolved from the main checkout, so archives land in the same context directory from any worktree (#88)
 - v2.8.0: Phase 1.5 decides the session tail with `scripts/session-tail-gate.py`: detached `HEAD` and base-branch entries before the issue branch, in the same worktree, are the issue's work, so setup's entries no longer trigger the question. Phase 2 reads a `pr_open` run's PR with the GitHub MCP tools (`mcp__github__*`), and Phase 5 doesn't ask for a run whose PR merged and whose authorization is active (#123)

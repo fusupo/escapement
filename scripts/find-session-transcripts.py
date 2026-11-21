@@ -19,6 +19,9 @@ Options for find and prepare:
                          (repeatable)
   --managed-base DIR     the directory scripts/worktree.sh keeps this
                          repository's worktrees in
+  --runs-json FILE|-     `factory.sh --json status --all`'s output, from a
+                         file or stdin: every recorded run's worktree_path
+                         for this repository is one of its worktrees (#129)
   --since TS --until TS  the run's started_at and ended_at
   --claude-dir DIR       default ${CLAUDE_CONFIG_DIR:-~/.claude}
   --outdir DIR           where slices go (default: the current directory)
@@ -30,13 +33,22 @@ Where transcripts are looked for: Claude Code keeps a session's transcript
 in {claude-dir}/projects/{encoded cwd}/{session id}.jsonl, where the encoded
 cwd is the path with every character that isn't a letter or digit turned
 into "-" (so "/.local" becomes "--local"). A name over 200 characters is
-cut and given a suffix, so a long name is matched by its first 200. The
-directories searched are those of the main checkout, every worktree in `git
-worktree list`, and every --extra-worktree, plus every directory whose name
-starts with the encoded --managed-base or main checkout path and a "-":
-transcripts outlive their worktrees, and legacy worktrees' paths start with
-the main checkout's path. Only the *.jsonl files directly inside are read;
-subagent transcripts, in subdirectories, are never archived.
+cut and given a suffix, so a long name is matched by its first 200.
+
+Only this repository's directories are searched (#129). Its worktrees are
+the main checkout, every worktree in `git worktree list` (prunable ones
+included), every --extra-worktree, and every recorded run's worktree_path
+for this repository (--runs-json): transcripts outlive their worktrees. The
+directories searched are those worktrees' own, plus every directory whose
+name starts with the encoded --managed-base and a "-", for removed managed
+worktrees. Because the encoding is lossy ("/" and "-" both become "-"), a
+name can't tell this repository's worktrees from a sibling repository's
+(`worktrees/o-r/foo` and `worktrees/o-r-foo` encode the same), so a
+transcript is kept only when its first recorded cwd is at or below one of
+those worktrees or --managed-base. A removed worktree nothing records (a
+pruned, pre-#88 sibling) is no longer found. Only the *.jsonl files
+directly inside are read; subagent transcripts, in subdirectories, are
+never archived.
 
 Which are kept: a transcript is the issue's when an entry ran on the issue
 branch (gitBranch == B), or when an entry ran in an issue worktree (a listed
@@ -53,20 +65,31 @@ gate: the longest known worktree path holding its first cwd, else
 log is a SESSION_LOG_*.jsonl in another existing worktree's root that
 belongs to a kept session.
 
-prepare (Phase 1.6 block A) slices each session into --outdir without moving
-its cursor, skips those with nothing new, gates each slice and each hook log
-(where it is), and writes the pending file: {version, branch, base, outdir,
-entries: [{key, kind: "slice" | "hook_log", session_id, transcript, file,
-start, end, lines, size, decision, reason, branches, first, last, root}]}.
+prepare (Phase 1.6 block A) slices each session without moving its cursor,
+into a staging directory in the git dir ($(git rev-parse --git-path
+escapement-session-stage)), never the root. It skips sessions with nothing
+new, gates each slice and each hook log (where it is), and writes the
+pending file: {version: 2, branch, base, outdir, stage, entries: [{key,
+kind: "slice" | "hook_log", session_id, transcript, file, start, end, lines,
+size, decision, reason, branches, first, last, root}]}.
 It prints the same JSON. A pending file left by an earlier prepare is
-cleared first: its slices were never committed, so they are removed.
+cleared first: its slices were never committed, so they are removed, but
+only when each is provably that slice (in the staging directory, or bytes
+equal to its transcript lines start..end). A file that no longer matches,
+such as a newer log that took a version-1 slice's name in the root, is left
+in place with a warning (#129).
 
 finish (block B) takes the operator's choice. An entry whose decision is
-"include", or whose key is in --include, is kept: a slice's cursor is
-committed, and a hook log is adopted into the outdir. Any other slice is
-removed with its cursor left, so the next log picks it up; any other hook
-log stays where it is. It prints one line per entry and removes the
-pending file. With no pending file it prints "nothing pending".
+"include", or whose key is in --include, is kept. Kept entries are brought
+into the outdir through the slicer's adopt, so each gets the next free
+SESSION_LOG number, in order: sessions by their earliest first timestamp,
+and within a session its hook logs before its slice (#129). A slice's cursor
+is committed only once the slice is in the outdir. A version-1 pending file
+(4.10.0) has its slices in the root already: those only get their cursor
+committed. Any other slice is removed with its cursor left, so the next log
+picks it up; any other hook log stays where it is. It prints one line per
+entry, in that order, and removes the pending file and the empty stage.
+With no pending file it prints "nothing pending".
 
 Exit 0 on success; 1 when a slice, commit or adopt failed (finish reports
 each and goes on); 2 on a usage error.
@@ -86,6 +109,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 MAX_NAME = 200
 PENDING_NAME = "escapement-session-pending.json"
+STAGE_NAME = "escapement-session-stage"
 SLICE_LINE = re.compile(r"^FILE=(.*) START=(\d+) END=(\d+) LINES=(\d+)$")
 
 
@@ -156,9 +180,38 @@ def worktrees():
     return items
 
 
+def repo_name(main):
+    """owner/name from main's origin URL, else main's basename.
+
+    The same rule as repoName in manifest/factory/context.ts, which names
+    the runs' repo: keep the two in step.
+    """
+    r = subprocess.run(["git", "-C", main, "config", "--get", "remote.origin.url"], capture_output=True, text=True)
+    url = r.stdout.strip() if r.returncode == 0 else ""
+    m = re.search(r"[:/]([^/:]+)/([^/]+?)(?:\.git)?/?$", url) if url else None
+    return f"{m.group(1)}/{m.group(2)}" if m else os.path.basename(os.path.normpath(main))
+
+
+def recorded_worktrees(source, repo):
+    """worktree_path of every run of `repo` in `factory status --all` JSON (a path or "-")."""
+    if not source:
+        return []
+    try:
+        text = sys.stdin.read() if source == "-" else open(source, encoding="utf-8").read()
+        runs = (json.loads(text).get("result") or {}).get("runs") or []
+    except (OSError, ValueError, AttributeError):
+        return []
+    return [r["worktree_path"] for r in runs if isinstance(r, dict) and r.get("repo") == repo and r.get("worktree_path")]
+
+
 def pending_default():
     path = git("rev-parse", "--git-path", PENDING_NAME)
     return os.path.abspath(path)
+
+
+def stage_dir():
+    """Where prepare's slices wait for finish: in the git dir, never the root."""
+    return os.path.abspath(git("rev-parse", "--git-path", STAGE_NAME))
 
 
 def candidate_dirs(projects, exact, prefixes):
@@ -272,11 +325,14 @@ def find(args):
     here = norm(git("rev-parse", "--show-toplevel"))
     extra = [p for p in args.extra_worktree if p]
     issue_roots = [w["path"] for w in listed[1:] if w["branch"] == args.branch] + extra
-    known = [w["path"] for w in listed] + extra
+    recorded = recorded_worktrees(args.runs_json, repo_name(main))
+    known = [w["path"] for w in listed] + extra + recorded
+    # A kept transcript must have started in one of these (#129)
+    allowed = known + ([args.managed_base] if args.managed_base else [])
 
     exact = set(known)
     exact |= {os.path.realpath(p) for p in known if os.path.exists(p)}
-    prefixes = [main, args.managed_base]
+    prefixes = [args.managed_base]
     projects = os.path.join(args.claude_dir, "projects")
 
     sessions = []
@@ -291,6 +347,8 @@ def find(args):
             if not info:
                 continue
             cwd = info.pop("first_cwd")
+            if not cwd or not any(at_or_below(cwd, r) for r in allowed):
+                continue
             sessions.append({
                 "session_id": session_id,
                 "transcript": transcript,
@@ -331,16 +389,55 @@ def count_lines(path):
         return 0
 
 
+def transcript_lines(path, start, end):
+    """The bytes of a transcript's lines start..end, as the slicer writes them."""
+    with open(path, "rb") as f:
+        lines = f.read().splitlines(keepends=True)
+    return b"".join(lines[start - 1:end])
+
+
+def is_leftover(entry, stage):
+    """True when a slice file is provably the one an unfinished prepare left.
+
+    A file in the staging directory is: only prepare writes there. Any other
+    file (a version-1 pending file's slices sat in the root) is only when its
+    bytes are still the transcript's lines start..end, so a newer log that
+    took its name is never removed (#129).
+    """
+    path = entry["file"]
+    if stage and at_or_below(path, stage):
+        return True
+    try:
+        with open(path, "rb") as f:
+            return f.read() == transcript_lines(entry["transcript"], int(entry["start"]), int(entry["end"]))
+    except (OSError, KeyError, TypeError, ValueError):
+        return False
+
+
 def clear_stale(pending):
-    """Remove the uncommitted slices an unfinished prepare left behind."""
+    """Remove the uncommitted slices an unfinished prepare left behind.
+
+    Only files that are provably those slices are removed; anything else is
+    left in place with a warning. The pending file itself always goes.
+    """
     try:
         with open(pending, encoding="utf-8") as f:
             stale = json.load(f)
     except (OSError, json.JSONDecodeError):
         stale = {}
+    stage = stale.get("stage")
     for entry in stale.get("entries", []):
-        if entry.get("kind") == "slice" and entry.get("file") and os.path.isfile(entry["file"]):
-            os.remove(entry["file"])
+        path = entry.get("file")
+        if entry.get("kind") != "slice" or not path or not os.path.isfile(path):
+            continue
+        if is_leftover(entry, stage):
+            os.remove(path)
+        else:
+            print(
+                f"find-session-transcripts: left in place: {path} no longer matches transcript lines "
+                f"{entry.get('start')}-{entry.get('end')}",
+                file=sys.stderr,
+            )
     os.remove(pending)
     print(f"find-session-transcripts: cleared an unfinished earlier prepare ({pending})", file=sys.stderr)
 
@@ -349,6 +446,16 @@ def prepare(args):
     pending = args.pending or pending_default()
     if os.path.exists(pending):
         clear_stale(pending)
+    stage = stage_dir()
+    # A slice still in the stage was never committed: finish brings a slice
+    # into the outdir before it commits the cursor. Clear what an
+    # interrupted run left, so the lines are sliced again.
+    orphans = sorted(glob.glob(os.path.join(stage, "SESSION_LOG_*.jsonl")))
+    for f in orphans:
+        os.remove(f)
+    if orphans:
+        print(f"find-session-transcripts: cleared {len(orphans)} uncommitted staged slice(s) ({stage})", file=sys.stderr)
+    os.makedirs(stage, exist_ok=True)
     found = find(args)
     outdir = os.path.abspath(args.outdir)
     entries, errors = [], []
@@ -371,7 +478,7 @@ def prepare(args):
         })
 
     for s in found["sessions"]:
-        r = subprocess.run(["bash", args.slicer, "slice", s["transcript"], outdir, "--no-advance"], capture_output=True, text=True)
+        r = subprocess.run(["bash", args.slicer, "slice", s["transcript"], stage, "--no-advance"], capture_output=True, text=True)
         out = r.stdout.strip()
         if r.returncode != 0:
             errors.append(f"session {s['session_id'][:8]}: {r.stderr.strip()}")
@@ -396,14 +503,41 @@ def prepare(args):
             "lines": count_lines(log["file"]),
         })
 
-    doc = {"version": 1, "branch": args.branch, "base": args.base, "outdir": outdir, "pending": pending,
-           "entries": entries, "errors": errors}
+    doc = {"version": 2, "branch": args.branch, "base": args.base, "outdir": outdir, "stage": stage,
+           "pending": pending, "entries": entries, "errors": errors}
     tmp = f"{pending}.tmp.{os.getpid()}"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(doc, f, indent=2)
     os.replace(tmp, pending)
     print(json.dumps(doc, indent=2))
     return 1 if errors else 0
+
+
+def log_number(path):
+    m = re.search(r"SESSION_LOG_(\d+)\.jsonl$", path or "")
+    return int(m.group(1)) if m else 0
+
+
+def finish_order(entries):
+    """Sessions by their earliest first timestamp; within one, hook logs then slices.
+
+    A hook log's lines are behind its session's cursor and the slice starts
+    after it, so within a session the order is known whatever the gate saw:
+    a hook log the gate couldn't read (first "-") still comes first (#129).
+    """
+    latest = datetime.datetime.max.replace(tzinfo=datetime.timezone.utc)
+    first = {}
+    for e in entries:
+        t = parse_time(e.get("first"))
+        if t and (e["session_id"] not in first or t < first[e["session_id"]]):
+            first[e["session_id"]] = t
+
+    def key(e):
+        hook = e["kind"] == "hook_log"
+        within = log_number(e["file"]) if hook else (e.get("start") or 0)
+        return (first.get(e["session_id"], latest), e["session_id"], 0 if hook else 1, within, e["key"])
+
+    return sorted(entries, key=key)
 
 
 def finish(args):
@@ -419,27 +553,45 @@ def finish(args):
     if unknown:
         fail(f"unknown key(s) in --include: {', '.join(sorted(unknown))}")
     outdir = doc.get("outdir") or os.path.abspath(".")
+    stage = doc.get("stage")
     failed = False
 
-    for e in entries:
+    def slicer(*a):
+        return subprocess.run(["bash", args.slicer, *a], capture_output=True, text=True)
+
+    for e in finish_order(entries):
         chosen = e["decision"] == "include" or e["key"] in include
         id8 = e["session_id"][:8]
         if e["kind"] == "slice":
-            name = os.path.basename(e["file"])[: -len(".jsonl")]
-            if chosen:
-                r = subprocess.run(["bash", args.slicer, "commit", e["transcript"], str(e["end"])], capture_output=True, text=True)
-                if r.returncode == 0:
-                    print(f"{name} <- session {id8} ({e['root']}, lines {e['start']}-{e['end']})")
-                else:
-                    failed = True
-                    print(f"{name} <- session {id8}: cursor not committed: {r.stderr.strip()}")
-            else:
+            if not chosen:
                 if os.path.isfile(e["file"]):
                     os.remove(e["file"])
                 print(f"declined: session {id8} ({e['root']}, {e['lines']} lines), left for a later log")
+                continue
+            if stage and at_or_below(e["file"], stage):
+                # Bring the staged slice in under the next free number first;
+                # commit the cursor only once it is there.
+                r = slicer("adopt", e["file"], outdir)
+                m = re.match(r"^FILE=(.*)$", r.stdout.strip())
+                if r.returncode != 0 or not m:
+                    failed = True
+                    if os.path.isfile(e["file"]):
+                        os.remove(e["file"])
+                    print(f"session {id8} ({e['root']}): slice not brought in, cursor left: {r.stderr.strip()}")
+                    continue
+                name = os.path.basename(m.group(1))[: -len(".jsonl")]
+            else:
+                # A version-1 pending file (4.10.0): the slice is already in the root.
+                name = os.path.basename(e["file"])[: -len(".jsonl")]
+            r = slicer("commit", e["transcript"], str(e["end"]))
+            if r.returncode == 0:
+                print(f"{name} <- session {id8} ({e['root']}, lines {e['start']}-{e['end']})")
+            else:
+                failed = True
+                print(f"{name} <- session {id8}: cursor not committed: {r.stderr.strip()}")
         else:
             if chosen:
-                r = subprocess.run(["bash", args.slicer, "adopt", e["file"], outdir], capture_output=True, text=True)
+                r = slicer("adopt", e["file"], outdir)
                 m = re.match(r"^FILE=(.*)$", r.stdout.strip())
                 if r.returncode == 0 and m:
                     name = os.path.basename(m.group(1))[: -len(".jsonl")]
@@ -450,6 +602,11 @@ def finish(args):
             else:
                 print(f"declined: hook log {e['file']} (session {id8}), left in its worktree")
     os.remove(pending)
+    if stage:
+        try:
+            os.rmdir(stage)
+        except OSError:
+            pass
     return 1 if failed else 0
 
 
@@ -463,6 +620,7 @@ def main():
         p.add_argument("--exclude-session", default="")
         p.add_argument("--extra-worktree", action="append", default=[])
         p.add_argument("--managed-base", default="")
+        p.add_argument("--runs-json", default="")
         p.add_argument("--since", default="")
         p.add_argument("--until", default="")
         p.add_argument("--claude-dir", default=os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"))
