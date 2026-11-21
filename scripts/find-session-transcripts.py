@@ -65,11 +65,13 @@ gate: the longest known worktree path holding its first cwd, else
 log is a SESSION_LOG_*.jsonl in another existing worktree's root that
 belongs to a kept session.
 
-prepare (Phase 1.6 block A) slices each session into --outdir without moving
-its cursor, skips those with nothing new, gates each slice and each hook log
-(where it is), and writes the pending file: {version, branch, base, outdir,
-entries: [{key, kind: "slice" | "hook_log", session_id, transcript, file,
-start, end, lines, size, decision, reason, branches, first, last, root}]}.
+prepare (Phase 1.6 block A) slices each session without moving its cursor,
+into a staging directory in the git dir ($(git rev-parse --git-path
+escapement-session-stage)), never the root. It skips sessions with nothing
+new, gates each slice and each hook log (where it is), and writes the
+pending file: {version: 2, branch, base, outdir, stage, entries: [{key,
+kind: "slice" | "hook_log", session_id, transcript, file, start, end, lines,
+size, decision, reason, branches, first, last, root}]}.
 It prints the same JSON. A pending file left by an earlier prepare is
 cleared first: its slices were never committed, so they are removed, but
 only when each is provably that slice (in the staging directory, or bytes
@@ -78,11 +80,16 @@ such as a newer log that took a version-1 slice's name in the root, is left
 in place with a warning (#129).
 
 finish (block B) takes the operator's choice. An entry whose decision is
-"include", or whose key is in --include, is kept: a slice's cursor is
-committed, and a hook log is adopted into the outdir. Any other slice is
-removed with its cursor left, so the next log picks it up; any other hook
-log stays where it is. It prints one line per entry and removes the
-pending file. With no pending file it prints "nothing pending".
+"include", or whose key is in --include, is kept. Kept entries are brought
+into the outdir through the slicer's adopt, so each gets the next free
+SESSION_LOG number, in order: sessions by their earliest first timestamp,
+and within a session its hook logs before its slice (#129). A slice's cursor
+is committed only once the slice is in the outdir. A version-1 pending file
+(4.10.0) has its slices in the root already: those only get their cursor
+committed. Any other slice is removed with its cursor left, so the next log
+picks it up; any other hook log stays where it is. It prints one line per
+entry, in that order, and removes the pending file and the empty stage.
+With no pending file it prints "nothing pending".
 
 Exit 0 on success; 1 when a slice, commit or adopt failed (finish reports
 each and goes on); 2 on a usage error.
@@ -102,6 +109,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 MAX_NAME = 200
 PENDING_NAME = "escapement-session-pending.json"
+STAGE_NAME = "escapement-session-stage"
 SLICE_LINE = re.compile(r"^FILE=(.*) START=(\d+) END=(\d+) LINES=(\d+)$")
 
 
@@ -199,6 +207,11 @@ def recorded_worktrees(source, repo):
 def pending_default():
     path = git("rev-parse", "--git-path", PENDING_NAME)
     return os.path.abspath(path)
+
+
+def stage_dir():
+    """Where prepare's slices wait for finish: in the git dir, never the root."""
+    return os.path.abspath(git("rev-parse", "--git-path", STAGE_NAME))
 
 
 def candidate_dirs(projects, exact, prefixes):
@@ -433,6 +446,16 @@ def prepare(args):
     pending = args.pending or pending_default()
     if os.path.exists(pending):
         clear_stale(pending)
+    stage = stage_dir()
+    # A slice still in the stage was never committed: finish brings a slice
+    # into the outdir before it commits the cursor. Clear what an
+    # interrupted run left, so the lines are sliced again.
+    orphans = sorted(glob.glob(os.path.join(stage, "SESSION_LOG_*.jsonl")))
+    for f in orphans:
+        os.remove(f)
+    if orphans:
+        print(f"find-session-transcripts: cleared {len(orphans)} uncommitted staged slice(s) ({stage})", file=sys.stderr)
+    os.makedirs(stage, exist_ok=True)
     found = find(args)
     outdir = os.path.abspath(args.outdir)
     entries, errors = [], []
@@ -455,7 +478,7 @@ def prepare(args):
         })
 
     for s in found["sessions"]:
-        r = subprocess.run(["bash", args.slicer, "slice", s["transcript"], outdir, "--no-advance"], capture_output=True, text=True)
+        r = subprocess.run(["bash", args.slicer, "slice", s["transcript"], stage, "--no-advance"], capture_output=True, text=True)
         out = r.stdout.strip()
         if r.returncode != 0:
             errors.append(f"session {s['session_id'][:8]}: {r.stderr.strip()}")
@@ -480,14 +503,41 @@ def prepare(args):
             "lines": count_lines(log["file"]),
         })
 
-    doc = {"version": 1, "branch": args.branch, "base": args.base, "outdir": outdir, "pending": pending,
-           "entries": entries, "errors": errors}
+    doc = {"version": 2, "branch": args.branch, "base": args.base, "outdir": outdir, "stage": stage,
+           "pending": pending, "entries": entries, "errors": errors}
     tmp = f"{pending}.tmp.{os.getpid()}"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(doc, f, indent=2)
     os.replace(tmp, pending)
     print(json.dumps(doc, indent=2))
     return 1 if errors else 0
+
+
+def log_number(path):
+    m = re.search(r"SESSION_LOG_(\d+)\.jsonl$", path or "")
+    return int(m.group(1)) if m else 0
+
+
+def finish_order(entries):
+    """Sessions by their earliest first timestamp; within one, hook logs then slices.
+
+    A hook log's lines are behind its session's cursor and the slice starts
+    after it, so within a session the order is known whatever the gate saw:
+    a hook log the gate couldn't read (first "-") still comes first (#129).
+    """
+    latest = datetime.datetime.max.replace(tzinfo=datetime.timezone.utc)
+    first = {}
+    for e in entries:
+        t = parse_time(e.get("first"))
+        if t and (e["session_id"] not in first or t < first[e["session_id"]]):
+            first[e["session_id"]] = t
+
+    def key(e):
+        hook = e["kind"] == "hook_log"
+        within = log_number(e["file"]) if hook else (e.get("start") or 0)
+        return (first.get(e["session_id"], latest), e["session_id"], 0 if hook else 1, within, e["key"])
+
+    return sorted(entries, key=key)
 
 
 def finish(args):
@@ -503,27 +553,45 @@ def finish(args):
     if unknown:
         fail(f"unknown key(s) in --include: {', '.join(sorted(unknown))}")
     outdir = doc.get("outdir") or os.path.abspath(".")
+    stage = doc.get("stage")
     failed = False
 
-    for e in entries:
+    def slicer(*a):
+        return subprocess.run(["bash", args.slicer, *a], capture_output=True, text=True)
+
+    for e in finish_order(entries):
         chosen = e["decision"] == "include" or e["key"] in include
         id8 = e["session_id"][:8]
         if e["kind"] == "slice":
-            name = os.path.basename(e["file"])[: -len(".jsonl")]
-            if chosen:
-                r = subprocess.run(["bash", args.slicer, "commit", e["transcript"], str(e["end"])], capture_output=True, text=True)
-                if r.returncode == 0:
-                    print(f"{name} <- session {id8} ({e['root']}, lines {e['start']}-{e['end']})")
-                else:
-                    failed = True
-                    print(f"{name} <- session {id8}: cursor not committed: {r.stderr.strip()}")
-            else:
+            if not chosen:
                 if os.path.isfile(e["file"]):
                     os.remove(e["file"])
                 print(f"declined: session {id8} ({e['root']}, {e['lines']} lines), left for a later log")
+                continue
+            if stage and at_or_below(e["file"], stage):
+                # Bring the staged slice in under the next free number first;
+                # commit the cursor only once it is there.
+                r = slicer("adopt", e["file"], outdir)
+                m = re.match(r"^FILE=(.*)$", r.stdout.strip())
+                if r.returncode != 0 or not m:
+                    failed = True
+                    if os.path.isfile(e["file"]):
+                        os.remove(e["file"])
+                    print(f"session {id8} ({e['root']}): slice not brought in, cursor left: {r.stderr.strip()}")
+                    continue
+                name = os.path.basename(m.group(1))[: -len(".jsonl")]
+            else:
+                # A version-1 pending file (4.10.0): the slice is already in the root.
+                name = os.path.basename(e["file"])[: -len(".jsonl")]
+            r = slicer("commit", e["transcript"], str(e["end"]))
+            if r.returncode == 0:
+                print(f"{name} <- session {id8} ({e['root']}, lines {e['start']}-{e['end']})")
+            else:
+                failed = True
+                print(f"{name} <- session {id8}: cursor not committed: {r.stderr.strip()}")
         else:
             if chosen:
-                r = subprocess.run(["bash", args.slicer, "adopt", e["file"], outdir], capture_output=True, text=True)
+                r = slicer("adopt", e["file"], outdir)
                 m = re.match(r"^FILE=(.*)$", r.stdout.strip())
                 if r.returncode == 0 and m:
                     name = os.path.basename(m.group(1))[: -len(".jsonl")]
@@ -534,6 +602,11 @@ def finish(args):
             else:
                 print(f"declined: hook log {e['file']} (session {id8}), left in its worktree")
     os.remove(pending)
+    if stage:
+        try:
+            os.rmdir(stage)
+        except OSError:
+            pass
     return 1 if failed else 0
 
 

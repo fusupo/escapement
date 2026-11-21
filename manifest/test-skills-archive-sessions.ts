@@ -182,6 +182,10 @@ class World {
     return join(this.main, ".git", "escapement-session-pending.json");
   }
 
+  stagePath() {
+    return join(this.main, ".git", "escapement-session-stage");
+  }
+
   /** Block A, as written. */
   blockA(): { pending: Pending[]; errors: string[]; stdout: string; stderr: string } {
     const r = spawnSync("bash", ["-c", blockA], { cwd: this.main, env: this.env, encoding: "utf-8" });
@@ -234,7 +238,7 @@ test((w) => {
   const run = w.transcript(w.wt, [on("HEAD", w.wt, 1), on(ISSUE, w.wt, 2), on(ISSUE, join(w.wt, "manifest"), 3)]);
   const a = w.blockA();
   const slice = join(w.main, "SESSION_LOG_1.jsonl");
-  const afterA = { cursor: w.cursor(run.id), files: ls(w.main), pending: existsSync(w.pendingPath()) };
+  const afterA = { cursor: w.cursor(run.id), files: ls(w.main), staged: ls(w.stagePath()), pending: existsSync(w.pendingPath()) };
   const out = w.blockB();
   assert(
     a.pending.length === 1 &&
@@ -244,7 +248,8 @@ test((w) => {
       a.pending[0].start === 1 &&
       a.pending[0].end === 3 &&
       afterA.cursor === null &&
-      afterA.files === "SESSION_LOG_1.jsonl" &&
+      afterA.files === "" &&
+      afterA.staged === "SESSION_LOG_1.jsonl" &&
       afterA.pending &&
       readFileSync(slice, "utf-8") === readFileSync(run.path, "utf-8") &&
       w.cursor(run.id) === "3" &&
@@ -273,8 +278,9 @@ test((w) => {
       a.pending[1].file === hookLog &&
       a.pending[1].root === w.wt &&
       !existsSync(hookLog) &&
-      readFileSync(join(w.main, "SESSION_LOG_2.jsonl"), "utf-8") === hookContent &&
-      out.join("|") === `SESSION_LOG_1 <- session ${id8} (${w.wt}, lines 3-4)|SESSION_LOG_2 <- session ${id8} (${w.wt}, hook log SESSION_LOG_1.jsonl)` &&
+      readFileSync(join(w.main, "SESSION_LOG_1.jsonl"), "utf-8") === hookContent &&
+      readFileSync(join(w.main, "SESSION_LOG_2.jsonl"), "utf-8") === w.lines(run.id, entries.slice(2)) &&
+      out.join("|") === `SESSION_LOG_1 <- session ${id8} (${w.wt}, hook log SESSION_LOG_1.jsonl)|SESSION_LOG_2 <- session ${id8} (${w.wt}, lines 3-4)` &&
       w.cursor(run.id) === "4",
     "Phase 1.6 adopts the hook logs of the issue's sessions from another existing worktree's root once they pass the gate",
   );
@@ -323,8 +329,8 @@ test((w) => {
       readFileSync(join(w.main, "SESSION_LOG_1.jsonl"), "utf-8") === "phase 1.5's tail\n" &&
       readFileSync(join(w.main, "SESSION_LOG_2.md"), "utf-8") === "# a converted log\n" &&
       readFileSync(join(w.main, "SESSION_LOG_3.jsonl"), "utf-8") === readFileSync(one.path, "utf-8") &&
-      readFileSync(join(w.main, "SESSION_LOG_4.jsonl"), "utf-8") === readFileSync(two.path, "utf-8") &&
-      readFileSync(join(w.main, "SESSION_LOG_5.jsonl"), "utf-8").includes(two.id) &&
+      readFileSync(join(w.main, "SESSION_LOG_4.jsonl"), "utf-8") === w.lines(two.id, [on(ISSUE, w.wt, 9)]) &&
+      readFileSync(join(w.main, "SESSION_LOG_5.jsonl"), "utf-8") === readFileSync(two.path, "utf-8") &&
       out.map((l) => l.split(" ")[0]).join() === "SESSION_LOG_3,SESSION_LOG_4,SESSION_LOG_5",
     "Phase 1.6 numbers the logs of several sessions and adopted hook logs without colliding with existing .jsonl or .md logs",
   );
@@ -582,6 +588,74 @@ test((w) => {
       readFileSync(join(w.main, "SESSION_LOG_1.jsonl"), "utf-8") === readFileSync(s.path, "utf-8") &&
       w.cursor(s.id) === "2",
     "Phase 1.6 block A still removes a version-1 leftover slice that matches its transcript lines",
+  );
+});
+
+// #129: a session's logs are numbered in order.
+test((w) => {
+  const early = w.transcript(w.main, [on(ISSUE, w.main, 1)]);
+  const s = w.transcript(w.wt, [on(ISSUE, w.wt, 10), on(ISSUE, w.wt, 11)]);
+  // The session's hook log in the run worktree's root. Its entries carry no
+  // timestamp, so the gate reports none.
+  const hookLog = join(w.wt, "SESSION_LOG_1.jsonl");
+  const hookContent = JSON.stringify({ type: "user", sessionId: s.id, cwd: w.wt, gitBranch: ISSUE }) + "\n";
+  writeFileSync(hookLog, hookContent);
+  const a = w.blockA();
+  const out = w.blockB();
+  const hook = a.pending.find((e) => e.kind === "hook_log");
+  const [e8, s8] = [early.id.slice(0, 8), s.id.slice(0, 8)];
+  assert(
+    hook?.first === "-" &&
+      hook?.decision === "include" &&
+      out.join("|") ===
+        [
+          `SESSION_LOG_1 <- session ${e8} (${w.main}, lines 1-1)`,
+          `SESSION_LOG_2 <- session ${s8} (${w.wt}, hook log SESSION_LOG_1.jsonl)`,
+          `SESSION_LOG_3 <- session ${s8} (${w.wt}, lines 1-2)`,
+        ].join("|") &&
+      readFileSync(join(w.main, "SESSION_LOG_2.jsonl"), "utf-8") === hookContent &&
+      readFileSync(join(w.main, "SESSION_LOG_3.jsonl"), "utf-8") === readFileSync(s.path, "utf-8") &&
+      !existsSync(hookLog) &&
+      !existsSync(w.stagePath()),
+    "Phase 1.6 numbers a session's hook log before its later slice, even when the gate gives it no timestamp, and orders sessions by their first timestamp",
+  );
+});
+
+test((w) => {
+  const s = w.transcript(w.wt, [on(ISSUE, w.wt, 1), on(ISSUE, w.wt, 2)]);
+  // A version-1 pending file's slice is already in the root.
+  const slice = join(w.main, "SESSION_LOG_1.jsonl");
+  writeFileSync(slice, readFileSync(s.path, "utf-8"));
+  writeV1Pending(w, s, slice, 1, 2);
+  const out = w.blockB();
+  assert(
+    out.join() === `SESSION_LOG_1 <- session ${s.id.slice(0, 8)} (${w.wt}, lines 1-2)` &&
+      ls(w.main) === "SESSION_LOG_1.jsonl" &&
+      readFileSync(slice, "utf-8") === readFileSync(s.path, "utf-8") &&
+      w.cursor(s.id) === "2" &&
+      !existsSync(w.pendingPath()),
+    "Phase 1.6 block B commits the cursor of a version-1 pending file's slice in place, without adopting it",
+  );
+});
+
+test((w) => {
+  const s = w.transcript(w.wt, [on(ISSUE, w.wt, 1), on(ISSUE, w.wt, 2)]);
+  const first = w.blockA();
+  const staged = first.pending[0]?.file ?? "";
+  // Block B never ran; the next archive runs block A again.
+  const second = w.blockA();
+  const stagedAfter = ls(w.stagePath());
+  w.blockB();
+  assert(
+    staged === join(w.stagePath(), "SESSION_LOG_1.jsonl") &&
+      second.stderr.includes("cleared an unfinished earlier prepare") &&
+      !second.stderr.includes("left in place") &&
+      second.pending.length === 1 &&
+      stagedAfter === "SESSION_LOG_1.jsonl" &&
+      ls(w.main) === "SESSION_LOG_1.jsonl" &&
+      readFileSync(join(w.main, "SESSION_LOG_1.jsonl"), "utf-8") === readFileSync(s.path, "utf-8") &&
+      w.cursor(s.id) === "2",
+    "Phase 1.6 block A clears a leftover staged slice from an unfinished earlier prepare",
   );
 });
 
