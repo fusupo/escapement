@@ -57,11 +57,11 @@ function transcript(project: string, entries: Entry[], opts: { id?: string; sub?
   return id;
 }
 
-function find(extra: string[] = []) {
+function find(extra: string[] = [], input?: string) {
   const r = spawnSync(
     "python3",
     ["-I", SCRIPT, "find", "--branch", ISSUE, "--base", BASE, "--claude-dir", join(tmp, "claude"), "--managed-base", managed, ...extra],
-    { cwd: main, env, encoding: "utf-8" },
+    { cwd: main, env, encoding: "utf-8", input },
   );
   if (r.status !== 0) throw new Error(`FAIL: find exited ${r.status}: ${r.stderr}`);
   const out = JSON.parse(r.stdout) as { sessions: { session_id: string; root: string; branches: Record<string, number> }[] };
@@ -72,6 +72,8 @@ try {
   mkdirSync(main);
   git(main, "init", "-q", "-b", BASE);
   git(main, "commit", "-q", "--allow-empty", "-m", "init");
+  // The runner names this repository o/r, from its origin (#129).
+  git(main, "remote", "add", "origin", "git@github.com:o/r.git");
   mkdirSync(managed, { recursive: true });
   git(main, "worktree", "add", "-q", "-b", ISSUE, worktree);
 
@@ -159,6 +161,66 @@ try {
       longFound.byId[long].root === longPath &&
       !find(["--exclude-session", current]).ids.includes(long),
     "discovery matches a path whose encoded name is over 200 characters by prefix",
+  );
+
+  // Only this repository's directories (#129).
+  console.log("\nOnly this repository's directories (#129)\n");
+  // A sibling repository whose path starts with the main checkout's, and
+  // another repository's managed worktree whose path starts with ours.
+  const siblingRepo = join(tmp, "repo-foo");
+  const managedSibling = join(tmp, ".local", "share", "escapement", "worktrees", "o-r-foo", "x");
+  const sibling = transcript(siblingRepo, [{ branch: ISSUE, cwd: siblingRepo, at: "2026-11-20T08:30:00Z" }]);
+  const managedOther = transcript(managedSibling, [{ branch: ISSUE, cwd: managedSibling, at: "2026-11-20T08:31:00Z" }]);
+  // A legacy-named run worktree recorded for o/r, removed; one never recorded;
+  // one recorded only for another repository.
+  const legacy = join(tmp, "repo-80");
+  const unrecorded = join(tmp, "repo-81");
+  const otherRepo = join(tmp, "repo-82");
+  const fromLegacy = transcript(legacy, [{ branch: ISSUE, cwd: legacy, at: "2026-11-20T08:32:00Z" }]);
+  const fromUnrecorded = transcript(unrecorded, [{ branch: ISSUE, cwd: unrecorded, at: "2026-11-20T08:33:00Z" }]);
+  const fromOtherRepo = transcript(otherRepo, [{ branch: ISSUE, cwd: otherRepo, at: "2026-11-20T08:34:00Z" }]);
+  // A worktree git still lists as prunable: its directory is gone.
+  const pruned = join(tmp, "elsewhere", "pruned-wt");
+  git(main, "worktree", "add", "-q", "-b", "77-other", pruned);
+  rmSync(pruned, { recursive: true, force: true });
+  const fromPruned = transcript(pruned, [{ branch: ISSUE, cwd: pruned, at: "2026-11-20T08:35:00Z" }]);
+  const runs = JSON.stringify({
+    ok: true,
+    command: "status",
+    result: {
+      runs: [
+        { run_id: "o-r#80-r1", repo: "o/r", worktree_path: legacy },
+        { run_id: "x-y#82-r1", repo: "x/y", worktree_path: otherRepo },
+      ],
+    },
+  });
+  const scoped = find(["--exclude-session", current, "--runs-json", "-"], runs);
+  const noRuns = find(["--exclude-session", current]);
+
+  assert(
+    !existsSync(siblingRepo) &&
+      dirName(siblingRepo).startsWith(dirName(main) + "-") &&
+      dirName(managedSibling).startsWith(dirName(managed) + "-") &&
+      existsSync(join(projects, dirName(siblingRepo), `${sibling}.jsonl`)) &&
+      !scoped.ids.includes(sibling) &&
+      !scoped.ids.includes(managedOther) &&
+      !noRuns.ids.includes(sibling) &&
+      !noRuns.ids.includes(managedOther) &&
+      scoped.ids.includes(run) &&
+      scoped.ids.includes(gone),
+    "discovery leaves out a sibling repository's transcript on the issue branch's name, under the main checkout's name prefix or the managed directory's",
+  );
+
+  assert(
+    !existsSync(legacy) &&
+      !existsSync(pruned) &&
+      scoped.byId[fromLegacy]?.root === legacy &&
+      scoped.byId[fromPruned]?.root === pruned &&
+      noRuns.byId[fromPruned]?.root === pruned &&
+      !noRuns.ids.includes(fromLegacy) &&
+      !scoped.ids.includes(fromUnrecorded) &&
+      !scoped.ids.includes(fromOtherRepo),
+    "discovery still finds a removed worktree this repository recorded, a legacy-named run worktree_path or a prunable git entry, and not an unrecorded one or one recorded for another repository",
   );
 } finally {
   rmSync(tmp, { recursive: true, force: true });
