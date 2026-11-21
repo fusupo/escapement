@@ -126,7 +126,7 @@ The rest of this archive-work run lands in the session's next log.
 
 Phase 1.5 saves only this session. Other sessions that worked on the issue, such as a factory run in its own worktree, are only archived if they were compacted, and then only when their logs are in this root. Find and save them too, so compacting first is optional (#89). Run this **after** Phase 1.5 and **before** Phase 2.
 
-`scripts/find-session-transcripts.py` finds them: the Claude Code transcripts of the main checkout, every worktree in `git worktree list`, the run's `worktree_path` and the worktrees `scripts/worktree.sh` keeps, removed ones included. A transcript is the issue's when it ran on the issue branch, or in the run's worktree during the run. It slices each with `slice-session-log.sh` and gates each slice with `session-tail-gate.py`, as Phase 1.5 does. Session logs the PreCompact hook wrote into another worktree's root are gated where they are, and moved here (`slice-session-log.sh adopt`) only when included. Subagent transcripts are never archived: only each session's main conversation.
+`scripts/find-session-transcripts.py` finds them: the Claude Code transcripts of this repository's worktrees only, the main checkout, every worktree in `git worktree list`, every factory run recorded for this repository (`factory status --all`) and the worktrees `scripts/worktree.sh` keeps, removed ones included. A transcript counts only when it started in one of them, so a sibling repository whose path starts the same way is left out (#129). It is the issue's when it ran on the issue branch, or in the run's worktree during the run. It slices each with `slice-session-log.sh` and gates each slice with `session-tail-gate.py`, as Phase 1.5 does. Session logs the PreCompact hook wrote into another worktree's root are gated where they are, and moved here (`slice-session-log.sh adopt`) only when included. Subagent transcripts are never archived: only each session's main conversation.
 
 1. **Block A: find and slice the sessions** without moving any cursor. It reads the run (the scratchpad's `**Run:**` line) and the issue branch (the run's branch, else the scratchpad's `**Feature branch:**`, else the current branch) itself:
    ```bash
@@ -154,7 +154,8 @@ Phase 1.5 saves only this session. Other sessions that worked on the issue, such
      WT=$(field worktree_path); [ -n "$WT" ] && set -- "$@" --extra-worktree "$WT"
      SINCE=$(field started_at); [ -n "$SINCE" ] && set -- "$@" --since "$SINCE"
      UNTIL=$(field ended_at); [ -n "$UNTIL" ] && set -- "$@" --until "$UNTIL"
-     python3 -I "$PLUGIN/scripts/find-session-transcripts.py" prepare "$@"
+     ALL=$(bash "$PLUGIN/scripts/factory.sh" --json status --all 2>/dev/null)
+     printf '%s' "$ALL" | python3 -I "$PLUGIN/scripts/find-session-transcripts.py" prepare "$@" --runs-json -
    fi
    ```
    - `Other sessions not searched: no issue branch`: there is no branch to look for (archiving on the base branch with no run and no `**Feature branch:**`). Go on to Phase 2.

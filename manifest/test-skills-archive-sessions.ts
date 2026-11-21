@@ -101,7 +101,9 @@ class World {
         'printf "%s\\n" "$*" >> "$STUB_ARGS"',
         'case "$2" in',
         '  check) echo \'{"ok":true,"command":"check","result":{"status":"ready","target_ref":"develop"}}\' ;;',
-        '  status) if [ -n "$STUB_STATUS" ]; then printf "%s\\n" "$STUB_STATUS"; else echo \'{"ok":false}\'; exit 1; fi ;;',
+        '  status) if [ "$3" = --all ]; then',
+        '      if [ -n "$STUB_RUNS" ]; then printf "%s\\n" "$STUB_RUNS"; else echo \'{"ok":true,"result":{"runs":[]}}\'; fi',
+        '    elif [ -n "$STUB_STATUS" ]; then printf "%s\\n" "$STUB_STATUS"; else echo \'{"ok":false}\'; exit 1; fi ;;',
         "  *) exit 1 ;;",
         "esac",
         "",
@@ -136,6 +138,8 @@ class World {
     mkdirSync(this.main);
     this.git(this.main, "init", "-q", "-b", BASE);
     this.git(this.main, "commit", "-q", "--allow-empty", "-m", "init");
+    // The runner names this repository o/r, from its origin (#129).
+    this.git(this.main, "remote", "add", "origin", "git@github.com:o/r.git");
     mkdirSync(this.managed, { recursive: true });
     this.git(this.main, "worktree", "add", "-q", "-b", ISSUE, this.wt);
     // Archiving from the main checkout after the merge, as usual.
@@ -179,12 +183,12 @@ class World {
   }
 
   /** Block A, as written. */
-  blockA(): { pending: Pending[]; errors: string[]; stdout: string } {
+  blockA(): { pending: Pending[]; errors: string[]; stdout: string; stderr: string } {
     const r = spawnSync("bash", ["-c", blockA], { cwd: this.main, env: this.env, encoding: "utf-8" });
     if (r.status !== 0) throw new Error(`FAIL: block A exited ${r.status}: ${r.stderr}${r.stdout}`);
-    if (!r.stdout.trim().startsWith("{")) return { pending: [], errors: [], stdout: r.stdout.trim() };
+    if (!r.stdout.trim().startsWith("{")) return { pending: [], errors: [], stdout: r.stdout.trim(), stderr: r.stderr };
     const doc = JSON.parse(r.stdout);
-    return { pending: doc.entries, errors: doc.errors, stdout: r.stdout.trim() };
+    return { pending: doc.entries, errors: doc.errors, stdout: r.stdout.trim(), stderr: r.stderr };
   }
 
   /** Block B, as written, with the operator's selection. */
@@ -246,7 +250,7 @@ test((w) => {
       w.cursor(run.id) === "3" &&
       out.join() === `SESSION_LOG_1 <- session ${run.id.slice(0, 8)} (${w.wt}, lines 1-3)` &&
       !existsSync(w.pendingPath()) &&
-      w.runnerArgs().join("|") === `--json check|--json status ${RUN_ID}`,
+      w.runnerArgs().join("|") === `--json check|--json status ${RUN_ID}|--json status --all`,
     "Phase 1.6 blocks A and B slice a never-compacted session from a run worktree into SESSION_LOG_{N}.jsonl and commit its cursor",
   );
 });
@@ -479,11 +483,45 @@ test((w) => {
   assert(
     a.pending.length === 1 &&
       a.pending[0].session_id === s.id &&
-      w.runnerArgs().every((l) => !l.startsWith("--json status")) &&
+      w.runnerArgs().every((l) => !l.startsWith("--json status") || l === "--json status --all") &&
       none.stdout === "Other sessions not searched: no issue branch",
     "Phase 1.6 takes the issue branch from the scratchpad without a run, and searches nothing on the base branch without one",
   );
 }, { run: false });
+
+// #129: block A passes this repository's recorded runs to discovery.
+test((w) => {
+  // An earlier run of this repository, its worktree since removed, and a run
+  // of another repository whose worktree holds a same-branch session.
+  const oldRun = join(w.tmp, "elsewhere", "o-r-old-run");
+  const otherRun = join(w.tmp, "elsewhere", "x-y-run");
+  w.env.STUB_RUNS = JSON.stringify({
+    ok: true,
+    command: "status",
+    result: {
+      runs: [
+        { run_id: RUN_ID, repo: "o/r", worktree_path: w.wt },
+        { run_id: "o-r#70-r1", repo: "o/r", worktree_path: oldRun },
+        { run_id: "x-y#89-r1", repo: "x/y", worktree_path: otherRun },
+      ],
+    },
+  });
+  const fromOld = w.transcript(oldRun, [on(ISSUE, oldRun, 1)]);
+  const fromOther = w.transcript(otherRun, [on(ISSUE, otherRun, 2)]);
+  const a = w.blockA();
+  w.blockB();
+  const ids = a.pending.map((e) => e.session_id);
+  assert(
+    !existsSync(oldRun) &&
+      ids.includes(fromOld.id) &&
+      a.pending.find((e) => e.session_id === fromOld.id)?.root === oldRun &&
+      !ids.includes(fromOther.id) &&
+      w.runnerArgs().includes("--json status --all") &&
+      w.cursor(fromOld.id) === "1" &&
+      w.cursor(fromOther.id) === null,
+    "Phase 1.6 block A passes this repository's recorded runs, so a removed run worktree is found and another repository's run worktree is not",
+  );
+});
 
 // The current session is Phase 1.5's, and subagent transcripts are never archived.
 test((w) => {
