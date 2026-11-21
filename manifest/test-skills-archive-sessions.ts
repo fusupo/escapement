@@ -523,6 +523,68 @@ test((w) => {
   );
 });
 
+// #129: a pending file written by 4.10.0 (version 1) kept its slices in the
+// root, under names a later log can take.
+function writeV1Pending(w: World, session: { id: string; path: string }, file: string, start: number, end: number) {
+  const entry = {
+    key: `${session.id.slice(0, 8)}:1`,
+    kind: "slice",
+    session_id: session.id,
+    file,
+    root: w.wt,
+    size: 0,
+    decision: "include",
+    reason: "current_branch_only",
+    branches: { [ISSUE]: end - start + 1 },
+    first: "-",
+    last: "-",
+    transcript: session.path,
+    start,
+    end,
+    lines: end - start + 1,
+  };
+  const doc = { version: 1, branch: ISSUE, base: BASE, outdir: w.main, pending: w.pendingPath(), entries: [entry], errors: [] };
+  writeFileSync(w.pendingPath(), JSON.stringify(doc));
+}
+
+test((w) => {
+  const s = w.transcript(w.wt, [on(ISSUE, w.wt, 1), on(ISSUE, w.wt, 2)]);
+  // The leftover slice's name has since been taken by a newer log.
+  const leftover = join(w.main, "SESSION_LOG_1.jsonl");
+  const newer = '{"type":"user","note":"a newer log"}\n';
+  writeFileSync(leftover, newer);
+  writeV1Pending(w, s, leftover, 1, 2);
+  const a = w.blockA();
+  const kept = existsSync(leftover) && readFileSync(leftover, "utf-8") === newer;
+  w.blockB();
+  assert(
+    kept &&
+      a.stderr.includes(`left in place: ${leftover} no longer matches transcript lines 1-2`) &&
+      readFileSync(leftover, "utf-8") === newer &&
+      a.pending.length === 1 &&
+      w.cursor(s.id) === "2",
+    "Phase 1.6 block A leaves a version-1 leftover slice whose bytes no longer match its transcript lines, and says so",
+  );
+});
+
+test((w) => {
+  const s = w.transcript(w.wt, [on(ISSUE, w.wt, 1), on(ISSUE, w.wt, 2)]);
+  // The leftover slice is still exactly transcript lines 1-2.
+  const leftover = join(w.main, "SESSION_LOG_1.jsonl");
+  writeFileSync(leftover, readFileSync(s.path, "utf-8"));
+  writeV1Pending(w, s, leftover, 1, 2);
+  const a = w.blockA();
+  w.blockB();
+  assert(
+    !a.stderr.includes("left in place") &&
+      a.stderr.includes("cleared an unfinished earlier prepare") &&
+      ls(w.main) === "SESSION_LOG_1.jsonl" &&
+      readFileSync(join(w.main, "SESSION_LOG_1.jsonl"), "utf-8") === readFileSync(s.path, "utf-8") &&
+      w.cursor(s.id) === "2",
+    "Phase 1.6 block A still removes a version-1 leftover slice that matches its transcript lines",
+  );
+});
+
 // The current session is Phase 1.5's, and subagent transcripts are never archived.
 test((w) => {
   const dir = join(w.claude, "projects", encode(w.wt));

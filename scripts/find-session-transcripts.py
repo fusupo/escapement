@@ -71,7 +71,11 @@ its cursor, skips those with nothing new, gates each slice and each hook log
 entries: [{key, kind: "slice" | "hook_log", session_id, transcript, file,
 start, end, lines, size, decision, reason, branches, first, last, root}]}.
 It prints the same JSON. A pending file left by an earlier prepare is
-cleared first: its slices were never committed, so they are removed.
+cleared first: its slices were never committed, so they are removed, but
+only when each is provably that slice (in the staging directory, or bytes
+equal to its transcript lines start..end). A file that no longer matches,
+such as a newer log that took a version-1 slice's name in the root, is left
+in place with a warning (#129).
 
 finish (block B) takes the operator's choice. An entry whose decision is
 "include", or whose key is in --include, is kept: a slice's cursor is
@@ -372,16 +376,55 @@ def count_lines(path):
         return 0
 
 
+def transcript_lines(path, start, end):
+    """The bytes of a transcript's lines start..end, as the slicer writes them."""
+    with open(path, "rb") as f:
+        lines = f.read().splitlines(keepends=True)
+    return b"".join(lines[start - 1:end])
+
+
+def is_leftover(entry, stage):
+    """True when a slice file is provably the one an unfinished prepare left.
+
+    A file in the staging directory is: only prepare writes there. Any other
+    file (a version-1 pending file's slices sat in the root) is only when its
+    bytes are still the transcript's lines start..end, so a newer log that
+    took its name is never removed (#129).
+    """
+    path = entry["file"]
+    if stage and at_or_below(path, stage):
+        return True
+    try:
+        with open(path, "rb") as f:
+            return f.read() == transcript_lines(entry["transcript"], int(entry["start"]), int(entry["end"]))
+    except (OSError, KeyError, TypeError, ValueError):
+        return False
+
+
 def clear_stale(pending):
-    """Remove the uncommitted slices an unfinished prepare left behind."""
+    """Remove the uncommitted slices an unfinished prepare left behind.
+
+    Only files that are provably those slices are removed; anything else is
+    left in place with a warning. The pending file itself always goes.
+    """
     try:
         with open(pending, encoding="utf-8") as f:
             stale = json.load(f)
     except (OSError, json.JSONDecodeError):
         stale = {}
+    stage = stale.get("stage")
     for entry in stale.get("entries", []):
-        if entry.get("kind") == "slice" and entry.get("file") and os.path.isfile(entry["file"]):
-            os.remove(entry["file"])
+        path = entry.get("file")
+        if entry.get("kind") != "slice" or not path or not os.path.isfile(path):
+            continue
+        if is_leftover(entry, stage):
+            os.remove(path)
+        else:
+            print(
+                f"find-session-transcripts: left in place: {path} no longer matches transcript lines "
+                f"{entry.get('start')}-{entry.get('end')}",
+                file=sys.stderr,
+            )
     os.remove(pending)
     print(f"find-session-transcripts: cleared an unfinished earlier prepare ({pending})", file=sys.stderr)
 
