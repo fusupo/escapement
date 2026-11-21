@@ -696,4 +696,26 @@ test((w) => {
   );
 }
 
+// The #129 release: minimums only (PROJECT_LORE).
+{
+  console.log("\nThe release (#129)\n");
+  const atLeast = (v: string, min: string) => {
+    const [a, b] = [v, min].map((x) => x.split(".").map(Number));
+    for (let i = 0; i < 3; i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0);
+    return true;
+  };
+  const readme = readFileSync(join(repoRoot, "README.md"), "utf-8");
+  const plugin = JSON.parse(readFileSync(join(repoRoot, ".claude-plugin", "plugin.json"), "utf-8")).version as string;
+  const version = /^\*\*Version:\*\* (\d+\.\d+\.\d+)$/m.exec(skill)?.[1] ?? "0.0.0";
+  const current = /^\*\*Current:\*\* (\d+\.\d+\.\d+)$/m.exec(readme)?.[1] ?? "0.0.0";
+  assert(
+    atLeast(version, "2.9.1") &&
+      /^- v2\.9\.1: Phase 1\.6 .*\(#129\)$/m.test(skill) &&
+      atLeast(plugin, "4.10.1") &&
+      atLeast(current, "4.10.1") &&
+      /^- 4\.10\.1 \(\d{4}-\d{2}-\d{2}\): .*\(#129\)$/m.test(readme),
+    "archive-work at least 2.9.1, a plugin and README Current of at least 4.10.1, and the changelogs carry a line for #129",
+  );
+}
+
 console.log("\nAll archive-work Phase 1.6 tests passed.");

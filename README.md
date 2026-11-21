@@ -546,9 +546,13 @@ fusupo
 
 ## Version
 
-**Current:** 4.10.0
+**Current:** 4.10.1
 
 **Changelog:**
+- 4.10.1 (2026-11-21): archive-work's session discovery searches only this repository, numbers a session's logs in order, and never deletes a newer log (#129)
+  - **Only this repository.** Phase 1.6 no longer matches a sibling repository whose path starts like the main checkout's, nor another repository's managed worktrees. A transcript counts only when it started in one of this repository's worktrees: those `git worktree list` shows (prunable ones included), the managed ones, and every run recorded for this repository (`factory status --all`, which block A now passes on). A removed worktree nothing records is no longer found
+  - **In order.** Slices wait in the git dir until block B, which brings them in with the hook logs: sessions by first timestamp, and within a session its hook logs before its slice
+  - **Leftovers.** An unfinished earlier block A's slices are removed only when they are provably its slices. A newer log that took a 4.10.0 slice's name is left in place with a warning
 - 4.10.0 (2026-11-20): archive-work archives every session that worked on the issue, with no compaction first (#89)
   - **archive-work 2.9.0, Phase 1.6.** After the current session's tail, `archive-work` finds the other sessions that worked on the issue: a factory run's own session in its worktree, sessions in worktrees since removed, and setup in the main checkout. It slices each from its own cursor, so nothing is repeated, and gates each slice as Phase 1.5 does. Anything the gate can't decide is asked about once. The archive README lists which session each log came from. Subagent transcripts aren't archived
   - **`scripts/find-session-transcripts.py`.** It finds the transcripts. One is kept when it ran on the issue branch, or in the run's worktree during the run, so a reused worktree path doesn't bring back earlier runs' sessions. Its `prepare` and `finish` are Phase 1.6's two blocks around the question
